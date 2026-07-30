@@ -33,9 +33,8 @@ pub struct VerticalColumn {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ActivePanel {
     MainViewer,
-    ControlPanel,
-    QueryInspector,
-    SearchBar,
+    PartitionTree,
+    SchemaInspector,
 }
 
 #[derive(Clone)]
@@ -186,6 +185,10 @@ pub struct App {
     pub active_table_name: Option<String>,
     pub auto_connect: bool,
     pub main_panel_pct: u16,
+    pub control_panel_split_pct: u16,
+    pub is_dragging_resizer: bool,
+    pub is_dragging_v_resizer: bool,
+    pub query_inspector_scroll: usize,
 }
 
 impl App {
@@ -218,6 +221,10 @@ impl App {
             active_table_name: None,
             auto_connect,
             main_panel_pct: 65,
+            control_panel_split_pct: 50,
+            is_dragging_resizer: false,
+            is_dragging_v_resizer: false,
+            query_inspector_scroll: 0,
         }
     }
 

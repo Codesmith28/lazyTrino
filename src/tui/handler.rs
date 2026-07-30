@@ -221,30 +221,234 @@ fn go_back(app: &mut App) {
 
 use crossterm::event::MouseButton;
 
+fn normalize_key_code(code: KeyCode) -> KeyCode {
+    match code {
+        KeyCode::Char('∆') => KeyCode::Char('j'),
+        KeyCode::Char('˚') => KeyCode::Char('k'),
+        KeyCode::Char('˙') => KeyCode::Char('h'),
+        KeyCode::Char('¬') => KeyCode::Char('l'),
+        KeyCode::Char('©') => KeyCode::Char('g'),
+        _ => code,
+    }
+}
+
+fn is_mac_option_code(code: KeyCode) -> bool {
+    matches!(code, KeyCode::Char('∆') | KeyCode::Char('˚') | KeyCode::Char('˙') | KeyCode::Char('¬') | KeyCode::Char('©'))
+}
+
+fn handle_pane_activation(app: &mut App, key: KeyEvent) -> bool {
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let mac_opt = is_mac_option_code(key.code);
+    let has_pane_modifier = shift || alt || mac_opt;
+
+    let code = normalize_key_code(key.code);
+    let is_h = (code == KeyCode::Char('H')) || (code == KeyCode::Char('h') && has_pane_modifier);
+    let is_j = (code == KeyCode::Char('J')) || (code == KeyCode::Char('j') && has_pane_modifier);
+    let is_k = (code == KeyCode::Char('K')) || (code == KeyCode::Char('k') && has_pane_modifier);
+    let is_l = (code == KeyCode::Char('L')) || (code == KeyCode::Char('l') && has_pane_modifier);
+
+    let is_left = key.code == KeyCode::Left && has_pane_modifier;
+    let is_right = key.code == KeyCode::Right && has_pane_modifier;
+    let is_up = key.code == KeyCode::Up && has_pane_modifier;
+    let is_down = key.code == KeyCode::Down && has_pane_modifier;
+
+    if !(is_h || is_j || is_k || is_l || is_left || is_right || is_up || is_down) {
+        return false;
+    }
+
+    let active_table = match &app.screen {
+        Screen::Actions(_) => true,
+        Screen::Table(t) => !t.items.is_empty(),
+        _ => false,
+    };
+
+    if is_k || is_up {
+        match app.active_panel {
+            ActivePanel::SchemaInspector => {
+                if active_table {
+                    app.active_panel = ActivePanel::PartitionTree;
+                } else {
+                    app.active_panel = ActivePanel::MainViewer;
+                }
+            }
+            ActivePanel::PartitionTree => {
+                app.active_panel = ActivePanel::MainViewer;
+            }
+            ActivePanel::MainViewer => {}
+        }
+        return true;
+    }
+
+    if is_j || is_down {
+        match app.active_panel {
+            ActivePanel::MainViewer => {
+                if active_table {
+                    app.active_panel = ActivePanel::PartitionTree;
+                }
+            }
+            ActivePanel::PartitionTree => {
+                if active_table {
+                    app.active_panel = ActivePanel::SchemaInspector;
+                }
+            }
+            ActivePanel::SchemaInspector => {}
+        }
+        return true;
+    }
+
+    if is_h || is_left {
+        match app.active_panel {
+            ActivePanel::PartitionTree | ActivePanel::SchemaInspector => {
+                app.active_panel = ActivePanel::MainViewer;
+            }
+            ActivePanel::MainViewer => {}
+        }
+        return true;
+    }
+
+    if is_l || is_right {
+        match app.active_panel {
+            ActivePanel::MainViewer => {
+                if active_table {
+                    app.active_panel = ActivePanel::PartitionTree;
+                }
+            }
+            ActivePanel::PartitionTree | ActivePanel::SchemaInspector => {}
+        }
+        return true;
+    }
+
+    false
+}
+
 pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) {
+    let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
+    if term_width == 0 || term_height == 0 {
+        return;
+    }
+
+    let bottom_y = term_height.saturating_sub(7);
+    let border_x = ((term_width as u32 * app.main_panel_pct as u32) / 100) as u16;
+
+    let height_right = bottom_y;
+    let border_y = ((height_right as u32 * app.control_panel_split_pct as u32) / 100) as u16;
+
+    let active_table = match &app.screen {
+        Screen::Actions(_) => true,
+        Screen::Table(t) => !t.items.is_empty(),
+        _ => false,
+    };
+
     match mouse.kind {
-        MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
-            if let Ok((term_width, _)) = crossterm::terminal::size() {
-                if term_width > 0 {
-                    let pct = ((mouse.column as u32 * 100) / term_width as u32) as u16;
-                    app.main_panel_pct = pct.clamp(20, 80);
+        MouseEventKind::Down(MouseButton::Left) => {
+            if mouse.row < bottom_y && (mouse.column as i32 - border_x as i32).abs() <= 1 {
+                app.is_dragging_resizer = true;
+                app.is_dragging_v_resizer = false;
+            } else if mouse.column >= border_x && active_table && (mouse.row as i32 - border_y as i32).abs() <= 1 {
+                app.is_dragging_v_resizer = true;
+                app.is_dragging_resizer = false;
+            } else {
+                app.is_dragging_resizer = false;
+                app.is_dragging_v_resizer = false;
+
+                if mouse.column < border_x && mouse.row < bottom_y {
+                    if mouse.row < 3 {
+                        app.mode = Mode::Search;
+                    } else {
+                        app.active_panel = ActivePanel::MainViewer;
+                    }
+                } else if mouse.column >= border_x && mouse.row < bottom_y && active_table {
+                    if mouse.row < border_y {
+                        app.active_panel = ActivePanel::PartitionTree;
+                    } else {
+                        app.active_panel = ActivePanel::SchemaInspector;
+                    }
                 }
             }
         }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if app.is_dragging_resizer {
+                let pct = ((mouse.column as u32 * 100) / term_width as u32) as u16;
+                app.main_panel_pct = pct.clamp(20, 80);
+            } else if app.is_dragging_v_resizer {
+                let rel_y = mouse.row as u32;
+                if height_right > 0 {
+                    let pct = ((rel_y * 100) / height_right as u32) as u16;
+                    app.control_panel_split_pct = pct.clamp(20, 80);
+                }
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            app.is_dragging_resizer = false;
+            app.is_dragging_v_resizer = false;
+        }
         MouseEventKind::ScrollDown => {
-            if let Screen::Results(ref mut state) = app.screen {
-                state.scroll_v = (state.scroll_v + 1).min(state.rows.len().saturating_sub(1));
-            } else if let Some(items) = extract_list_labels(&app.screen) {
-                if let Some(s) = get_selected(&app.screen) {
-                    mod_list_selected(&mut app.screen, (s + 1).min(items.len().saturating_sub(1)));
+            let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
+            match app.active_panel {
+                ActivePanel::MainViewer => {
+                    if let Screen::Results(ref mut state) = app.screen {
+                        if shift {
+                            if !state.columns.is_empty() {
+                                state.scroll_h = (state.scroll_h + 1).min(state.columns.len().saturating_sub(1));
+                            }
+                        } else if !state.rows.is_empty() {
+                            state.scroll_v = (state.scroll_v + 1).min(state.rows.len().saturating_sub(1));
+                        }
+                    } else if let Some(items) = extract_list_labels(&app.screen) {
+                        if !items.is_empty() {
+                            if let Some(s) = get_selected(&app.screen) {
+                                mod_list_selected(&mut app.screen, (s + 1).min(items.len().saturating_sub(1)));
+                            }
+                        }
+                    }
+                }
+                ActivePanel::PartitionTree => {
+                    let max_lines = app.partition_tree_lines.len().saturating_sub(1);
+                    app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
+                }
+                ActivePanel::SchemaInspector => {
+                    let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
+                    app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
                 }
             }
         }
         MouseEventKind::ScrollUp => {
-            if let Screen::Results(ref mut state) = app.screen {
-                state.scroll_v = state.scroll_v.saturating_sub(1);
-            } else if let Some(s) = get_selected(&app.screen) {
-                mod_list_selected(&mut app.screen, s.saturating_sub(1));
+            let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
+            match app.active_panel {
+                ActivePanel::MainViewer => {
+                    if let Screen::Results(ref mut state) = app.screen {
+                        if shift {
+                            state.scroll_h = state.scroll_h.saturating_sub(1);
+                        } else {
+                            state.scroll_v = state.scroll_v.saturating_sub(1);
+                        }
+                    } else if let Some(s) = get_selected(&app.screen) {
+                        mod_list_selected(&mut app.screen, s.saturating_sub(1));
+                    }
+                }
+                ActivePanel::PartitionTree => {
+                    app.partition_scroll = app.partition_scroll.saturating_sub(1);
+                }
+                ActivePanel::SchemaInspector => {
+                    app.schema_scroll = app.schema_scroll.saturating_sub(1);
+                }
+            }
+        }
+        MouseEventKind::ScrollRight => {
+            if app.active_panel == ActivePanel::MainViewer {
+                if let Screen::Results(ref mut state) = app.screen {
+                    if !state.columns.is_empty() {
+                        state.scroll_h = (state.scroll_h + 1).min(state.columns.len().saturating_sub(1));
+                    }
+                }
+            }
+        }
+        MouseEventKind::ScrollLeft => {
+            if app.active_panel == ActivePanel::MainViewer {
+                if let Screen::Results(ref mut state) = app.screen {
+                    state.scroll_h = state.scroll_h.saturating_sub(1);
+                }
             }
         }
         _ => {}
@@ -252,14 +456,16 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) {
 }
 
 pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
-    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    let code = normalize_key_code(key.code);
+
+    if code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         info!("User pressed Ctrl+C, quitting...");
         app.should_quit = true;
         return None;
     }
 
     if matches!(app.mode, Mode::Search) {
-        match key.code {
+        match code {
             KeyCode::Esc | KeyCode::Enter => {
                 app.mode = Mode::Normal;
             }
@@ -274,13 +480,17 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return None;
     }
 
-    if key.code == KeyCode::Char('/') {
+    if handle_pane_activation(app, key) {
+        return None;
+    }
+
+    if code == KeyCode::Char('/') {
         app.mode = Mode::Search;
         return None;
     }
 
     if matches!(app.mode, Mode::Leader { .. }) {
-        if let KeyCode::Char(c) = key.code {
+        if let KeyCode::Char(c) = code {
             if let Screen::Actions(s) = &app.screen {
                 if let Some(action) = app.action_for(c) {
                     let query = action.build_query(&s.catalog, &s.schema, &s.table);
@@ -293,7 +503,7 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return None;
     }
 
-    if key.code == KeyCode::Char('?') {
+    if code == KeyCode::Char('?') {
         app.prev_screen = Some(Box::new(app.screen.clone()));
         app.screen = Screen::Help;
         return None;
@@ -303,142 +513,147 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return None;
     }
 
-    if key.modifiers.contains(KeyModifiers::ALT) {
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    app.partition_scroll += 1;
-                } else {
-                    app.schema_scroll += 1;
-                }
-                return None;
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    app.partition_scroll = app.partition_scroll.saturating_sub(1);
-                } else {
-                    app.schema_scroll = app.schema_scroll.saturating_sub(1);
-                }
-                return None;
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                if let Screen::Results(state) = &mut app.screen {
-                    state.scroll_h = state.scroll_h.saturating_sub(1);
-                }
-                return None;
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                if let Screen::Results(state) = &mut app.screen {
-                    if !state.columns.is_empty() {
-                        state.scroll_h = (state.scroll_h + 1).min(state.columns.len().saturating_sub(1));
-                    }
-                }
-                return None;
-            }
-            _ => {}
-        }
-    }
-
-    if key.code == KeyCode::Esc {
+    if code == KeyCode::Esc {
         app.number_buffer.clear();
         go_back(app);
         return None;
     }
 
-    if key.code == KeyCode::Enter && !app.number_buffer.is_empty() {
+    if code == KeyCode::Enter && !app.number_buffer.is_empty() {
         jump_to_number(app);
         return None;
     }
 
-    if let KeyCode::Char(c) = key.code {
-        if c.is_ascii_digit() {
+    if let KeyCode::Char(c) = code {
+        if c.is_ascii_digit() && matches!(app.active_panel, ActivePanel::MainViewer) {
             update_number_buffer(app, c);
             return None;
         }
     }
 
-    match key.code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            if let Screen::Results(state) = &mut app.screen {
-                if !state.rows.is_empty() {
-                    state.scroll_v = (state.scroll_v + 1).min(state.rows.len().saturating_sub(1));
+    match app.active_panel {
+        ActivePanel::MainViewer => {
+            match code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if let Screen::Results(state) = &mut app.screen {
+                        if !state.rows.is_empty() {
+                            state.scroll_v = (state.scroll_v + 1).min(state.rows.len().saturating_sub(1));
+                        }
+                    } else if let Some(items) = extract_list_labels(&app.screen) {
+                        if !items.is_empty() {
+                            if let Some(s) = get_selected(&app.screen) {
+                                mod_list_selected(&mut app.screen, (s + 1).min(items.len() - 1));
+                            }
+                        }
+                    }
+                    return None;
                 }
-            } else if let Some(items) = extract_list_labels(&app.screen) {
-                if !items.is_empty() {
-                    if let Some(s) = get_selected(&app.screen) {
-                        mod_list_selected(&mut app.screen, (s + 1).min(items.len() - 1));
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if let Screen::Results(state) = &mut app.screen {
+                        state.scroll_v = state.scroll_v.saturating_sub(1);
+                    } else if let Some(s) = get_selected(&app.screen) {
+                        mod_list_selected(&mut app.screen, s.saturating_sub(1));
+                    }
+                    return None;
+                }
+                KeyCode::Char('h') | KeyCode::Left => {
+                    if let Screen::Results(state) = &mut app.screen {
+                        state.scroll_h = state.scroll_h.saturating_sub(1);
+                    } else {
+                        app.number_buffer.clear();
+                        go_back(app);
+                    }
+                    return None;
+                }
+                KeyCode::Char('l') | KeyCode::Right => {
+                    if let Screen::Results(state) = &mut app.screen {
+                        if !state.columns.is_empty() {
+                            state.scroll_h = (state.scroll_h + 1).min(state.columns.len().saturating_sub(1));
+                        }
+                        return None;
+                    } else {
+                        return select_current_item(app);
                     }
                 }
-            }
-            return None;
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if let Screen::Results(state) = &mut app.screen {
-                state.scroll_v = state.scroll_v.saturating_sub(1);
-            } else if let Some(s) = get_selected(&app.screen) {
-                mod_list_selected(&mut app.screen, s.saturating_sub(1));
-            }
-            return None;
-        }
-        KeyCode::Char('h') | KeyCode::Left => {
-            if let Screen::Results(state) = &mut app.screen {
-                if state.scroll_h > 0 {
-                    state.scroll_h = state.scroll_h.saturating_sub(1);
-                } else {
-                    app.number_buffer.clear();
-                    go_back(app);
+                KeyCode::Enter => {
+                    if matches!(app.screen, Screen::Results(_)) {
+                        return None;
+                    } else {
+                        return select_current_item(app);
+                    }
                 }
-            } else {
-                app.number_buffer.clear();
-                go_back(app);
-            }
-            return None;
-        }
-        KeyCode::Char('l') | KeyCode::Right => {
-            if let Screen::Results(state) = &mut app.screen {
-                if !state.columns.is_empty() {
-                    state.scroll_h = (state.scroll_h + 1).min(state.columns.len().saturating_sub(1));
+                KeyCode::Char('g') => {
+                    if let Screen::Results(state) = &mut app.screen {
+                        state.scroll_v = 0;
+                    } else {
+                        mod_list_selected(&mut app.screen, 0);
+                    }
+                    return None;
                 }
-                return None;
-            } else if matches!(app.screen, Screen::Table(_)) {
-                return None;
-            } else {
-                return select_current_item(app);
-            }
-        }
-        KeyCode::Enter => {
-            if matches!(app.screen, Screen::Results(_)) {
-                return None;
-            } else {
-                return select_current_item(app);
-            }
-        }
-        KeyCode::Char('g') => {
-            if let Screen::Results(state) = &mut app.screen {
-                state.scroll_v = 0;
-            } else {
-                mod_list_selected(&mut app.screen, 0);
-            }
-            return None;
-        }
-        KeyCode::Char('G') => {
-            if let Screen::Results(state) = &mut app.screen {
-                state.scroll_v = state.rows.len().saturating_sub(1);
-            } else if let Some(items) = extract_list_labels(&app.screen) {
-                if !items.is_empty() {
-                    mod_list_selected(&mut app.screen, items.len() - 1);
+                KeyCode::Char('G') => {
+                    if let Screen::Results(state) = &mut app.screen {
+                        state.scroll_v = state.rows.len().saturating_sub(1);
+                    } else if let Some(items) = extract_list_labels(&app.screen) {
+                        if !items.is_empty() {
+                            mod_list_selected(&mut app.screen, items.len() - 1);
+                        }
+                    }
+                    return None;
                 }
+                KeyCode::Char(' ') => {
+                    if matches!(app.screen, Screen::Table(_) | Screen::Actions(_)) {
+                        info!("Leader mode entered");
+                        app.mode = Mode::Leader { keys: String::new() };
+                    }
+                    return None;
+                }
+                _ => {}
             }
-            return None;
         }
-        KeyCode::Char(' ') => {
-            if matches!(app.screen, Screen::Table(_) | Screen::Actions(_)) {
-                info!("Leader mode entered");
-                app.mode = Mode::Leader { keys: String::new() };
+        ActivePanel::PartitionTree => {
+            let max_lines = app.partition_tree_lines.len().saturating_sub(1);
+            match code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
+                    return None;
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    app.partition_scroll = app.partition_scroll.saturating_sub(1);
+                    return None;
+                }
+                KeyCode::Char('g') => {
+                    app.partition_scroll = 0;
+                    return None;
+                }
+                KeyCode::Char('G') => {
+                    app.partition_scroll = max_lines;
+                    return None;
+                }
+                _ => {}
             }
-            return None;
         }
-        _ => {}
+        ActivePanel::SchemaInspector => {
+            let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
+            match code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
+                    return None;
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    app.schema_scroll = app.schema_scroll.saturating_sub(1);
+                    return None;
+                }
+                KeyCode::Char('g') => {
+                    app.schema_scroll = 0;
+                    return None;
+                }
+                KeyCode::Char('G') => {
+                    app.schema_scroll = max_cols;
+                    return None;
+                }
+                _ => {}
+            }
+        }
     }
 
     match &app.screen {

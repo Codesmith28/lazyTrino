@@ -38,7 +38,7 @@ fn spinner(app: &App) -> String {
 }
 
 fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
-    let border_color = if app.active_panel == ActivePanel::SearchBar || matches!(app.mode, Mode::Search) {
+    let border_color = if matches!(app.mode, Mode::Search) {
         Color::Yellow
     } else {
         Color::DarkGray
@@ -70,11 +70,7 @@ fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_control_panel(frame: &mut Frame, area: Rect, app: &App) {
-    let border_color = if app.active_panel == ActivePanel::ControlPanel {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
+    let border_color = Color::DarkGray;
 
     let (title, active_table_name) = match &app.screen {
         Screen::Actions(a) => (format!(" Table: {} ", a.table), Some(a.table.clone())),
@@ -112,8 +108,8 @@ fn render_control_panel(frame: &mut Frame, area: Rect, app: &App) {
 
     if let Some(t_name) = &active_table_name {
         let sub_chunks = Layout::vertical([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
+            Constraint::Percentage(app.control_panel_split_pct),
+            Constraint::Percentage(100 - app.control_panel_split_pct),
         ])
         .split(sections[0]);
 
@@ -123,6 +119,7 @@ fn render_control_panel(frame: &mut Frame, area: Rect, app: &App) {
             &app.partition_tree_lines,
             t_name,
             app.partition_scroll,
+            app.active_panel == ActivePanel::PartitionTree,
         );
         screens::vertical_schema::render(
             frame,
@@ -130,6 +127,7 @@ fn render_control_panel(frame: &mut Frame, area: Rect, app: &App) {
             &app.vertical_schema_cols,
             t_name,
             app.schema_scroll,
+            app.active_panel == ActivePanel::SchemaInspector,
         );
     } else {
         let conn_lines = vec![
@@ -142,14 +140,11 @@ fn render_control_panel(frame: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::Green),
             )),
             Line::from(Span::raw("")),
-            Line::from(Span::styled("Basic Navigation:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-            Line::from(Span::styled(" j/k or ↓/↑             : Move focus", Style::default().fg(Color::Gray))),
-            Line::from(Span::styled(" h/← or Esc            : Back screen", Style::default().fg(Color::Gray))),
-            Line::from(Span::styled(" l/→ or Enter          : Select item", Style::default().fg(Color::Gray))),
-            Line::from(Span::raw("")),
-            Line::from(Span::styled("Inspector Scrolling:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-            Line::from(Span::styled(" Option+j/k or Alt+↓/↑        : Scroll Schema", Style::default().fg(Color::Gray))),
-            Line::from(Span::styled(" Option+Shift+j/k or Alt+S+↓/↑ : Scroll Partitions", Style::default().fg(Color::Gray))),
+            Line::from(Span::styled("Active Pane Controls:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled(" Shift+H/J/K/L or Shift+Arrows : Switch active pane focus", Style::default().fg(Color::Gray))),
+            Line::from(Span::styled(" Left Click inside pane         : Focus pane", Style::default().fg(Color::Gray))),
+            Line::from(Span::styled(" j/k or ↓/↑ or Mouse Wheel      : Scroll active pane", Style::default().fg(Color::Gray))),
+            Line::from(Span::styled(" Left Drag on panel border      : Resize panel width", Style::default().fg(Color::Gray))),
             Line::from(Span::raw("")),
             Line::from(Span::styled("General:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
             Line::from(Span::styled(" /                            : Central Search", Style::default().fg(Color::Gray))),
@@ -178,22 +173,27 @@ fn ui(frame: &mut Frame, app: &App) {
         }
         _ => {
             let outer_chunks = Layout::vertical([
-                Constraint::Length(3),
                 Constraint::Min(0),
                 Constraint::Length(7),
             ])
             .split(frame.area());
 
-            render_search_bar(frame, outer_chunks[0], app);
-
             let main_chunks = Layout::horizontal([
                 Constraint::Percentage(app.main_panel_pct),
                 Constraint::Percentage(100 - app.main_panel_pct),
             ])
-            .split(outer_chunks[1]);
+            .split(outer_chunks[0]);
 
-            let main = main_chunks[0];
+            let left_chunks = Layout::vertical([
+                Constraint::Length(3),
+                Constraint::Min(0),
+            ])
+            .split(main_chunks[0]);
+
+            render_search_bar(frame, left_chunks[0], app);
             render_control_panel(frame, main_chunks[1], app);
+
+            let main = left_chunks[1];
 
             match &app.screen {
                 Screen::Connect(state) => {
@@ -224,7 +224,7 @@ fn ui(frame: &mut Frame, app: &App) {
                 Screen::Help => unreachable!(),
             }
 
-            screens::query_inspector::render(frame, outer_chunks[2], app);
+            screens::query_inspector::render(frame, outer_chunks[1], app);
         }
     }
 }
