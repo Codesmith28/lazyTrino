@@ -25,10 +25,10 @@ pub fn show_create(catalog: &str, schema: &str, table: &str) -> String {
 pub fn info_schema_columns(catalog: &str, schema: &str, table: &str) -> String {
     format!(
         "SELECT column_name, data_type, is_nullable, comment \
-         FROM information_schema.columns \
-         WHERE table_catalog = '{}' AND table_schema = '{}' AND table_name = '{}' \
+         FROM {}.information_schema.columns \
+         WHERE table_schema = '{}' AND table_name = '{}' \
          ORDER BY ordinal_position",
-        catalog.trim().replace('\'', "''"),
+        q(catalog),
         schema.trim().replace('\'', "''"),
         table.trim().replace('\'', "''"),
     )
@@ -50,33 +50,47 @@ pub fn partitions(catalog: &str, schema: &str, table: &str) -> String {
     format!("SELECT * FROM {}.{}.{}", q(catalog), q(schema), q(&format!("{table}$partitions")))
 }
 
+#[allow(dead_code)]
+pub fn show_partitions(catalog: &str, schema: &str, table: &str) -> String {
+    format!(
+        "SELECT * FROM {}.information_schema.partitions WHERE table_schema = '{}' AND table_name = '{}'",
+        q(catalog),
+        schema.trim().replace('\'', "''"),
+        table.trim().replace('\'', "''")
+    )
+}
+
+#[allow(dead_code)]
 pub fn files(catalog: &str, schema: &str, table: &str) -> String {
     format!(
-        "SELECT file_path, file_format, record_count, file_size_in_bytes \
-         FROM {}.{}.{} LIMIT 50",
+        "SELECT * FROM {}.{}.{} LIMIT 50",
         q(catalog), q(schema), q(&format!("{table}$files"))
     )
 }
 
+#[allow(dead_code)]
 pub fn properties(catalog: &str, schema: &str, table: &str) -> String {
     format!("SELECT * FROM {}.{}.{}", q(catalog), q(schema), q(&format!("{table}$properties")))
 }
 
+#[allow(dead_code)]
 pub fn snapshots(catalog: &str, schema: &str, table: &str) -> String {
     format!(
-        "SELECT snapshot_id, committed_at, operation, summary \
-         FROM {}.{}.{} ORDER BY committed_at DESC",
+        "SELECT * FROM {}.{}.{}",
         q(catalog), q(schema), q(&format!("{table}$snapshots"))
     )
 }
 
+#[allow(dead_code)]
 pub fn history(catalog: &str, schema: &str, table: &str) -> String {
     format!(
-        "SELECT * FROM {}.{}.{} ORDER BY made_current_at DESC",
+        "SELECT * FROM {}.{}.{}",
         q(catalog), q(schema), q(&format!("{table}$history"))
     )
 }
 
+#[allow(dead_code)]
 pub fn metadata_log(catalog: &str, schema: &str, table: &str) -> String {
     format!("SELECT * FROM {}.{}.{}", q(catalog), q(schema), q(&format!("{table}$metadata_log")))
 }
+

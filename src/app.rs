@@ -3,6 +3,41 @@ use std::collections::HashMap;
 use crate::config::ConnectionConfig;
 use crate::trino::client::TrinoClient;
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum QueryStatus {
+    Running,
+    Success,
+    Error,
+}
+
+#[derive(Clone, Debug)]
+pub struct QueryLogEntry {
+    pub id: usize,
+    pub sql: String,
+    pub status: QueryStatus,
+    pub duration_ms: Option<u64>,
+    pub row_count: Option<usize>,
+    pub error_msg: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VerticalColumn {
+    #[allow(dead_code)]
+    pub index: usize,
+    pub name: String,
+    pub data_type: String,
+    pub key_meta: String,
+    pub description: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ActivePanel {
+    MainViewer,
+    ControlPanel,
+    QueryInspector,
+    SearchBar,
+}
+
 #[derive(Clone)]
 pub struct ConnectState {
     pub url: String,
@@ -86,55 +121,43 @@ pub enum Screen {
 
 pub enum Mode {
     Normal,
-    Leader { keys: String },
+    Leader {
+        #[allow(dead_code)]
+        keys: String,
+    },
     Search,
 }
 
 pub enum Action {
     Describe,
-    ShowCreate,
+    TableDDL,
     InfoSchema,
     ShowStats,
     Count,
     Preview,
     Partitions,
-    Files,
-    Properties,
-    Snapshots,
-    History,
-    MetadataLog,
 }
 
 pub const ACTIONS: &[(char, &str, Action)] = &[
     ('d', "Describe", Action::Describe),
-    ('c', "Show Create", Action::ShowCreate),
+    ('c', "Table DDL", Action::TableDDL),
     ('i', "Info Schema", Action::InfoSchema),
     ('s', "Show Stats", Action::ShowStats),
     ('n', "Count", Action::Count),
     ('p', "Preview", Action::Preview),
     ('P', "Partitions", Action::Partitions),
-    ('f', "Files", Action::Files),
-    ('r', "Properties", Action::Properties),
-    ('S', "Snapshots", Action::Snapshots),
-    ('h', "History", Action::History),
-    ('m', "Metadata Log", Action::MetadataLog),
 ];
 
 impl Action {
     pub fn build_query(&self, catalog: &str, schema: &str, table: &str) -> String {
         match self {
             Action::Describe => crate::trino::queries::describe(catalog, schema, table),
-            Action::ShowCreate => crate::trino::queries::show_create(catalog, schema, table),
+            Action::TableDDL => crate::trino::queries::show_create(catalog, schema, table),
             Action::InfoSchema => crate::trino::queries::info_schema_columns(catalog, schema, table),
             Action::ShowStats => crate::trino::queries::show_stats(catalog, schema, table),
             Action::Count => crate::trino::queries::count(catalog, schema, table),
             Action::Preview => crate::trino::queries::preview(catalog, schema, table),
             Action::Partitions => crate::trino::queries::partitions(catalog, schema, table),
-            Action::Files => crate::trino::queries::files(catalog, schema, table),
-            Action::Properties => crate::trino::queries::properties(catalog, schema, table),
-            Action::Snapshots => crate::trino::queries::snapshots(catalog, schema, table),
-            Action::History => crate::trino::queries::history(catalog, schema, table),
-            Action::MetadataLog => crate::trino::queries::metadata_log(catalog, schema, table),
         }
     }
 }
@@ -153,12 +176,27 @@ pub struct App {
     pub schemas: HashMap<String, Vec<String>>,
     pub tables: HashMap<(String, String), Vec<String>>,
     pub frame_count: u64,
+    pub query_logs: Vec<QueryLogEntry>,
+    pub active_panel: ActivePanel,
+    pub partition_tree_lines: Vec<String>,
+    pub partition_scroll: usize,
+    pub vertical_schema_cols: Vec<VerticalColumn>,
+    pub schema_scroll: usize,
+    #[allow(dead_code)]
+    pub active_table_name: Option<String>,
+    pub auto_connect: bool,
+    pub main_panel_pct: u16,
 }
 
 impl App {
-    pub fn new(config: ConnectionConfig) -> Self {
+    pub fn new(config: ConnectionConfig, auto_connect: bool) -> Self {
         Self {
-            screen: Screen::Connect(ConnectState::default()),
+            screen: Screen::Connect(ConnectState {
+                url: config.url.clone(),
+                user: config.user.clone(),
+                password: config.password.clone(),
+                ..Default::default()
+            }),
             prev_screen: None,
             mode: Mode::Normal,
             should_quit: false,
@@ -171,6 +209,43 @@ impl App {
             schemas: HashMap::new(),
             tables: HashMap::new(),
             frame_count: 0,
+            query_logs: Vec::new(),
+            active_panel: ActivePanel::MainViewer,
+            partition_tree_lines: Vec::new(),
+            partition_scroll: 0,
+            vertical_schema_cols: Vec::new(),
+            schema_scroll: 0,
+            active_table_name: None,
+            auto_connect,
+            main_panel_pct: 65,
+        }
+    }
+
+    pub fn add_query_log(&mut self, sql: String) -> usize {
+        let id = self.query_logs.len() + 1;
+        self.query_logs.push(QueryLogEntry {
+            id,
+            sql,
+            status: QueryStatus::Running,
+            duration_ms: None,
+            row_count: None,
+            error_msg: None,
+        });
+        id
+    }
+
+    pub fn complete_query_log_success(&mut self, id: usize, duration_ms: u64, row_count: usize) {
+        if let Some(entry) = self.query_logs.iter_mut().find(|e| e.id == id) {
+            entry.status = QueryStatus::Success;
+            entry.duration_ms = Some(duration_ms);
+            entry.row_count = Some(row_count);
+        }
+    }
+
+    pub fn complete_query_log_error(&mut self, id: usize, err: String) {
+        if let Some(entry) = self.query_logs.iter_mut().find(|e| e.id == id) {
+            entry.status = QueryStatus::Error;
+            entry.error_msg = Some(err);
         }
     }
 
@@ -181,3 +256,4 @@ impl App {
             .map(|(_, _, a)| a)
     }
 }
+

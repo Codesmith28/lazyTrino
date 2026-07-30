@@ -32,18 +32,14 @@ async fn main() -> Result<()> {
         .init();
 
     let args = config::CliArgs::parse();
+    let auto_connect = args.url.is_some() && args.user.is_some();
     let config = config::ConnectionConfig {
-        url: args.url,
-        user: args.user,
+        url: args.url.unwrap_or_else(|| "http://localhost:57574".to_string()),
+        user: args.user.unwrap_or_else(|| "sarthak".to_string()),
         password: args.password.unwrap_or_default(),
     };
 
-    let mut app = app::App::new(config);
-
-    if let app::Screen::Connect(ref mut s) = app.screen {
-        s.url = app.config.url.clone();
-        s.user = app.config.user.clone();
-    }
+    let mut app = app::App::new(config, auto_connect);
 
     tui::run(&mut app).await
 }
