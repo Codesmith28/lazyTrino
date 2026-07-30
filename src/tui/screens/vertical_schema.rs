@@ -21,18 +21,20 @@ use ratatui::{
 
 use crate::app::VerticalColumn;
 
-pub fn render(frame: &mut Frame, area: Rect, columns: &[VerticalColumn], table_name: &str, scroll: usize) {
+pub fn render(frame: &mut Frame, area: Rect, columns: &[VerticalColumn], table_name: &str, scroll: usize, is_active: bool) {
     let title = if table_name.is_empty() {
         " Schema (Vertical Table Format) ".to_string()
     } else {
         format!(" Schema — {table_name} ")
     };
 
+    let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
+
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(border_color));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);

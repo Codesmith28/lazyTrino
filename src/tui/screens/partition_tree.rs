@@ -20,6 +20,64 @@ use ratatui::{
     Frame,
 };
 
+#[derive(Default)]
+struct TreeNode {
+    name: String,
+    children: Vec<TreeNode>,
+}
+
+impl TreeNode {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            children: Vec::new(),
+        }
+    }
+
+    fn insert_path(&mut self, segments: &[&str]) {
+        if segments.is_empty() {
+            return;
+        }
+        let head = segments[0];
+        let tail = &segments[1..];
+
+        if let Some(child) = self.children.iter_mut().find(|c| c.name == head) {
+            child.insert_path(tail);
+        } else {
+            let mut child = TreeNode::new(head);
+            child.insert_path(tail);
+            self.children.push(child);
+        }
+    }
+}
+
+fn format_tree_node(node: &TreeNode, prefix: &str, is_last: bool, depth: usize, lines: &mut Vec<String>) {
+    if depth > 0 {
+        let branch = if is_last { "└── " } else { "├── " };
+        let level_tag = format!("  (Level {})", depth);
+        lines.push(format!("{prefix}{branch}{}/{level_tag}", node.name));
+    }
+
+    let child_prefix = if depth == 0 {
+        " ".to_string()
+    } else if is_last {
+        format!("{prefix}    ")
+    } else {
+        format!("{prefix}│   ")
+    };
+
+    if node.children.is_empty() && depth > 0 {
+        lines.push(format!("{child_prefix}├── .hoodie/                (Apache Hudi Metadata)"));
+        lines.push(format!("{child_prefix}└── data_files.parquet       (Apache Parquet Data Files)"));
+    } else {
+        let total_children = node.children.len();
+        for (i, child) in node.children.iter().enumerate() {
+            let child_is_last = i == total_children - 1;
+            format_tree_node(child, &child_prefix, child_is_last, depth + 1, lines);
+        }
+    }
+}
+
 pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut location = "s3://warehouse/table_data/".to_string();
@@ -59,9 +117,10 @@ pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
         lines.push("     └── data_files.parquet       (Apache Parquet Data Files)".to_string());
     } else {
         let total = partition_cols.len();
+        let mut prefix = " ".to_string();
         for (depth, col) in partition_cols.iter().enumerate() {
-            let indent = "    ".repeat(depth + 1);
-            let branch = if depth == total - 1 { "└── " } else { "├── " };
+            let is_last = depth == total - 1;
+            let branch = if is_last { "└── " } else { "├── " };
             let val_placeholder = match col.to_lowercase().as_str() {
                 "date" | "dt" | "day" => "<YYYY-MM-DD>",
                 "service" | "service_name" => "<service_name>",
@@ -69,13 +128,16 @@ pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
                 _ => "<value>",
             };
             let level_tag = format!("  (Partition Level {})", depth + 1);
-            lines.push(format!("{indent}{branch}{col}={val_placeholder}/{level_tag}"));
+            lines.push(format!("{prefix}{branch}{col}={val_placeholder}/{level_tag}"));
+            if is_last {
+                prefix.push_str("    ");
+            } else {
+                prefix.push_str("│   ");
+            }
         }
 
-        let file_indent = "    ".repeat(total + 1);
-        lines.push(format!("{file_indent}├── .hoodie/                (Apache Hudi Metadata)"));
-        lines.push(format!("{file_indent}└── data_files.parquet       (Apache Parquet Data Files)"));
-        lines.push("    ──────".to_string());
+        lines.push(format!("{prefix}├── .hoodie/                (Apache Hudi Metadata)"));
+        lines.push(format!("{prefix}└── data_files.parquet       (Apache Parquet Data Files)"));
     }
 
     lines
@@ -102,48 +164,54 @@ pub fn build_tree_lines(raw_partitions: &[String]) -> Vec<String> {
         }
     }
 
-    lines.push(format!(" {}", base_prefix));
+    lines.push(format!(" {base_prefix}"));
 
-    for (p_idx, p_str) in raw_partitions.iter().take(20).enumerate() {
+    let mut root = TreeNode::new("root");
+    for p_str in raw_partitions.iter().take(20) {
         let clean = p_str.trim_matches('/');
-        let segments: Vec<&str> = clean.split('/').collect();
-        let is_last_partition = p_idx == raw_partitions.len().min(20) - 1;
-
-        for (depth, seg) in segments.iter().enumerate() {
-            let indent = "    ".repeat(depth + 1);
-            let branch = if depth == segments.len() - 1 && is_last_partition {
-                "└── "
-            } else if depth == 0 {
-                "├── "
-            } else {
-                "└── "
-            };
-
-            let level_tag = format!("  (Partition Level {})", depth + 1);
-            lines.push(format!("{indent}{branch}{seg}/{level_tag}"));
+        let segments: Vec<&str> = clean.split('/').filter(|s| !s.is_empty()).collect();
+        if !segments.is_empty() {
+            root.insert_path(&segments);
         }
-
-        let file_indent = "    ".repeat(segments.len() + 1);
-        lines.push(format!("{file_indent}├── .hoodie/                 (Apache Hudi Metadata)"));
-        lines.push(format!("{file_indent}└── data_files.parquet       (Apache Parquet Data Files)"));
-        lines.push("    ──────".to_string());
     }
+
+    format_tree_node(&root, "", true, 0, &mut lines);
 
     lines
 }
 
-pub fn render(frame: &mut Frame, area: Rect, raw_partitions: &[String], table_name: &str, scroll: usize) {
+fn is_tree_char(c: char) -> bool {
+    c == '│' || c == '├' || c == '─' || c == '└' || c == ' '
+}
+
+fn split_tree_line(line: &str) -> (String, String) {
+    let mut split_idx = 0;
+    for (i, c) in line.char_indices() {
+        if is_tree_char(c) {
+            split_idx = i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    let branch_part = line[..split_idx].to_string();
+    let content_part = line[split_idx..].to_string();
+    (branch_part, content_part)
+}
+
+pub fn render(frame: &mut Frame, area: Rect, raw_partitions: &[String], table_name: &str, scroll: usize, is_active: bool) {
     let title = if table_name.is_empty() {
         " Partitions (Tree View) ".to_string()
     } else {
         format!(" Partitions — {table_name} ")
     };
 
+    let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
+
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(border_color));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -155,17 +223,26 @@ pub fn render(frame: &mut Frame, area: Rect, raw_partitions: &[String], table_na
         .skip(scroll)
         .take(inner.height as usize)
         .map(|line_str| {
-            let style = if line_str.contains("s3://") || line_str.contains("hdfs://") {
+            let (branch_part, content_part) = split_tree_line(line_str);
+
+            let content_style = if content_part.contains("s3://") || content_part.contains("hdfs://") || content_part.starts_with('/') {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else if line_str.contains("Partition Level") {
+            } else if content_part.contains("Level") {
                 Style::default().fg(Color::Cyan)
-            } else if line_str.contains(".hoodie") || line_str.contains(".parquet") {
+            } else if content_part.contains(".hoodie") || content_part.contains(".parquet") {
                 Style::default().fg(Color::Green)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
 
-            ListItem::new(Line::from(Span::styled(line_str.clone(), style)))
+            let branch_style = Style::default().fg(Color::White);
+
+            let line = Line::from(vec![
+                Span::styled(branch_part, branch_style),
+                Span::styled(content_part, content_style),
+            ]);
+
+            ListItem::new(line)
         })
         .collect();
 

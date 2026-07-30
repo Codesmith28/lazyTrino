@@ -20,20 +20,14 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, ActivePanel, QueryStatus};
+use crate::app::{App, QueryStatus};
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let border_color = if app.active_panel == ActivePanel::QueryInspector {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
-
     let block = Block::default()
         .title(" Executed Queries ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
+        .border_style(Style::default().fg(Color::DarkGray));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -52,6 +46,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .query_logs
         .iter()
         .rev()
+        .skip(app.query_inspector_scroll)
         .take(inner.height as usize)
         .map(|entry| {
             let (symbol, style) = match &entry.status {
