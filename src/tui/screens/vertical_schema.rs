@@ -79,4 +79,15 @@ pub fn render(frame: &mut Frame, area: Rect, columns: &[VerticalColumn], table_n
         .column_spacing(1);
 
     frame.render_widget(table, inner);
+
+    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+    let mut scroll_state = ScrollbarState::new(columns.len().saturating_sub(1)).position(scroll);
+    frame.render_stateful_widget(
+        Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼")),
+        inner,
+        &mut scroll_state,
+    );
 }
