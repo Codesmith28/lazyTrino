@@ -389,6 +389,8 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
                     state.scroll_h = (state.scroll_h + 1).min(state.columns.len().saturating_sub(1));
                 }
                 return None;
+            } else if matches!(app.screen, Screen::Table(_)) {
+                return None;
             } else {
                 return select_current_item(app);
             }
@@ -572,7 +574,7 @@ fn schema_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
 }
 
 fn table_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    if matches!(key.code, KeyCode::Enter | KeyCode::Char('l')) {
+    if key.code == KeyCode::Enter {
         select_current_item(app)
     } else {
         None

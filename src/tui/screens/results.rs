@@ -73,25 +73,29 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
 
-    let visible_cols: Vec<(usize, &String)> = state
-        .columns
-        .iter()
-        .enumerate()
-        .skip(state.scroll_h)
-        .collect();
+    let available_width = chunks[1].width.saturating_sub(4) as usize;
 
-    let mut col_widths: Vec<Constraint> = visible_cols
-        .iter()
-        .map(|(col_idx, c)| {
-            let max_data = state
-                .rows
-                .iter()
-                .map(|r| r.get(*col_idx).map(|v| v.len()).unwrap_or(0))
-                .max()
-                .unwrap_or(0);
-            Constraint::Length((c.len().max(max_data) as u16).max(10))
-        })
-        .collect();
+    let mut cumulative_width = 0;
+    let mut visible_cols: Vec<(usize, &String)> = Vec::new();
+    let mut col_widths: Vec<Constraint> = Vec::new();
+
+    for (col_idx, c) in state.columns.iter().enumerate().skip(state.scroll_h) {
+        let max_data = state
+            .rows
+            .iter()
+            .map(|r| r.get(col_idx).map(|v| v.len()).unwrap_or(0))
+            .max()
+            .unwrap_or(0);
+        let needed_width = (c.len().max(max_data) as u16).max(8);
+
+        if visible_cols.is_empty() || cumulative_width + (needed_width as usize) + 2 <= available_width {
+            cumulative_width += (needed_width as usize) + 2;
+            visible_cols.push((col_idx, c));
+            col_widths.push(Constraint::Length(needed_width));
+        } else {
+            break;
+        }
+    }
 
     if col_widths.is_empty() {
         col_widths.push(Constraint::Length(15));
@@ -120,7 +124,12 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
         })
         .collect();
 
-    let title_text = format!(" Results ({} rows) ", state.rows.len());
+    let title_text = format!(
+        " Results ({} rows, col {}/{}) ",
+        state.rows.len(),
+        state.scroll_h + 1,
+        state.columns.len().max(1)
+    );
     let table = Table::new(visible_rows, col_widths)
         .header(header)
         .column_spacing(2)
@@ -132,5 +141,31 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
                 .border_style(Style::default().fg(Color::Cyan)),
         );
 
+    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+
     frame.render_widget(table, chunks[1]);
+
+    if !state.rows.is_empty() {
+        let mut v_scroll_state = ScrollbarState::new(state.rows.len().saturating_sub(1)).position(state.scroll_v);
+        frame.render_stateful_widget(
+            Scrollbar::default()
+                .orientation(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("▲"))
+                .end_symbol(Some("▼")),
+            chunks[1],
+            &mut v_scroll_state,
+        );
+    }
+
+    if state.columns.len() > 1 {
+        let mut h_scroll_state = ScrollbarState::new(state.columns.len().saturating_sub(1)).position(state.scroll_h);
+        frame.render_stateful_widget(
+            Scrollbar::default()
+                .orientation(ScrollbarOrientation::HorizontalBottom)
+                .begin_symbol(Some("◄"))
+                .end_symbol(Some("►")),
+            chunks[1],
+            &mut h_scroll_state,
+        );
+    }
 }
