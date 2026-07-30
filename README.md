@@ -29,31 +29,33 @@ Built with Rust and [Ratatui](https://github.com/ratatui/ratatui).
 ### Building from Source
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-username/lazyTrino.git
-cd lazyTrino
+# Build release binary and copy it to project root (./lazyTrino)
+make
 
-# Build release binary
+# Or using Cargo directly
 cargo build --release
 ```
 
-The compiled binary will be placed at `./target/release/lazyTrino`.
+The executable binary is placed directly in the project root (`./lazyTrino`).
 
 ---
 
 ## Usage
 
-Run `lazyTrino` directly using Cargo or the compiled binary:
+Run `lazyTrino` using the packaged binary or via `make run`:
 
 ```bash
 # Connect with default options (localhost:57574)
-cargo run
+./lazyTrino
+
+# Or build and run via make
+make run
 
 # Connect to a specific Trino server
-cargo run -- --url http://trino.example.com:8080 --user admin
+./lazyTrino --url http://trino.example.com:8080 --user admin
 
 # Connect with password authentication
-cargo run -- --url https://trino.example.com:8443 --user admin --password secret
+./lazyTrino --url https://trino.example.com:8443 --user admin --password secret
 ```
 
 ### CLI Arguments
