@@ -201,8 +201,8 @@ fn ui(frame: &mut Frame, app: &App) {
             render_search_bar(frame, outer_chunks[0], app);
 
             let main_chunks = Layout::horizontal([
-                Constraint::Percentage(65),
-                Constraint::Percentage(35),
+                Constraint::Percentage(app.main_panel_pct),
+                Constraint::Percentage(100 - app.main_panel_pct),
             ])
             .split(outer_chunks[1]);
 

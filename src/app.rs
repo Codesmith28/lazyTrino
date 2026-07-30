@@ -199,6 +199,7 @@ pub struct App {
     #[allow(dead_code)]
     pub active_table_name: Option<String>,
     pub auto_connect: bool,
+    pub main_panel_pct: u16,
 }
 
 impl App {
@@ -230,6 +231,7 @@ impl App {
             schema_scroll: 0,
             active_table_name: None,
             auto_connect,
+            main_panel_pct: 65,
         }
     }
 

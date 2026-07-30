@@ -20,9 +20,74 @@ use ratatui::{
     Frame,
 };
 
+pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut location = "s3://warehouse/table_data/".to_string();
+    let mut partition_cols: Vec<String> = Vec::new();
+
+    for line in ddl.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains("location =") || trimmed.contains("external_location =") {
+            if let Some(start) = trimmed.find('\'') {
+                if let Some(end) = trimmed[start + 1..].find('\'') {
+                    location = trimmed[start + 1..start + 1 + end].to_string();
+                }
+            }
+        }
+        if trimmed.contains("partitioned_by =") || trimmed.contains("partitioning =") {
+            if let Some(start) = trimmed.find("ARRAY[") {
+                if let Some(end) = trimmed[start..].find(']') {
+                    let arr_str = &trimmed[start + 6..start + end];
+                    partition_cols = arr_str
+                        .split(',')
+                        .map(|s| s.trim().trim_matches('\'').trim_matches('"').to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
+            }
+        }
+    }
+
+    if !location.ends_with('/') {
+        location.push('/');
+    }
+    lines.push(format!(" {location}"));
+
+    if partition_cols.is_empty() {
+        lines.push(" └── (Non-partitioned Table)".to_string());
+        lines.push("     ├── .hoodie/                (Apache Hudi Metadata)".to_string());
+        lines.push("     └── data_files.parquet       (Apache Parquet Data Files)".to_string());
+    } else {
+        let total = partition_cols.len();
+        for (depth, col) in partition_cols.iter().enumerate() {
+            let indent = "    ".repeat(depth + 1);
+            let branch = if depth == total - 1 { "└── " } else { "├── " };
+            let val_placeholder = match col.to_lowercase().as_str() {
+                "date" | "dt" | "day" => "<YYYY-MM-DD>",
+                "service" | "service_name" => "<service_name>",
+                "account" | "account_id" | "accountid" => "<account_id>",
+                _ => "<value>",
+            };
+            let level_tag = format!("  (Partition Level {})", depth + 1);
+            lines.push(format!("{indent}{branch}{col}={val_placeholder}/{level_tag}"));
+        }
+
+        let file_indent = "    ".repeat(total + 1);
+        lines.push(format!("{file_indent}├── .hoodie/                (Apache Hudi Metadata)"));
+        lines.push(format!("{file_indent}└── data_files.parquet       (Apache Parquet Data Files)"));
+        lines.push("    ──────".to_string());
+    }
+
+    lines
+}
+
 pub fn build_tree_lines(raw_partitions: &[String]) -> Vec<String> {
     if raw_partitions.is_empty() {
         return vec![" (No partitions found)".to_string()];
+    }
+
+    if raw_partitions.len() == 1 && (raw_partitions[0].contains("CREATE TABLE") || raw_partitions[0].contains("WITH (")) {
+        return parse_show_create_to_tree_lines(&raw_partitions[0]);
     }
 
     let mut lines = Vec::new();

@@ -64,6 +64,7 @@ pub fn partitions(catalog: &str, schema: &str, table: &str) -> String {
     format!("SELECT * FROM {}.{}.{}", q(catalog), q(schema), q(&format!("{table}$partitions")))
 }
 
+#[allow(dead_code)]
 pub fn show_partitions(catalog: &str, schema: &str, table: &str) -> String {
     format!(
         "SELECT * FROM {}.information_schema.partitions WHERE table_schema = '{}' AND table_name = '{}'",
