@@ -144,49 +144,34 @@ pub enum Mode {
 
 pub enum Action {
     Describe,
-    ShowCreate,
+    TableDDL,
     InfoSchema,
     ShowStats,
     Count,
     Preview,
     Partitions,
-    Files,
-    Properties,
-    Snapshots,
-    History,
-    MetadataLog,
 }
 
 pub const ACTIONS: &[(char, &str, Action)] = &[
     ('d', "Describe", Action::Describe),
-    ('c', "Show Create", Action::ShowCreate),
+    ('c', "Table DDL", Action::TableDDL),
     ('i', "Info Schema", Action::InfoSchema),
     ('s', "Show Stats", Action::ShowStats),
     ('n', "Count", Action::Count),
     ('p', "Preview", Action::Preview),
     ('P', "Partitions", Action::Partitions),
-    ('f', "Files", Action::Files),
-    ('r', "Properties", Action::Properties),
-    ('S', "Snapshots", Action::Snapshots),
-    ('h', "History", Action::History),
-    ('m', "Metadata Log", Action::MetadataLog),
 ];
 
 impl Action {
     pub fn build_query(&self, catalog: &str, schema: &str, table: &str) -> String {
         match self {
             Action::Describe => crate::trino::queries::describe(catalog, schema, table),
-            Action::ShowCreate => crate::trino::queries::show_create(catalog, schema, table),
+            Action::TableDDL => crate::trino::queries::show_create(catalog, schema, table),
             Action::InfoSchema => crate::trino::queries::info_schema_columns(catalog, schema, table),
             Action::ShowStats => crate::trino::queries::show_stats(catalog, schema, table),
             Action::Count => crate::trino::queries::count(catalog, schema, table),
             Action::Preview => crate::trino::queries::preview(catalog, schema, table),
             Action::Partitions => crate::trino::queries::partitions(catalog, schema, table),
-            Action::Files => crate::trino::queries::files(catalog, schema, table),
-            Action::Properties => crate::trino::queries::properties(catalog, schema, table),
-            Action::Snapshots => crate::trino::queries::snapshots(catalog, schema, table),
-            Action::History => crate::trino::queries::history(catalog, schema, table),
-            Action::MetadataLog => crate::trino::queries::metadata_log(catalog, schema, table),
         }
     }
 }

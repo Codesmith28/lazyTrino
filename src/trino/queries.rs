@@ -65,9 +65,15 @@ pub fn partitions(catalog: &str, schema: &str, table: &str) -> String {
 }
 
 pub fn show_partitions(catalog: &str, schema: &str, table: &str) -> String {
-    format!("SHOW PARTITIONS FROM {}.{}.{}", q(catalog), q(schema), q(table))
+    format!(
+        "SELECT * FROM {}.information_schema.partitions WHERE table_schema = '{}' AND table_name = '{}'",
+        q(catalog),
+        schema.trim().replace('\'', "''"),
+        table.trim().replace('\'', "''")
+    )
 }
 
+#[allow(dead_code)]
 pub fn files(catalog: &str, schema: &str, table: &str) -> String {
     format!(
         "SELECT * FROM {}.{}.{} LIMIT 50",
@@ -75,10 +81,12 @@ pub fn files(catalog: &str, schema: &str, table: &str) -> String {
     )
 }
 
+#[allow(dead_code)]
 pub fn properties(catalog: &str, schema: &str, table: &str) -> String {
     format!("SELECT * FROM {}.{}.{}", q(catalog), q(schema), q(&format!("{table}$properties")))
 }
 
+#[allow(dead_code)]
 pub fn snapshots(catalog: &str, schema: &str, table: &str) -> String {
     format!(
         "SELECT * FROM {}.{}.{}",
@@ -86,6 +94,7 @@ pub fn snapshots(catalog: &str, schema: &str, table: &str) -> String {
     )
 }
 
+#[allow(dead_code)]
 pub fn history(catalog: &str, schema: &str, table: &str) -> String {
     format!(
         "SELECT * FROM {}.{}.{}",
@@ -93,6 +102,7 @@ pub fn history(catalog: &str, schema: &str, table: &str) -> String {
     )
 }
 
+#[allow(dead_code)]
 pub fn metadata_log(catalog: &str, schema: &str, table: &str) -> String {
     format!("SELECT * FROM {}.{}.{}", q(catalog), q(schema), q(&format!("{table}$metadata_log")))
 }
