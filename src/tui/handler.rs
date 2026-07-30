@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use tracing::{error, info, warn};
 
 use crate::app::*;
@@ -86,6 +86,7 @@ fn jump_to_number(app: &mut App) {
     app.number_buffer.clear();
 }
 
+#[allow(dead_code)]
 fn handle_leader_mode(app: &mut App, key: KeyEvent) -> Option<Command> {
     match key.code {
         KeyCode::Char(c) => {
@@ -117,6 +118,7 @@ fn handle_leader_mode(app: &mut App, key: KeyEvent) -> Option<Command> {
     }
 }
 
+#[allow(dead_code)]
 fn handle_search_mode(app: &mut App, key: KeyEvent) -> Option<Command> {
     match key.code {
         KeyCode::Char(c) if !c.is_ascii_control() => {
@@ -217,14 +219,21 @@ fn go_back(app: &mut App) {
     }
 }
 
+use crossterm::event::MouseButton;
+
 pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) {
     match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
+            if let Ok((term_width, _)) = crossterm::terminal::size() {
+                if term_width > 0 {
+                    let pct = ((mouse.column as u32 * 100) / term_width as u32) as u16;
+                    app.main_panel_pct = pct.clamp(20, 80);
+                }
+            }
+        }
         MouseEventKind::ScrollDown => {
             if let Screen::Results(ref mut state) = app.screen {
                 state.scroll_v = (state.scroll_v + 1).min(state.rows.len().saturating_sub(1));
-            } else if matches!(app.screen, Screen::Table(_) | Screen::Actions(_)) {
-                app.partition_scroll += 1;
-                app.schema_scroll += 1;
             } else if let Some(items) = extract_list_labels(&app.screen) {
                 if let Some(s) = get_selected(&app.screen) {
                     mod_list_selected(&mut app.screen, (s + 1).min(items.len().saturating_sub(1)));
@@ -234,9 +243,6 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) {
         MouseEventKind::ScrollUp => {
             if let Screen::Results(ref mut state) = app.screen {
                 state.scroll_v = state.scroll_v.saturating_sub(1);
-            } else if matches!(app.screen, Screen::Table(_) | Screen::Actions(_)) {
-                app.partition_scroll = app.partition_scroll.saturating_sub(1);
-                app.schema_scroll = app.schema_scroll.saturating_sub(1);
             } else if let Some(s) = get_selected(&app.screen) {
                 mod_list_selected(&mut app.screen, s.saturating_sub(1));
             }
@@ -252,81 +258,91 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return None;
     }
 
-    match app.mode {
-        Mode::Search => return handle_search_mode(app, key),
-        Mode::Leader { .. } => return handle_leader_mode(app, key),
-        Mode::Normal => {}
+    if matches!(app.mode, Mode::Search) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                app.mode = Mode::Normal;
+            }
+            KeyCode::Backspace => {
+                app.search_query.pop();
+            }
+            KeyCode::Char(c) => {
+                app.search_query.push(c);
+            }
+            _ => {}
+        }
+        return None;
     }
 
-    let is_alt = key.modifiers.contains(KeyModifiers::ALT);
+    if key.code == KeyCode::Char('/') {
+        app.mode = Mode::Search;
+        return None;
+    }
 
-    if is_alt {
-        if let Screen::Results(state) = &mut app.screen {
-            match key.code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if !state.rows.is_empty() {
-                        state.scroll_v = (state.scroll_v + 1).min(state.rows.len().saturating_sub(1));
-                    }
-                    return None;
+    if matches!(app.mode, Mode::Leader { .. }) {
+        if let KeyCode::Char(c) = key.code {
+            if let Screen::Actions(s) = &app.screen {
+                if let Some(action) = app.action_for(c) {
+                    let query = action.build_query(&s.catalog, &s.schema, &s.table);
+                    app.mode = Mode::Normal;
+                    return Some(Command::ExecuteQuery { query });
                 }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    state.scroll_v = state.scroll_v.saturating_sub(1);
-                    return None;
+            }
+        }
+        app.mode = Mode::Normal;
+        return None;
+    }
+
+    if key.code == KeyCode::Char('?') {
+        app.prev_screen = Some(Box::new(app.screen.clone()));
+        app.screen = Screen::Help;
+        return None;
+    }
+
+    if key.kind != KeyEventKind::Press {
+        return None;
+    }
+
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    app.partition_scroll += 1;
+                } else {
+                    app.schema_scroll += 1;
                 }
-                KeyCode::Char('h') | KeyCode::Left => {
+                return None;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    app.partition_scroll = app.partition_scroll.saturating_sub(1);
+                } else {
+                    app.schema_scroll = app.schema_scroll.saturating_sub(1);
+                }
+                return None;
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                if let Screen::Results(state) = &mut app.screen {
                     state.scroll_h = state.scroll_h.saturating_sub(1);
-                    return None;
                 }
-                KeyCode::Char('l') | KeyCode::Right => {
-                    state.scroll_h = (state.scroll_h + 1).min(state.columns.len().saturating_sub(1));
-                    return None;
-                }
-                _ => {}
+                return None;
             }
-        } else if matches!(app.screen, Screen::Table(_) | Screen::Actions(_)) {
-            let is_shift = key.modifiers.contains(KeyModifiers::SHIFT);
-            match key.code {
-                KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => {
-                    if is_shift {
-                        app.partition_scroll += 1;
-                    } else {
-                        app.schema_scroll += 1;
+            KeyCode::Char('l') | KeyCode::Right => {
+                if let Screen::Results(state) = &mut app.screen {
+                    if !state.columns.is_empty() {
+                        state.scroll_h = (state.scroll_h + 1).min(state.columns.len().saturating_sub(1));
                     }
-                    return None;
                 }
-                KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up => {
-                    if is_shift {
-                        app.partition_scroll = app.partition_scroll.saturating_sub(1);
-                    } else {
-                        app.schema_scroll = app.schema_scroll.saturating_sub(1);
-                    }
-                    return None;
-                }
-                _ => {}
+                return None;
             }
+            _ => {}
         }
     }
 
-    match key.code {
-        KeyCode::Char('?') => {
-            info!("Showing help");
-            app.prev_screen = Some(Box::new(app.screen.clone()));
-            app.screen = Screen::Help;
-            return None;
-        }
-        KeyCode::Char('/') => {
-            info!("Search mode entered");
-            app.search_query.clear();
-            app.mode = Mode::Search;
-            app.active_panel = ActivePanel::SearchBar;
-            return None;
-        }
-        KeyCode::Esc => {
-            app.number_buffer.clear();
-            go_back(app);
-            return None;
-        }
-        _ => {}
+    if key.code == KeyCode::Esc {
+        app.number_buffer.clear();
+        go_back(app);
+        return None;
     }
 
     if key.code == KeyCode::Enter && !app.number_buffer.is_empty() {
@@ -365,8 +381,17 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
             return None;
         }
         KeyCode::Char('h') | KeyCode::Left => {
-            app.number_buffer.clear();
-            go_back(app);
+            if let Screen::Results(state) = &mut app.screen {
+                if state.scroll_h > 0 {
+                    state.scroll_h = state.scroll_h.saturating_sub(1);
+                } else {
+                    app.number_buffer.clear();
+                    go_back(app);
+                }
+            } else {
+                app.number_buffer.clear();
+                go_back(app);
+            }
             return None;
         }
         KeyCode::Char('l') | KeyCode::Right => {
@@ -702,19 +727,19 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
             let part_query = queries::partitions(&catalog, &schema, &table);
             let log_id = app.add_query_log(part_query.clone());
             match client.execute(&part_query).await {
-                Ok(res) => {
+                Ok(res) if !res.data.is_empty() => {
                     app.complete_query_log_success(log_id, res.duration_ms, res.data.len());
                     let raw_lines: Vec<String> = res.data.into_iter().map(|r| r.join("/")).collect();
                     app.partition_tree_lines = crate::tui::screens::partition_tree::build_tree_lines(&raw_lines);
                 }
-                Err(_) => {
-                    let show_part_query = queries::show_partitions(&catalog, &schema, &table);
-                    let log_id2 = app.add_query_log(show_part_query.clone());
-                    match client.execute(&show_part_query).await {
+                _ => {
+                    let show_create_query = queries::show_create(&catalog, &schema, &table);
+                    let log_id2 = app.add_query_log(show_create_query.clone());
+                    match client.execute(&show_create_query).await {
                         Ok(res2) => {
                             app.complete_query_log_success(log_id2, res2.duration_ms, res2.data.len());
-                            let raw_lines: Vec<String> = res2.data.into_iter().map(|r| r.join("/")).collect();
-                            app.partition_tree_lines = crate::tui::screens::partition_tree::build_tree_lines(&raw_lines);
+                            let ddl_str = res2.data.get(0).and_then(|r| r.get(0)).cloned().unwrap_or_default();
+                            app.partition_tree_lines = crate::tui::screens::partition_tree::build_tree_lines(&[ddl_str]);
                         }
                         Err(e) => {
                             app.complete_query_log_error(log_id2, e.to_string());
