@@ -17,13 +17,13 @@ use clap::Parser;
 #[derive(Debug, Clone, Parser)]
 #[command(name = "lazyTrino", about = "TUI Trino table browser")]
 pub struct CliArgs {
-    #[arg(long, default_value = "http://localhost:57574")]
-    pub url: String,
-
-    #[arg(long, default_value = "sarthak")]
-    pub user: String,
+    #[arg(long)]
+    pub url: Option<String>,
 
     #[arg(long)]
+    pub user: Option<String>,
+
+    #[arg(long, alias = "pass")]
     pub password: Option<String>,
 }
 
@@ -43,3 +43,4 @@ impl Default for ConnectionConfig {
         }
     }
 }
+

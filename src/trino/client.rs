@@ -55,6 +55,7 @@ impl TrinoClient {
     }
 
     pub async fn execute(&self, sql: &str) -> Result<QueryResults> {
+        let start = std::time::Instant::now();
         let headers = self.headers();
 
         let resp = self
@@ -123,9 +124,12 @@ impl TrinoClient {
             }
         }
 
+        let duration_ms = start.elapsed().as_millis() as u64;
+
         Ok(QueryResults {
             columns,
             data: all_data,
+            duration_ms,
         })
     }
 
