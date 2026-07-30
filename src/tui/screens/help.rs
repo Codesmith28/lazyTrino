@@ -32,7 +32,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         Line::from(Span::styled(" Actions & Search", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
         Line::from("  /                      Focus Centralized Top Search Bar"),
         Line::from("  <space>                Enter leader mode for instant actions"),
-        Line::from("  <space> d / c / p / P  Describe / Show Create / Preview / Partitions"),
+        Line::from("  <space> d / c / p / P  Describe / Table DDL / Preview / Partitions"),
         Line::from("  ?                      Toggle this help screen"),
         Line::from("  Ctrl+C                 Quit lazyTrino"),
         Line::from(""),
