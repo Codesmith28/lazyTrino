@@ -2,7 +2,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, List, ListItem, ListState},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState},
     Frame,
 };
 
@@ -12,6 +12,7 @@ pub fn render(frame: &mut Frame, area: Rect, _catalog: &str, _schema: &str, tabl
     let block = Block::default()
         .title(format!(" Actions — {table} "))
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan));
     let inner = block.inner(area);
     frame.render_widget(block, area);

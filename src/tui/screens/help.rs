@@ -2,51 +2,41 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
 
 pub fn render(frame: &mut Frame, area: Rect) {
     let block = Block::default()
-        .title(" Help ")
+        .title(" Help & Keybindings ")
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Yellow));
     frame.render_widget(&block, area);
 
     let inner = block.inner(area);
 
     let help_text = vec![
-        Line::from(Span::styled(" Navigation", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
-        Line::from("  j / ↓         Move down"),
-        Line::from("  k / ↑         Move up"),
-        Line::from("  h / ← / Esc   Go back / parent"),
-        Line::from("  l / → / Enter Select / drill in"),
-        Line::from("  g             Jump to first"),
-        Line::from("  G             Jump to last"),
-        Line::from("  N + Enter     Jump to item N"),
+        Line::from(Span::styled(" Basic Navigation (Lists & Screens)", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
+        Line::from("  j / ↓                  Move selection down"),
+        Line::from("  k / ↑                  Move selection up"),
+        Line::from("  h / ← / Esc            Go back to previous screen"),
+        Line::from("  l / → / Enter          Select / drill in"),
         Line::from(""),
-        Line::from(Span::styled(" Actions", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
-        Line::from("  <space>       Enter leader mode"),
-        Line::from("  <space> d     Describe table"),
-        Line::from("  <space> c     Show CREATE"),
-        Line::from("  <space> s     Show STATS"),
-        Line::from("  <space> p     Preview (LIMIT 10)"),
-        Line::from("  <space> f     Files ($files)"),
-        Line::from("  <space> P     Partitions ($partitions)"),
-        Line::from("  <space> S     Snapshots ($snapshots)"),
+        Line::from(Span::styled(" Inspector Sub-Panel Scrolling", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
+        Line::from("  Option+j / Alt+↓       Scroll Vertical Schema down"),
+        Line::from("  Option+k / Alt+↑       Scroll Vertical Schema up"),
+        Line::from("  Option+Shift+j / Alt+Shift+↓  Scroll Partitions Tree down"),
+        Line::from("  Option+Shift+k / Alt+Shift+↑  Scroll Partitions Tree up"),
         Line::from(""),
-        Line::from(Span::styled(" General", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
-        Line::from("  /             Search (tables)"),
-        Line::from("  ?             Toggle this help"),
-        Line::from("  q             Quit"),
+        Line::from(Span::styled(" Actions & Search", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
+        Line::from("  /                      Focus Centralized Top Search Bar"),
+        Line::from("  <space>                Enter leader mode for instant actions"),
+        Line::from("  <space> d / c / p / P  Describe / Show Create / Preview / Partitions"),
+        Line::from("  ?                      Toggle this help screen"),
+        Line::from("  Ctrl+C                 Quit lazyTrino"),
         Line::from(""),
-        Line::from(Span::styled(" Results View", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
-        Line::from("  j/k           Scroll vertically"),
-        Line::from("  h/l           Scroll horizontally"),
-        Line::from("  g/G           Top / bottom"),
-        Line::from("  Esc / h       Back to actions"),
-        Line::from(""),
-        Line::from(Span::styled(" Press Esc or q to close help", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(" Press Esc to close help", Style::default().fg(Color::DarkGray))),
     ];
 
     let paragraph = Paragraph::new(help_text).wrap(Wrap { trim: false });
