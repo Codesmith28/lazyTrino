@@ -16,7 +16,7 @@ pub mod handler;
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -29,109 +29,159 @@ use ratatui::{
 };
 use std::io::stdout;
 
-use crate::app::{App, Mode, Screen};
+use crate::app::{ActivePanel, App, Mode, Screen};
 
 mod screens {
     pub mod actions;
     pub mod catalog;
     pub mod connect;
     pub mod help;
+    pub mod partition_tree;
+    pub mod query_inspector;
     pub mod results;
     pub mod schema;
     pub mod table;
+    pub mod vertical_schema;
 }
 
-const SPINNER_CHARS: &[char] = &['|', '/', '-', '\\'];
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 fn spinner(app: &App) -> String {
-    let idx = (app.frame_count / 3) % SPINNER_CHARS.len() as u64;
-    format!(" {} ", SPINNER_CHARS[idx as usize])
+    let idx = (app.frame_count / 2) as usize % SPINNER_FRAMES.len();
+    SPINNER_FRAMES[idx].to_string()
 }
 
-fn render_sidebar(frame: &mut Frame, area: Rect, app: &App) {
+fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
+    let border_color = if app.active_panel == ActivePanel::SearchBar || matches!(app.mode, Mode::Search) {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+
+    let title = if matches!(app.mode, Mode::Search) {
+        " Centralized Search [EDITING - Press Enter/Esc to finish] "
+    } else {
+        " Centralized Search [Press / to search] "
+    };
+
     let block = Block::default()
-        .title(" Control Panel ")
+        .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(border_color));
+
+    let search_text = if app.search_query.is_empty() {
+        Span::styled(
+            "Type to filter catalogs, schemas, tables, and columns...",
+            Style::default().fg(Color::DarkGray),
+        )
+    } else {
+        Span::styled(&app.search_query, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+    };
+
+    let p = Paragraph::new(Line::from(vec![Span::raw(" / "), search_text])).block(block);
+    frame.render_widget(p, area);
+}
+
+fn render_control_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let border_color = if app.active_panel == ActivePanel::ControlPanel {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+
+    let (title, active_table_name) = match &app.screen {
+        Screen::Actions(a) => (format!(" Table: {} ", a.table), Some(a.table.clone())),
+        Screen::Table(t) => {
+            if !t.items.is_empty() && t.selected < t.items.len() {
+                let table_name = t.items[t.selected].trim().to_string();
+                (format!(" Table: {table_name} "), Some(table_name))
+            } else {
+                (" Control Panel ".to_string(), None)
+            }
+        }
+        _ => (" Control Panel ".to_string(), None),
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let loader_height = if app.loading { 2 } else { 0 };
+    let main_height = inner.height.saturating_sub(loader_height);
+
     let sections = Layout::vertical([
-        Constraint::Length(5),
-        Constraint::Min(0),
+        Constraint::Length(main_height),
+        Constraint::Length(loader_height),
     ])
     .split(inner);
 
-    let conn_lines = vec![
-        Line::from(Span::styled(
-            format!("URL: {}", app.config.url),
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from(Span::styled(
-            format!("User: {}", app.config.user),
-            Style::default().fg(Color::Green),
-        )),
-    ];
-    let conn_widget = Paragraph::new(conn_lines);
-    frame.render_widget(conn_widget, sections[0]);
+    if let Some(t_name) = &active_table_name {
+        let sub_chunks = Layout::vertical([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+        ])
+        .split(sections[0]);
 
-    let mut key_lines: Vec<Line> = vec![
-        Line::from(Span::styled(" j/k  nav  l  select", Style::default().fg(Color::Gray))),
-        Line::from(Span::styled(" h  back  ?  help", Style::default().fg(Color::Gray))),
-    ];
-
-    if app.trino_client.is_some() {
-        key_lines.push(Line::from(Span::styled(
-            " <space>  leader  q  quit",
-            Style::default().fg(Color::Gray),
-        )));
-    }
-
-    let key_widget = Paragraph::new(key_lines);
-    frame.render_widget(key_widget, sections[1]);
-
-    if !app.number_buffer.is_empty() {
-        let num_area = Rect::new(
-            area.x,
-            area.y + area.height.saturating_sub(1),
-            area.width,
-            1,
+        screens::partition_tree::render(
+            frame,
+            sub_chunks[0],
+            &app.partition_tree_lines,
+            t_name,
+            app.partition_scroll,
         );
-        let num_text = Paragraph::new(format!("Jump: {}", app.number_buffer))
-            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-        frame.render_widget(num_text, num_area);
+        screens::vertical_schema::render(
+            frame,
+            sub_chunks[1],
+            &app.vertical_schema_cols,
+            t_name,
+            app.schema_scroll,
+        );
+    } else {
+        let conn_lines = vec![
+            Line::from(Span::styled(
+                format!("URL: {}", app.config.url),
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from(Span::styled(
+                format!("User: {}", app.config.user),
+                Style::default().fg(Color::Green),
+            )),
+            Line::from(Span::raw("")),
+            Line::from(Span::styled("Basic Navigation:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled(" j/k or ↓/↑             : Move focus", Style::default().fg(Color::Gray))),
+            Line::from(Span::styled(" h/← or Esc            : Back screen", Style::default().fg(Color::Gray))),
+            Line::from(Span::styled(" l/→ or Enter          : Select item", Style::default().fg(Color::Gray))),
+            Line::from(Span::raw("")),
+            Line::from(Span::styled("Inspector Scrolling:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled(" Option+j/k or Alt+↓/↑        : Scroll Schema", Style::default().fg(Color::Gray))),
+            Line::from(Span::styled(" Option+Shift+j/k or Alt+S+↓/↑ : Scroll Partitions", Style::default().fg(Color::Gray))),
+            Line::from(Span::raw("")),
+            Line::from(Span::styled("General:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled(" /                            : Central Search", Style::default().fg(Color::Gray))),
+            Line::from(Span::styled(" <space>                      : Action Leader", Style::default().fg(Color::Gray))),
+            Line::from(Span::styled(" Ctrl+C                       : Quit", Style::default().fg(Color::Gray))),
+        ];
+        let info_widget = Paragraph::new(conn_lines);
+        frame.render_widget(info_widget, sections[0]);
     }
 
     if app.loading {
         let spin = spinner(app);
-        let spin_y = area.y + area.height.saturating_sub(4);
-        let spin_area = Rect::new(area.x, spin_y, area.width, 1);
-        let spin_text = Paragraph::new(format!("Loading {spin}"))
-            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-        frame.render_widget(spin_text, spin_area);
-    }
-
-    if let Mode::Search = app.mode {
-        let search_y = area.y + area.height.saturating_sub(3);
-        let search_area = Rect::new(area.x, search_y, area.width, 1);
-        let search_text = Paragraph::new(format!("/ {}", app.search_query))
-            .style(Style::default().fg(Color::Black).bg(Color::White));
-        frame.render_widget(search_text, search_area);
-    }
-
-    if let Mode::Leader { ref keys } = app.mode {
-        let leader_y = area.y + area.height.saturating_sub(2);
-        let leader_bg = Rect::new(area.x, leader_y, area.width, 1);
-        let leader_text = Paragraph::new(format!("Leader: {keys}"))
-            .style(
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .alignment(Alignment::Center);
-        frame.render_widget(leader_text, leader_bg);
+        let spin_text = Paragraph::new(Line::from(vec![
+            Span::styled(format!(" [{spin}] "), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("EXECUTING TRINO QUERY...", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        ]))
+        .alignment(Alignment::Center);
+        frame.render_widget(spin_text, sections[1]);
     }
 }
 
@@ -141,14 +191,23 @@ fn ui(frame: &mut Frame, app: &App) {
             screens::help::render(frame, frame.area());
         }
         _ => {
-            let chunks = Layout::horizontal([
-                Constraint::Percentage(80),
-                Constraint::Percentage(20),
+            let outer_chunks = Layout::vertical([
+                Constraint::Length(3),
+                Constraint::Min(0),
+                Constraint::Length(7),
             ])
             .split(frame.area());
 
-            let main = chunks[0];
-            render_sidebar(frame, chunks[1], app);
+            render_search_bar(frame, outer_chunks[0], app);
+
+            let main_chunks = Layout::horizontal([
+                Constraint::Percentage(app.main_panel_pct),
+                Constraint::Percentage(100 - app.main_panel_pct),
+            ])
+            .split(outer_chunks[1]);
+
+            let main = main_chunks[0];
+            render_control_panel(frame, main_chunks[1], app);
 
             match &app.screen {
                 Screen::Connect(state) => {
@@ -178,6 +237,8 @@ fn ui(frame: &mut Frame, app: &App) {
                 }
                 Screen::Help => unreachable!(),
             }
+
+            screens::query_inspector::render(frame, outer_chunks[2], app);
         }
     }
 }
@@ -185,7 +246,7 @@ fn ui(frame: &mut Frame, app: &App) {
 pub async fn run(app: &mut App) -> Result<()> {
     enable_raw_mode()?;
     let mut stderr = stdout();
-    execute!(stderr, EnterAlternateScreen)?;
+    execute!(stderr, EnterAlternateScreen, EnableMouseCapture)?;
 
     let backend = ratatui::backend::CrosstermBackend::new(stderr);
     let mut terminal = Terminal::new(backend)?;
@@ -193,7 +254,7 @@ pub async fn run(app: &mut App) -> Result<()> {
     let res = run_loop(&mut terminal, app).await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     res
@@ -203,6 +264,13 @@ async fn run_loop(
     terminal: &mut Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
 ) -> Result<()> {
+    if app.auto_connect {
+        let url = app.config.url.clone();
+        let user = app.config.user.clone();
+        let password = app.config.password.clone();
+        handler::execute_command(app, handler::Command::Connect { url, user, password }).await;
+    }
+
     loop {
         app.frame_count += 1;
         terminal.draw(|frame| ui(frame, app))?;
@@ -212,20 +280,27 @@ async fn run_loop(
         }
 
         if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
 
-                let cmd = handler::handle_key_sync(app, key);
+                    let cmd = handler::handle_key_sync(app, key);
 
-                if let Some(cmd) = cmd {
-                    app.loading = true;
-                    app.frame_count += 1;
-                    terminal.draw(|frame| ui(frame, app))?;
-                    handler::execute_command(app, cmd).await;
+                    if let Some(cmd) = cmd {
+                        app.loading = true;
+                        app.frame_count += 1;
+                        terminal.draw(|frame| ui(frame, app))?;
+                        handler::execute_command(app, cmd).await;
+                    }
                 }
+                Event::Mouse(mouse) => {
+                    handler::handle_mouse_sync(app, mouse);
+                }
+                _ => {}
             }
         }
     }
 }
+

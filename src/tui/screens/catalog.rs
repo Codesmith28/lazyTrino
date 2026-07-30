@@ -16,7 +16,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, List, ListItem, ListState},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState},
     Frame,
 };
 
@@ -26,6 +26,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &CatalogState, search: &str)
     let block = Block::default()
         .title(" Catalogs ")
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -73,4 +74,17 @@ pub fn render(frame: &mut Frame, area: Rect, state: &CatalogState, search: &str)
         );
 
     frame.render_stateful_widget(list, inner, &mut list_state);
+
+    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+    if filtered.len() > 1 {
+        let mut scrollbar_state = ScrollbarState::new(filtered.len().saturating_sub(1)).position(state.selected);
+        frame.render_stateful_widget(
+            Scrollbar::default()
+                .orientation(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("▲"))
+                .end_symbol(Some("▼")),
+            inner,
+            &mut scrollbar_state,
+        );
+    }
 }

@@ -56,6 +56,7 @@ pub struct TrinoError {
 pub struct QueryResults {
     pub columns: Vec<Column>,
     pub data: Vec<Vec<String>>,
+    pub duration_ms: u64,
 }
 
 pub fn format_value(v: &Option<serde_json::Value>) -> String {
