@@ -86,12 +86,49 @@ Launch `lazyTrino` using the generated binary or via `make run`:
 | `--url` | | `http://localhost:8080` | Trino coordinator REST server URL |
 | `--user` | | `$USER` (or `trino`) | Trino username |
 | `--password` | `--pass` | *(none)* | Trino password (optional) |
+| `--profile <NAME>` | | *(none)* | Load connection defaults from a named config profile |
 | `--log-level <LEVEL>` | | `info` | Override the default log level when `RUST_LOG` is not set (`trace`, `debug`, `info`, `warn`, `error`) |
 | `--no-log` | | `false` | Disable file logging |
 | `-h`, `--help` | | | Print CLI help information |
 | `-V`, `--version` | | | Print version information |
 
 Logs are written to an OS-specific cache directory by default (for example `~/.cache/lazytrino/lazytrino.log` on Linux or `~/Library/Caches/lazytrino/lazytrino.log` on macOS). Use `--no-log` to disable file logging entirely.
+
+### Configuration
+
+`lazyTrino` can read persistent connection defaults from an OS-specific config file resolved via `dirs::config_dir()`, for example:
+
+- macOS: `~/Library/Application Support/lazytrino/config.toml`
+- Linux: `~/.config/lazytrino/config.toml`
+- Windows: `%APPDATA%\lazytrino\config.toml`
+
+Example:
+
+```toml
+default_profile = "local"
+
+[profiles.local]
+url = "http://localhost:8080"
+user = "trino"
+
+[profiles.prod]
+url = "https://trino.example.com:8443"
+user = "admin"
+# Optional but insecure: prefer LAZYTRINO_PASSWORD, --password, or entering it interactively.
+password = "secret"
+
+[last_used]
+url = "http://localhost:8080"
+user = "trino"
+```
+
+- `--profile <NAME>` selects a profile from `[profiles.<NAME>]`.
+- If `--profile` is not provided, `default_profile` is used when present.
+- Environment variable overrides are supported with `LAZYTRINO_URL`, `LAZYTRINO_USER`, and `LAZYTRINO_PASSWORD`.
+- Passwords are **never** written to `[last_used]`. After a successful connection, `lazyTrino` persists only the last-used URL and user so the Connect screen can be prefilled next time.
+- Storing `password = "..."` in a profile is supported for convenience, but it is insecure because it keeps the password in plaintext. Prefer environment variables, `--password`, or interactive entry.
+
+Connection settings are resolved in this order: CLI flags → `LAZYTRINO_*` environment variables → selected config profile → `[last_used]` URL/user → built-in defaults.
 
 ---
 
