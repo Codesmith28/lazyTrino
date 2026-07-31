@@ -1,12 +1,11 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Rect},
-    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table},
-    Frame,
 };
 
-use crate::app::ResultsState;
+use crate::{app::ResultsState, tui::theme};
 
 pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
     if max_width == 0 {
@@ -36,16 +35,14 @@ pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
                     lines.push(word[start..end].to_string());
                     start = end;
                 }
+            } else if current_line.is_empty() {
+                current_line.push_str(word);
+            } else if current_line.len() + 1 + word.len() <= max_width {
+                current_line.push(' ');
+                current_line.push_str(word);
             } else {
-                if current_line.is_empty() {
-                    current_line.push_str(word);
-                } else if current_line.len() + 1 + word.len() <= max_width {
-                    current_line.push(' ');
-                    current_line.push_str(word);
-                } else {
-                    lines.push(current_line);
-                    current_line = word.to_string();
-                }
+                lines.push(current_line);
+                current_line = word.to_string();
             }
         }
         if !current_line.is_empty() {
@@ -59,9 +56,13 @@ pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
     }
 }
 
-pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: String, is_active: bool) {
-    let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
-
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    state: &ResultsState,
+    _spinner: String,
+    is_active: bool,
+) {
     let title_prefix = " Query Results : ";
     let main_title = if state.invalid_query_error.is_some() {
         format!("{title_prefix}Invalid Query ")
@@ -101,7 +102,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
         .title(main_title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
+        .border_style(theme::border_style(is_active));
 
     let inner = block.inner(area);
     frame.render_widget(&block, area);
@@ -112,17 +113,29 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
 
     if let Some(invalid_msg) = &state.invalid_query_error {
         let err_lines = vec![
-            Line::from(Span::styled("✖ Invalid query for this view", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))),
-            Line::from(""),
-            Line::from(Span::styled(invalid_msg.as_str(), Style::default().fg(Color::Red))),
-            Line::from(""),
             Line::from(Span::styled(
-                format!("Current View Scope: {}.{}.{}", state.catalog, state.schema, state.table),
-                Style::default().fg(Color::Cyan),
+                "✖ Invalid query for this view",
+                theme::error_bold_style(),
             )),
             Line::from(""),
-            Line::from(Span::styled("Note: Queries in this view can only target data inside the current table.", Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled("Enter full SQL queries operating on this table (e.g. 'SELECT * FROM table WHERE col = val').", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(invalid_msg.as_str(), theme::error_style())),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!(
+                    "Current View Scope: {}.{}.{}",
+                    state.catalog, state.schema, state.table
+                ),
+                theme::info_style(),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Note: Queries in this view can only target data inside the current table.",
+                theme::muted_style(),
+            )),
+            Line::from(Span::styled(
+                "Enter full SQL queries operating on this table (e.g. 'SELECT * FROM table WHERE col = val').",
+                theme::muted_style(),
+            )),
         ];
         let p = Paragraph::new(err_lines).wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(p, inner);
@@ -131,7 +144,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
 
     if state.columns.is_empty() && state.rows.is_empty() {
         let empty = Paragraph::new("No results returned")
-            .style(Style::default().fg(Color::Gray))
+            .style(theme::secondary_style())
             .alignment(ratatui::layout::Alignment::Center)
             .wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(empty, inner);
@@ -140,16 +153,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
 
     if state.columns.is_empty() && !state.rows.is_empty() && state.rows[0].len() == 1 {
         let err = Paragraph::new(state.rows[0][0].as_str())
-            .style(Style::default().fg(Color::Red))
+            .style(theme::error_style())
             .wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(err, inner);
         return;
     }
 
-    let cell_style = Style::default().fg(Color::White);
-    let header_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
+    let cell_style = theme::text_style();
+    let header_style = theme::warning_bold_style();
 
     let available_width = inner.width.saturating_sub(4) as usize;
 
@@ -169,7 +180,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
         let max_allowed = (available_width / 2).max(15) as u16;
         let needed_width = raw_width.min(max_allowed);
 
-        if visible_cols.is_empty() || cumulative_width + (needed_width as usize) + 2 <= available_width {
+        if visible_cols.is_empty()
+            || cumulative_width + (needed_width as usize) + 2 <= available_width
+        {
             cumulative_width += (needed_width as usize) + 2;
             visible_cols.push((col_idx, c));
             col_widths.push(Constraint::Length(needed_width));
@@ -205,7 +218,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
                     let col_w = col_width_sizes.get(v_idx).copied().unwrap_or(15);
                     let wrapped_lines = wrap_text(val, col_w);
                     max_row_height = max_row_height.max(wrapped_lines.len() as u16);
-                    Cell::from(wrapped_lines.join("\n")).style(cell_style)
+                    Cell::from(wrapped_lines.join(
+                        "
+",
+                    ))
+                    .style(cell_style)
                 })
                 .collect();
             Row::new(cells).height(max_row_height)
@@ -221,7 +238,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
     frame.render_widget(table, inner);
 
     if !state.rows.is_empty() {
-        let mut v_scroll_state = ScrollbarState::new(state.rows.len().saturating_sub(1)).position(state.scroll_v);
+        let mut v_scroll_state =
+            ScrollbarState::new(state.rows.len().saturating_sub(1)).position(state.scroll_v);
         frame.render_stateful_widget(
             Scrollbar::default()
                 .orientation(ScrollbarOrientation::VerticalRight)
@@ -233,7 +251,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
     }
 
     if state.columns.len() > 1 {
-        let mut h_scroll_state = ScrollbarState::new(state.columns.len().saturating_sub(1)).position(state.scroll_h);
+        let mut h_scroll_state =
+            ScrollbarState::new(state.columns.len().saturating_sub(1)).position(state.scroll_h);
         frame.render_stateful_widget(
             Scrollbar::default()
                 .orientation(ScrollbarOrientation::HorizontalBottom)
