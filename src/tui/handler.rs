@@ -397,7 +397,7 @@ fn query_bar_layout(app: &App, term_width: u16, term_height: u16) -> Option<(u16
 
     let search_height = if matches!(app.mode, Mode::Search) {
         let total_chars = 3 + app.search_query.len();
-        let lines = (total_chars + inner_w - 1) / inner_w;
+        let lines = total_chars.div_ceil(inner_w);
         (lines as u16 + 2).clamp(3, 8)
     } else {
         3
@@ -405,7 +405,7 @@ fn query_bar_layout(app: &App, term_width: u16, term_height: u16) -> Option<(u16
 
     let query_height = if matches!(app.mode, Mode::QueryInput) {
         let total_chars = 7 + query_len;
-        let lines = (total_chars + inner_w - 1) / inner_w;
+        let lines = total_chars.div_ceil(inner_w);
         (lines as u16 + 2).clamp(3, 4)
     } else {
         3
@@ -752,10 +752,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             app.is_dragging_resizer = false;
             if app.is_dragging_query_select {
                 app.is_dragging_query_select = false;
-                if let Some(state) = active_query_state_mut(app) {
-                    if state.selection_anchor == Some(state.query_cursor) {
-                        state.clear_selection();
-                    }
+                if let Some(state) = active_query_state_mut(app)
+                    && state.selection_anchor == Some(state.query_cursor)
+                {
+                    state.clear_selection();
                 }
                 return None;
             }
@@ -1514,10 +1514,10 @@ pub fn dispatch_command(
         Command::FetchNextPage { catalog, schema, table, offset, limit } => {
             let query = queries::page_query(&catalog, &schema, &table, offset, limit);
             let log_id = app.add_query_log(query.clone());
-            if let Screen::Actions(ref mut action_state) = app.screen {
-                if let Some(state) = action_state.results.as_mut() {
-                    state.is_fetching_next_page = true;
-                }
+            if let Screen::Actions(ref mut action_state) = app.screen
+                && let Some(state) = action_state.results.as_mut()
+            {
+                state.is_fetching_next_page = true;
             }
 
             if let Some(client) = app.trino_client.clone() {
@@ -1704,25 +1704,25 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     app.complete_query_log_success(log_id, results.duration_ms, results.data.len());
                     let new_rows = results.data;
                     let fetched_count = new_rows.len();
-                    if let Screen::Actions(ref mut action_state) = app.screen {
-                        if let Some(state) = action_state.results.as_mut() {
-                            state.rows.extend(new_rows);
-                            state.offset = offset;
-                            state.is_fetching_next_page = false;
-                            if fetched_count < limit {
-                                state.has_more_rows = false;
-                            }
+                    if let Screen::Actions(ref mut action_state) = app.screen
+                        && let Some(state) = action_state.results.as_mut()
+                    {
+                        state.rows.extend(new_rows);
+                        state.offset = offset;
+                        state.is_fetching_next_page = false;
+                        if fetched_count < limit {
+                            state.has_more_rows = false;
                         }
                     }
                 }
                 Err(e) => {
                     error!(error = %e, "Fetch next page failed");
                     app.complete_query_log_error(log_id, e);
-                    if let Screen::Actions(ref mut action_state) = app.screen {
-                        if let Some(state) = action_state.results.as_mut() {
-                            state.is_fetching_next_page = false;
-                            state.has_more_rows = false;
-                        }
+                    if let Screen::Actions(ref mut action_state) = app.screen
+                        && let Some(state) = action_state.results.as_mut()
+                    {
+                        state.is_fetching_next_page = false;
+                        state.has_more_rows = false;
                     }
                 }
             }

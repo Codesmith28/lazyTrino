@@ -148,6 +148,12 @@ impl ResultsState {
     }
 }
 
+// `ActionState` (which embeds the optional `ResultsState` with query text/rows) is
+// substantially larger than the other variants. `Screen` is only ever held as a single
+// top-level app field (never collected into large vectors or hot loops), so boxing the
+// large variant would add pattern-matching overhead across handler.rs/mod.rs for no
+// measurable benefit.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub enum Screen {
     Connect(ConnectState),

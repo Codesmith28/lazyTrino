@@ -326,19 +326,16 @@ fn ui(frame: &mut Frame, app: &App) {
                 let menu_is_active = app.active_panel == ActivePanel::MenuPane;
                 let preview_is_active = app.active_panel == ActivePanel::MainViewer;
 
-                match &app.screen {
-                    Screen::Actions(state) => {
-                        screens::actions::render(
-                            frame,
-                            menu_area,
-                            &state.catalog,
-                            &state.schema,
-                            &state.table,
-                            state.selected,
-                            menu_is_active,
-                        );
-                    }
-                    _ => {}
+                if let Screen::Actions(state) = &app.screen {
+                    screens::actions::render(
+                        frame,
+                        menu_area,
+                        &state.catalog,
+                        &state.schema,
+                        &state.table,
+                        state.selected,
+                        menu_is_active,
+                    );
                 }
 
                 if selected_idx < crate::app::ACTIONS.len() {
@@ -433,8 +430,8 @@ fn ui(frame: &mut Frame, app: &App) {
                                 );
                             }
                         }
-                        _ => match &app.screen {
-                            Screen::Actions(state) => {
+                        _ => {
+                            if let Screen::Actions(state) = &app.screen {
                                 if let Some(ref res_state) = state.results {
                                     screens::results::render(
                                         frame,
@@ -479,8 +476,7 @@ fn ui(frame: &mut Frame, app: &App) {
                                     );
                                 }
                             }
-                            _ => {}
-                        },
+                        }
                     }
                 }
             }
