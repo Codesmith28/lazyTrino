@@ -52,33 +52,34 @@ pub fn render(frame: &mut Frame, area: Rect, columns: &[VerticalColumn], table_n
     ];
     let header = Row::new(header_cells).bottom_margin(1);
 
+    let col_w1 = (inner.width * 25 / 100).max(10) as usize;
+    let col_w2 = (inner.width * 20 / 100).max(10) as usize;
+    let col_w3 = (inner.width * 18 / 100).max(8) as usize;
+    let col_w4 = (inner.width * 33 / 100).max(12) as usize;
+
     let rows: Vec<Row> = columns
         .iter()
         .skip(scroll)
         .enumerate()
         .map(|(idx, col)| {
             let num = format!("{:>2}", scroll + idx + 1);
-            let name = col.name.clone();
-            let dtype = col.data_type.clone();
-            let key = if col.key_meta.is_empty() {
-                "-".to_string()
-            } else {
-                col.key_meta.clone()
-            };
-            let desc = if col.description.is_empty() {
-                "-".to_string()
-            } else {
-                col.description.clone()
-            };
+            let name_lines = crate::tui::screens::results::wrap_text(&col.name, col_w1);
+            let dtype_lines = crate::tui::screens::results::wrap_text(&col.data_type, col_w2);
+            let key_str = if col.key_meta.is_empty() { "-" } else { &col.key_meta };
+            let key_lines = crate::tui::screens::results::wrap_text(key_str, col_w3);
+            let desc_str = if col.description.is_empty() { "-" } else { &col.description };
+            let desc_lines = crate::tui::screens::results::wrap_text(desc_str, col_w4);
+
+            let max_h = name_lines.len().max(dtype_lines.len()).max(key_lines.len()).max(desc_lines.len()) as u16;
 
             let cells = vec![
                 Cell::from(num).style(Style::default().fg(Color::DarkGray)),
-                Cell::from(name).style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Cell::from(dtype).style(Style::default().fg(Color::Green)),
-                Cell::from(key).style(Style::default().fg(Color::Magenta)),
-                Cell::from(desc).style(Style::default().fg(Color::Gray)),
+                Cell::from(name_lines.join("\n")).style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Cell::from(dtype_lines.join("\n")).style(Style::default().fg(Color::Green)),
+                Cell::from(key_lines.join("\n")).style(Style::default().fg(Color::Magenta)),
+                Cell::from(desc_lines.join("\n")).style(Style::default().fg(Color::Gray)),
             ];
-            Row::new(cells)
+            Row::new(cells).height(max_h)
         })
         .collect();
 

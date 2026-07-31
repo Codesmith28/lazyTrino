@@ -111,7 +111,10 @@ pub struct ActionState {
 
 #[derive(Clone)]
 pub struct ResultsState {
+    #[allow(dead_code)]
     pub query: String,
+    pub query_buffer: String,
+    pub query_cursor: usize,
     pub columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
     pub scroll_v: usize,
@@ -127,6 +130,7 @@ pub struct ResultsState {
     pub page_size: usize,
     pub is_fetching_next_page: bool,
     pub has_more_rows: bool,
+    pub invalid_query_error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -147,6 +151,7 @@ pub enum Mode {
         keys: String,
     },
     Search,
+    QueryInput,
 }
 
 pub enum Action {
