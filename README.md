@@ -136,6 +136,8 @@ When a table is selected, press the corresponding action key or select it from t
 | `j` / `k` or `↓` / `↑` | Scroll table vertically (triggers infinite scroll at list bottom) |
 | `h` / `l` or `←` / `→` | Scroll table horizontally across columns |
 | `g` / `G` | Jump to top / bottom of current result set |
+| `y` | Copy the current loaded result grid (header + rows) to the system clipboard as TSV |
+| `Y` | Export the current loaded result grid (header + rows) to a CSV file in the current working directory |
 | `q` or `:` | Focus Interactive SQL Query Bar to write custom queries |
 | `Esc` | Focus the Menu Pane, or return to the table actions menu if the Menu Pane is already focused |
 
