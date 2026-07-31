@@ -12,66 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use ratatui::{
-    Frame,
-    layout::Rect,
-    text::Line,
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState},
-};
+use ratatui::{Frame, layout::Rect};
 
-use crate::{app::TableState, tui::theme};
+use crate::app::TableState;
+
+use super::catalog::render_selectable_list;
 
 pub fn render(frame: &mut Frame, area: Rect, state: &TableState, search: &str, is_active: bool) {
-    let block = Block::default()
-        .title(format!(" Tables — {}.{} ", state.catalog, state.schema))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(theme::border_style(is_active));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let filtered: Vec<(usize, &String)> = state
-        .items
-        .iter()
-        .enumerate()
-        .filter(|(_, name)| {
-            search.is_empty() || name.to_lowercase().contains(&search.to_lowercase())
-        })
-        .collect();
-
-    if filtered.is_empty() {
-        return;
-    }
-
-    let items: Vec<ListItem> = filtered
-        .iter()
-        .map(|(orig_idx, name)| {
-            let prefix = format!("{:>3} ", orig_idx + 1);
-            let line = if *orig_idx == state.selected {
-                Line::styled(format!("{prefix}{name}"), theme::selection_style())
-            } else {
-                Line::styled(format!("{prefix}{name}"), theme::text_style())
-            };
-            ListItem::new(line)
-        })
-        .collect();
-
-    let mut list_state = ListState::default().with_selected(Some(state.selected));
-    let list = List::new(items).highlight_style(theme::selection_style());
-
-    frame.render_stateful_widget(list, inner, &mut list_state);
-
-    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
-    if filtered.len() > 1 {
-        let mut scrollbar_state =
-            ScrollbarState::new(filtered.len().saturating_sub(1)).position(state.selected);
-        frame.render_stateful_widget(
-            Scrollbar::default()
-                .orientation(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(Some("▲"))
-                .end_symbol(Some("▼")),
-            inner,
-            &mut scrollbar_state,
-        );
-    }
+    let title = format!(" Tables — {}.{} ", state.catalog, state.schema);
+    render_selectable_list(
+        frame,
+        area,
+        &title,
+        &state.items,
+        state.selected,
+        search,
+        is_active,
+    );
 }
