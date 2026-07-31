@@ -69,7 +69,7 @@ cargo build --release
 Launch `lazyTrino` using the generated binary or via `make run`:
 
 ```bash
-# Connect using default configuration (http://localhost:57574)
+# Connect using default configuration (http://localhost:8080)
 ./lazyTrino
 
 # Connect to a custom Trino coordinator server
@@ -83,8 +83,8 @@ Launch `lazyTrino` using the generated binary or via `make run`:
 
 | Flag | Short / Alias | Default | Description |
 | --- | --- | --- | --- |
-| `--url` | | `http://localhost:57574` | Trino coordinator REST server URL |
-| `--user` | | `sarthak` | Trino username |
+| `--url` | | `http://localhost:8080` | Trino coordinator REST server URL |
+| `--user` | | `$USER` (or `trino`) | Trino username |
 | `--password` | `--pass` | *(none)* | Trino password (optional) |
 | `-h`, `--help` | | | Print CLI help information |
 | `-V`, `--version` | | | Print version information |

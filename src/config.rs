@@ -20,11 +20,17 @@ pub struct ConnectionConfig {
     pub password: String,
 }
 
+pub fn default_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "trino".to_string())
+}
+
 impl Default for ConnectionConfig {
     fn default() -> Self {
         Self {
-            url: "http://localhost:57574".to_string(),
-            user: "sarthak".to_string(),
+            url: "http://localhost:8080".to_string(),
+            user: default_user(),
             password: String::new(),
         }
     }

@@ -33,10 +33,11 @@ async fn main() -> Result<()> {
 
     let args = config::CliArgs::parse();
     let auto_connect = args.url.is_some() && args.user.is_some();
+    let default_config = config::ConnectionConfig::default();
     let config = config::ConnectionConfig {
-        url: args.url.unwrap_or_else(|| "http://localhost:57574".to_string()),
-        user: args.user.unwrap_or_else(|| "sarthak".to_string()),
-        password: args.password.unwrap_or_default(),
+        url: args.url.unwrap_or(default_config.url),
+        user: args.user.unwrap_or(default_config.user),
+        password: args.password.unwrap_or(default_config.password),
     };
 
     let mut app = app::App::new(config, auto_connect);
