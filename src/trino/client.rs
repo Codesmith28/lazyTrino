@@ -70,7 +70,7 @@ impl TrinoClient {
 
         if let Some(rows) = &data.data {
             for row in rows {
-                all_data.push(row.iter().map(|v| format_value(v)).collect());
+                all_data.push(row.iter().map(format_value).collect());
             }
         }
 
@@ -97,15 +97,14 @@ impl TrinoClient {
                 );
             }
 
-            if columns.is_empty() {
-                if let Some(ref cols) = data.columns {
+            if columns.is_empty()
+                && let Some(ref cols) = data.columns {
                     columns = cols.clone();
                 }
-            }
 
             if let Some(rows) = &data.data {
                 for row in rows {
-                    all_data.push(row.iter().map(|v| format_value(v)).collect());
+                    all_data.push(row.iter().map(format_value).collect());
                 }
             }
         }

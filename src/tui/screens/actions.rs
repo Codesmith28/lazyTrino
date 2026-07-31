@@ -24,11 +24,7 @@ pub fn render(frame: &mut Frame, area: Rect, _catalog: &str, _schema: &str, tabl
         .map(|(i, (key, label, _))| {
             let is_selected = i == selected;
             let prefix = if is_selected { "▸ " } else { "  " };
-            let text = if inner.width < 22 {
-                format!("{prefix}[{key}] {label}")
-            } else {
-                format!("{prefix}[{key}] {label}")
-            };
+            let text = format!("{prefix}[{key}] {label}");
             let line = if is_selected {
                 Line::styled(
                     text,
