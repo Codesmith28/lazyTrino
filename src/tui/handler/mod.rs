@@ -17,6 +17,7 @@ use tracing::info;
 
 use crate::app::*;
 use crate::trino::client::TrinoClient;
+use crate::trino::error::TrinoClientError;
 
 mod commands;
 mod mouse;
@@ -114,25 +115,26 @@ pub enum AsyncResult {
         url: String,
         user: String,
         password: String,
-        client: TrinoClient,
-        result: Result<Vec<String>, String>,
+        result: Result<(TrinoClient, Vec<String>), TrinoClientError>,
     },
     FetchSchemas {
         log_id: usize,
         catalog: String,
-        result: Result<Vec<String>, String>,
+        result: Result<Vec<String>, TrinoClientError>,
     },
     FetchTables {
         log_id: usize,
         catalog: String,
         schema: String,
-        result: Result<Vec<String>, String>,
+        result: Result<Vec<String>, TrinoClientError>,
     },
     FetchTableMetadata {
         partitions_log_id: usize,
         cols_log_id: usize,
         partition_lines: Vec<String>,
         columns: Vec<VerticalColumn>,
+        partitions_error: Option<TrinoClientError>,
+        columns_error: Option<TrinoClientError>,
     },
     ExecuteQuery {
         log_id: usize,
@@ -142,13 +144,13 @@ pub enum AsyncResult {
         schema: String,
         table: String,
         is_paginated: bool,
-        result: Result<crate::trino::types::QueryResults, String>,
+        result: Result<crate::trino::types::QueryResults, TrinoClientError>,
     },
     FetchNextPage {
         log_id: usize,
         offset: usize,
         limit: usize,
-        result: Result<crate::trino::types::QueryResults, String>,
+        result: Result<crate::trino::types::QueryResults, TrinoClientError>,
     },
 }
 

@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 
+use super::error::TrinoClientError;
 use super::queries;
-use super::types::{format_value, QueryResults, TrinoResponse};
+use super::types::{QueryResults, TrinoResponse, format_value};
 
 #[derive(Clone, Debug)]
 pub struct TrinoClient {
@@ -26,24 +26,31 @@ pub struct TrinoClient {
 }
 
 impl TrinoClient {
-    pub fn new(server_url: &str, user: &str) -> Self {
-        Self {
-            http: reqwest::Client::builder()
-                .danger_accept_invalid_certs(true)
-                .build()
-                .expect("Failed to create HTTP client"),
+    pub fn new(server_url: &str, user: &str) -> Result<Self, TrinoClientError> {
+        let http = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .map_err(|source| TrinoClientError::HttpClientBuild { source })?;
+
+        Ok(Self {
+            http,
             server_url: server_url.trim_end_matches('/').to_string(),
             user: user.to_string(),
-        }
+        })
     }
 
-    fn headers(&self) -> HeaderMap {
+    fn headers(&self) -> Result<HeaderMap, TrinoClientError> {
         let mut h = HeaderMap::new();
         h.insert(
             "X-Trino-User",
-            HeaderValue::from_str(&self.user).expect("Invalid header value"),
+            HeaderValue::from_str(&self.user).map_err(|source| {
+                TrinoClientError::InvalidUserHeader {
+                    user: self.user.clone(),
+                    source,
+                }
+            })?,
         );
-        h
+        Ok(h)
     }
 
     fn rewrite_uri(&self, uri: &str) -> String {
@@ -54,9 +61,40 @@ impl TrinoClient {
         }
     }
 
-    pub async fn execute(&self, sql: &str) -> Result<QueryResults> {
+    async fn parse_response(
+        response: reqwest::Response,
+        stage: &'static str,
+    ) -> Result<TrinoResponse, TrinoClientError> {
+        let status = response.status();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|source| TrinoClientError::ResponseBodyReadFailed { stage, source })?;
+
+        if !status.is_success() {
+            return Err(TrinoClientError::HttpStatus {
+                status,
+                body: format_response_body(&body),
+            });
+        }
+
+        serde_json::from_slice(&body)
+            .map_err(|source| TrinoClientError::ResponseParseFailed { stage, source })
+    }
+
+    fn ensure_success(response: &TrinoResponse) -> Result<(), TrinoClientError> {
+        if let Some(err) = &response.error {
+            return Err(TrinoClientError::QueryError {
+                message: err.message.clone().unwrap_or_else(|| "unknown".to_string()),
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn execute(&self, sql: &str) -> Result<QueryResults, TrinoClientError> {
         let start = std::time::Instant::now();
-        let headers = self.headers();
+        let headers = self.headers()?;
 
         let resp = self
             .http
@@ -65,19 +103,13 @@ impl TrinoClient {
             .body(sql.to_string())
             .send()
             .await
-            .context("Failed to send query to Trino")?;
+            .map_err(|source| TrinoClientError::RequestFailed {
+                stage: "query",
+                source,
+            })?;
 
-        let mut data: TrinoResponse = resp
-            .json()
-            .await
-            .context("Failed to parse Trino response")?;
-
-        if let Some(ref err) = data.error {
-            anyhow::bail!(
-                "Trino error: {}",
-                err.message.as_deref().unwrap_or("unknown")
-            );
-        }
+        let mut data = Self::parse_response(resp, "query").await?;
+        Self::ensure_success(&data)?;
 
         let mut columns = data.columns.clone().unwrap_or_default();
         let mut all_data: Vec<Vec<String>> = Vec::new();
@@ -97,24 +129,19 @@ impl TrinoClient {
                 .headers(headers.clone())
                 .send()
                 .await
-                .context("Failed to fetch next page from Trino")?;
+                .map_err(|source| TrinoClientError::RequestFailed {
+                    stage: "pagination",
+                    source,
+                })?;
 
-            data = resp
-                .json()
-                .await
-                .context("Failed to parse Trino pagination response")?;
-
-            if let Some(ref err) = data.error {
-                anyhow::bail!(
-                    "Trino error: {}",
-                    err.message.as_deref().unwrap_or("unknown")
-                );
-            }
+            data = Self::parse_response(resp, "pagination").await?;
+            Self::ensure_success(&data)?;
 
             if columns.is_empty()
-                && let Some(ref cols) = data.columns {
-                    columns = cols.clone();
-                }
+                && let Some(ref cols) = data.columns
+            {
+                columns = cols.clone();
+            }
 
             if let Some(rows) = &data.data {
                 for row in rows {
@@ -132,18 +159,71 @@ impl TrinoClient {
         })
     }
 
-    pub async fn fetch_catalogs(&self) -> Result<Vec<String>> {
+    pub async fn fetch_catalogs(&self) -> Result<Vec<String>, TrinoClientError> {
         let results = self.execute(&queries::show_catalogs()).await?;
-        Ok(results.data.into_iter().map(|r| r.into_iter().next().unwrap_or_default()).collect())
+        Ok(results
+            .data
+            .into_iter()
+            .map(|r| r.into_iter().next().unwrap_or_default())
+            .collect())
     }
 
-    pub async fn fetch_schemas(&self, catalog: &str) -> Result<Vec<String>> {
+    pub async fn fetch_schemas(&self, catalog: &str) -> Result<Vec<String>, TrinoClientError> {
         let results = self.execute(&queries::show_schemas(catalog)).await?;
-        Ok(results.data.into_iter().map(|r| r.into_iter().next().unwrap_or_default()).collect())
+        Ok(results
+            .data
+            .into_iter()
+            .map(|r| r.into_iter().next().unwrap_or_default())
+            .collect())
     }
 
-    pub async fn fetch_tables(&self, catalog: &str, schema: &str) -> Result<Vec<String>> {
+    pub async fn fetch_tables(
+        &self,
+        catalog: &str,
+        schema: &str,
+    ) -> Result<Vec<String>, TrinoClientError> {
         let results = self.execute(&queries::show_tables(catalog, schema)).await?;
-        Ok(results.data.into_iter().map(|r| r.into_iter().next().unwrap_or_default()).collect())
+        Ok(results
+            .data
+            .into_iter()
+            .map(|r| r.into_iter().next().unwrap_or_default())
+            .collect())
+    }
+}
+
+fn format_response_body(body: &[u8]) -> String {
+    let body = String::from_utf8_lossy(body);
+    let body = body.trim();
+    if body.is_empty() {
+        return "<empty response body>".to_string();
+    }
+
+    const MAX_CHARS: usize = 200;
+    let truncated: String = body.chars().take(MAX_CHARS).collect();
+    if body.chars().count() > MAX_CHARS {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn headers_reject_invalid_user_values() {
+        let client = TrinoClient::new("https://example.com", "bad\nuser").unwrap();
+        let err = client.headers().unwrap_err();
+
+        assert!(matches!(err, TrinoClientError::InvalidUserHeader { .. }));
+    }
+
+    #[test]
+    fn headers_accept_valid_user_values() {
+        let client = TrinoClient::new("https://example.com", "valid-user").unwrap();
+        let headers = client.headers().unwrap();
+
+        assert_eq!(headers["X-Trino-User"], "valid-user");
     }
 }

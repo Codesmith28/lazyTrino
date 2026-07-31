@@ -40,14 +40,18 @@ pub fn dispatch_command(
             }
             let tx = tx.clone();
             tokio::spawn(async move {
-                let client = TrinoClient::new(&url, &user);
-                let res = client.fetch_catalogs().await.map_err(|e| e.to_string());
+                let res = match TrinoClient::new(&url, &user) {
+                    Ok(client) => match client.fetch_catalogs().await {
+                        Ok(catalogs) => Ok((client, catalogs)),
+                        Err(err) => Err(err),
+                    },
+                    Err(err) => Err(err),
+                };
                 let _ = tx.send(AsyncResult::Connect {
                     log_id,
                     url,
                     user,
                     password,
-                    client,
                     result: res,
                 });
             });
@@ -59,10 +63,7 @@ pub fn dispatch_command(
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    let res = client
-                        .fetch_schemas(&catalog)
-                        .await
-                        .map_err(|e| e.to_string());
+                    let res = client.fetch_schemas(&catalog).await;
                     let _ = tx.send(AsyncResult::FetchSchemas {
                         log_id,
                         catalog,
@@ -78,10 +79,7 @@ pub fn dispatch_command(
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    let res = client
-                        .fetch_tables(&catalog, &schema)
-                        .await
-                        .map_err(|e| e.to_string());
+                    let res = client.fetch_tables(&catalog, &schema).await;
                     let _ = tx.send(AsyncResult::FetchTables {
                         log_id,
                         catalog,
@@ -105,56 +103,77 @@ pub fn dispatch_command(
 
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    let partition_lines = match client.execute(&part_query).await {
+                    let (partition_lines, partitions_error) = match client
+                        .execute(&part_query)
+                        .await
+                    {
                         Ok(res) if !res.data.is_empty() => {
                             let raw_lines: Vec<String> =
                                 res.data.into_iter().map(|r| r.join("/")).collect();
-                            crate::tui::screens::partition_tree::build_tree_lines(&raw_lines)
+                            (
+                                crate::tui::screens::partition_tree::build_tree_lines(&raw_lines),
+                                None,
+                            )
                         }
-                        _ => {
+                        Ok(_) | Err(_) => {
                             let show_create_query = queries::show_create(&catalog, &schema, &table);
-                            let ddl_str = match client.execute(&show_create_query).await {
-                                Ok(res2) => res2
-                                    .data
-                                    .first()
-                                    .and_then(|r| r.first())
-                                    .cloned()
-                                    .unwrap_or_default(),
-                                Err(_) => String::new(),
-                            };
-                            crate::tui::screens::partition_tree::build_tree_lines(&[ddl_str])
+                            match client.execute(&show_create_query).await {
+                                Ok(res2) => {
+                                    let ddl_str = res2
+                                        .data
+                                        .first()
+                                        .and_then(|r| r.first())
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    (
+                                        crate::tui::screens::partition_tree::build_tree_lines(&[
+                                            ddl_str,
+                                        ]),
+                                        None,
+                                    )
+                                }
+                                Err(err) => (
+                                    crate::tui::screens::partition_tree::build_tree_lines(&[
+                                        String::new(),
+                                    ]),
+                                    Some(err),
+                                ),
+                            }
                         }
                     };
 
-                    let columns = match client.execute(&desc_query).await {
-                        Ok(res) => res
-                            .data
-                            .iter()
-                            .enumerate()
-                            .map(|(idx, r)| {
-                                let name = r.first().cloned().unwrap_or_default();
-                                let dtype = r.get(1).cloned().unwrap_or_default();
-                                let is_nullable = r.get(2).cloned().unwrap_or_default();
-                                let comment = r.get(3).cloned().unwrap_or_default();
-                                let key_meta = if name.starts_with("_hoodie") {
-                                    "Hudi Metadata".to_string()
-                                } else if name.starts_with("$") || name.contains("iceberg") {
-                                    "Iceberg Meta".to_string()
-                                } else if is_nullable == "NO" {
-                                    "PK".to_string()
-                                } else {
-                                    String::new()
-                                };
-                                VerticalColumn {
-                                    index: idx + 1,
-                                    name,
-                                    data_type: dtype,
-                                    key_meta,
-                                    description: comment,
-                                }
-                            })
-                            .collect(),
-                        Err(_) => Vec::new(),
+                    let (columns, columns_error) = match client.execute(&desc_query).await {
+                        Ok(res) => {
+                            let columns = res
+                                .data
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, r)| {
+                                    let name = r.first().cloned().unwrap_or_default();
+                                    let dtype = r.get(1).cloned().unwrap_or_default();
+                                    let is_nullable = r.get(2).cloned().unwrap_or_default();
+                                    let comment = r.get(3).cloned().unwrap_or_default();
+                                    let key_meta = if name.starts_with("_hoodie") {
+                                        "Hudi Metadata".to_string()
+                                    } else if name.starts_with("$") || name.contains("iceberg") {
+                                        "Iceberg Meta".to_string()
+                                    } else if is_nullable == "NO" {
+                                        "PK".to_string()
+                                    } else {
+                                        String::new()
+                                    };
+                                    VerticalColumn {
+                                        index: idx + 1,
+                                        name,
+                                        data_type: dtype,
+                                        key_meta,
+                                        description: comment,
+                                    }
+                                })
+                                .collect();
+                            (columns, None)
+                        }
+                        Err(err) => (Vec::new(), Some(err)),
                     };
 
                     let _ = tx.send(AsyncResult::FetchTableMetadata {
@@ -162,6 +181,8 @@ pub fn dispatch_command(
                         cols_log_id,
                         partition_lines,
                         columns,
+                        partitions_error,
+                        columns_error,
                     });
                 });
             }
@@ -225,7 +246,7 @@ pub fn dispatch_command(
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    let res = client.execute(&query).await.map_err(|e| e.to_string());
+                    let res = client.execute(&query).await;
                     let _ = tx.send(AsyncResult::ExecuteQuery {
                         log_id,
                         query_buffer,
@@ -257,7 +278,7 @@ pub fn dispatch_command(
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    let res = client.execute(&query).await.map_err(|e| e.to_string());
+                    let res = client.execute(&query).await;
                     let _ = tx.send(AsyncResult::FetchNextPage {
                         log_id,
                         offset,
@@ -277,12 +298,11 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
             url,
             user,
             password,
-            client,
             result,
         } => {
             app.loading = false;
             match result {
-                Ok(catalogs) => {
+                Ok((client, catalogs)) => {
                     app.complete_query_log_success(log_id, 15, catalogs.len());
                     app.config.url = url;
                     app.config.user = user;
@@ -296,10 +316,11 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 }
                 Err(e) => {
                     error!(error = %e, "Connect failed");
-                    app.complete_query_log_error(log_id, e.clone());
+                    let err = e.to_string();
+                    app.complete_query_log_error(log_id, err.clone());
                     if let Screen::Connect(s) = &mut app.screen {
                         s.loading = false;
-                        s.error = Some(format!("Connection failed: {e}"));
+                        s.error = Some(format!("Connection failed: {err}"));
                     }
                 }
             }
@@ -324,7 +345,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 }
                 Err(e) => {
                     error!(error = %e, "Fetch schemas failed");
-                    app.complete_query_log_error(log_id, e);
+                    app.complete_query_log_error(log_id, e.to_string());
                 }
             }
         }
@@ -351,7 +372,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 }
                 Err(e) => {
                     error!(error = %e, "Fetch tables failed");
-                    app.complete_query_log_error(log_id, e);
+                    app.complete_query_log_error(log_id, e.to_string());
                 }
             }
         }
@@ -360,10 +381,22 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
             cols_log_id,
             partition_lines,
             columns,
+            partitions_error,
+            columns_error,
         } => {
             app.loading = false;
-            app.complete_query_log_success(partitions_log_id, 20, partition_lines.len());
-            app.complete_query_log_success(cols_log_id, 20, columns.len());
+            if let Some(err) = partitions_error {
+                error!(error = %err, "Fetch table partitions failed");
+                app.complete_query_log_error(partitions_log_id, err.to_string());
+            } else {
+                app.complete_query_log_success(partitions_log_id, 20, partition_lines.len());
+            }
+            if let Some(err) = columns_error {
+                error!(error = %err, "Fetch table columns failed");
+                app.complete_query_log_error(cols_log_id, err.to_string());
+            } else {
+                app.complete_query_log_success(cols_log_id, 20, columns.len());
+            }
             app.partition_tree_lines = partition_lines;
             app.vertical_schema_cols = columns;
         }
@@ -433,16 +466,17 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 }
                 Err(e) => {
                     error!(error = %e, "Execute query failed");
-                    app.complete_query_log_error(log_id, e.clone());
+                    let err = e.to_string();
+                    app.complete_query_log_error(log_id, err.clone());
                     let res_state = ResultsState {
                         query_buffer,
                         query_cursor,
                         columns: Vec::new(),
-                        rows: vec![vec![format!("Error: {e}")]],
+                        rows: vec![vec![format!("Error: {err}")]],
                         scroll_v: 0,
                         scroll_h: 0,
                         loading: false,
-                        error: Some(e),
+                        error: Some(err),
                         is_paginated: false,
                         catalog: catalog.clone(),
                         schema: schema.clone(),
@@ -501,7 +535,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
             }
             Err(e) => {
                 error!(error = %e, "Fetch next page failed");
-                app.complete_query_log_error(log_id, e);
+                app.complete_query_log_error(log_id, e.to_string());
                 if let Screen::Actions(ref mut action_state) = app.screen
                     && let Some(state) = action_state.results.as_mut()
                 {
