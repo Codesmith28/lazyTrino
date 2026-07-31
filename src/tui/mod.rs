@@ -94,7 +94,10 @@ fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
     let is_editing = matches!(app.mode, Mode::QueryInput);
-    let is_table_view = matches!(app.screen, Screen::Results(_));
+    let is_table_view = matches!(
+        &app.screen,
+        Screen::Actions(state) if state.results.as_ref().is_some_and(|results| results.is_paginated)
+    );
 
     let title = if is_editing {
         " Table Query Bar [EDITING - Press Enter to run, Esc to cancel] "
@@ -125,11 +128,6 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
                 (state.query_buffer.as_str(), state.query_cursor, None)
             }
         }
-        Screen::Results(state) => (
-            state.query_buffer.as_str(),
-            state.query_cursor,
-            state.selection_range(),
-        ),
         _ => ("", 0, None),
     };
 
@@ -209,7 +207,7 @@ fn ui(frame: &mut Frame, app: &App) {
             screens::help::render(frame, frame.area());
         }
         _ => {
-            let is_in_table = matches!(app.screen, Screen::Actions(_) | Screen::Results(_));
+            let is_in_table = matches!(app.screen, Screen::Actions(_));
 
             let outer_chunks =
                 Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).split(frame.area());
@@ -310,7 +308,6 @@ fn ui(frame: &mut Frame, app: &App) {
 
                 let selected_idx = match &app.screen {
                     Screen::Actions(a) => a.selected,
-                    Screen::Results(_) => 0,
                     _ => 0,
                 };
 
@@ -321,7 +318,6 @@ fn ui(frame: &mut Frame, app: &App) {
                             .as_ref()
                             .map(|r| r.query_buffer.len())
                             .unwrap_or_else(|| a.query_buffer.len()),
-                        Screen::Results(r) => r.query_buffer.len(),
                         _ => 0,
                     };
                     let lines = total_chars.div_ceil(inner_w);
@@ -356,17 +352,6 @@ fn ui(frame: &mut Frame, app: &App) {
                             menu_is_active,
                         );
                     }
-                    Screen::Results(state) => {
-                        screens::actions::render(
-                            frame,
-                            menu_area,
-                            &state.catalog,
-                            &state.schema,
-                            &state.table,
-                            selected_idx,
-                            menu_is_active,
-                        );
-                    }
                     _ => {}
                 }
 
@@ -374,7 +359,6 @@ fn ui(frame: &mut Frame, app: &App) {
                     let action = &crate::app::ACTIONS[selected_idx].2;
                     let table_name = match &app.screen {
                         Screen::Actions(a) => a.table.as_str(),
-                        Screen::Results(r) => r.table.as_str(),
                         _ => "",
                     };
 
@@ -508,15 +492,6 @@ fn ui(frame: &mut Frame, app: &App) {
                                         preview_is_active,
                                     );
                                 }
-                            }
-                            Screen::Results(state) => {
-                                screens::results::render(
-                                    frame,
-                                    preview_pane_area,
-                                    state,
-                                    spinner(app),
-                                    preview_is_active,
-                                );
                             }
                             _ => {}
                         },
