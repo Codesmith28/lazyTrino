@@ -45,8 +45,8 @@ pub fn extract_from_tables(sql: &str) -> Vec<String> {
     let mut i = 0;
     while i < tokens.len() {
         let upper = tokens[i].to_uppercase();
-        if upper == "FROM" || upper == "JOIN" {
-            if i + 1 < tokens.len() {
+        if (upper == "FROM" || upper == "JOIN")
+            && i + 1 < tokens.len() {
                 let next_token = tokens[i + 1];
                 if !next_token.starts_with('(') {
                     let clean_table = next_token.trim_matches(|c| c == ',' || c == ';' || c == '(' || c == ')');
@@ -60,7 +60,6 @@ pub fn extract_from_tables(sql: &str) -> Vec<String> {
                     }
                 }
             }
-        }
         i += 1;
     }
     tables
@@ -90,7 +89,7 @@ pub fn validate_and_build_query(
     }
 
     for t in &extracted_tables {
-        let normalized = t.replace('"', "").replace('`', "").replace('\'', "").to_lowercase();
+        let normalized = t.replace(['"', '`', '\''], "").to_lowercase();
         let matches_table = normalized == table_target
             || normalized == schema_target
             || normalized == full_target;
@@ -106,9 +105,9 @@ pub fn validate_and_build_query(
 }
 
 fn check_trigger_infinite_scroll(app: &mut App) -> Option<Command> {
-    if let Screen::Results(ref mut state) = app.screen {
-        if state.is_paginated && !state.is_fetching_next_page && state.has_more_rows {
-            if state.scroll_v + 15 >= state.rows.len() {
+    if let Screen::Results(ref mut state) = app.screen
+        && state.is_paginated && !state.is_fetching_next_page && state.has_more_rows
+            && state.scroll_v + 15 >= state.rows.len() {
                 state.is_fetching_next_page = true;
                 let offset = state.rows.len();
                 return Some(Command::FetchNextPage {
@@ -119,8 +118,6 @@ fn check_trigger_infinite_scroll(app: &mut App) -> Option<Command> {
                     limit: state.page_size,
                 });
             }
-        }
-    }
     None
 }
 
@@ -174,11 +171,10 @@ fn jump_to_number(app: &mut App) {
         return;
     }
     let num: usize = app.number_buffer.parse().unwrap_or(1);
-    if let Some(items) = extract_list_labels(&app.screen) {
-        if num > 0 && num <= items.len() {
+    if let Some(items) = extract_list_labels(&app.screen)
+        && num > 0 && num <= items.len() {
             mod_list_selected(&mut app.screen, num - 1);
         }
-    }
     app.number_buffer.clear();
 }
 
@@ -592,8 +588,8 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 } else if selected_idx == 8 {
                     let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
                     app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
-                } else if let Screen::Actions(ref mut a) = app.screen {
-                    if let Some(ref mut res) = a.results {
+                } else if let Screen::Actions(ref mut a) = app.screen
+                    && let Some(ref mut res) = a.results {
                         if shift {
                             if !res.columns.is_empty() {
                                 res.scroll_h = (res.scroll_h + 1).min(res.columns.len().saturating_sub(1));
@@ -603,14 +599,11 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                             return check_trigger_infinite_scroll(app);
                         }
                     }
-                }
-            } else if let Some(items) = extract_list_labels(&app.screen) {
-                if !items.is_empty() {
-                    if let Some(s) = get_selected(&app.screen) {
+            } else if let Some(items) = extract_list_labels(&app.screen)
+                && !items.is_empty()
+                    && let Some(s) = get_selected(&app.screen) {
                         mod_list_selected(&mut app.screen, (s + 1).min(items.len().saturating_sub(1)));
                     }
-                }
-            }
         }
         MouseEventKind::ScrollUp => {
             let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
@@ -623,15 +616,14 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     app.partition_scroll = app.partition_scroll.saturating_sub(1);
                 } else if selected_idx == 8 {
                     app.schema_scroll = app.schema_scroll.saturating_sub(1);
-                } else if let Screen::Actions(ref mut a) = app.screen {
-                    if let Some(ref mut res) = a.results {
+                } else if let Screen::Actions(ref mut a) = app.screen
+                    && let Some(ref mut res) = a.results {
                         if shift {
                             res.scroll_h = res.scroll_h.saturating_sub(1);
                         } else {
                             res.scroll_v = res.scroll_v.saturating_sub(1);
                         }
                     }
-                }
             } else if let Some(s) = get_selected(&app.screen) {
                 mod_list_selected(&mut app.screen, s.saturating_sub(1));
             }
@@ -694,12 +686,11 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return None;
     }
 
-    if let KeyCode::Char(c) = code {
-        if c.is_ascii_digit() && matches!(app.active_panel, ActivePanel::MainViewer) {
+    if let KeyCode::Char(c) = code
+        && c.is_ascii_digit() && matches!(app.active_panel, ActivePanel::MainViewer) {
             update_number_buffer(app, c);
             return None;
         }
-    }
 
     match &app.screen {
         Screen::Connect(_) => connect_keys(app, key),
@@ -815,15 +806,14 @@ fn connect_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
             2 => state.password.push(c),
             _ => {},
         },
-        KeyCode::Enter => {
-            if !state.url.is_empty() && !state.user.is_empty() {
+        KeyCode::Enter
+            if !state.url.is_empty() && !state.user.is_empty() => {
                 let url = state.url.clone();
                 let user = state.user.clone();
                 let password = state.password.clone();
                 state.loading = true;
                 return Some(Command::Connect { url, user, password });
             }
-        }
         _ => {}
     }
     None
@@ -833,13 +823,11 @@ fn handle_list_navigation_keys(app: &mut App, key: KeyEvent) -> Option<Command> 
     let code = normalize_key_code(key.code);
     match code {
         KeyCode::Char('j') | KeyCode::Down => {
-            if let Some(items) = extract_list_labels(&app.screen) {
-                if !items.is_empty() {
-                    if let Some(s) = get_selected(&app.screen) {
+            if let Some(items) = extract_list_labels(&app.screen)
+                && !items.is_empty()
+                    && let Some(s) = get_selected(&app.screen) {
                         mod_list_selected(&mut app.screen, (s + 1).min(items.len() - 1));
                     }
-                }
-            }
             None
         }
         KeyCode::Char('k') | KeyCode::Up => {
@@ -859,11 +847,10 @@ fn handle_list_navigation_keys(app: &mut App, key: KeyEvent) -> Option<Command> 
             None
         }
         KeyCode::Char('G') => {
-            if let Some(items) = extract_list_labels(&app.screen) {
-                if !items.is_empty() {
+            if let Some(items) = extract_list_labels(&app.screen)
+                && !items.is_empty() {
                     mod_list_selected(&mut app.screen, items.len() - 1);
                 }
-            }
             None
         }
         _ => None,
@@ -885,11 +872,10 @@ fn table_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
 fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
     let code = normalize_key_code(key.code);
 
-    if let KeyCode::Char(c) = code {
-        if let Some(pos) = ACTIONS.iter().position(|(k, _, _)| *k == c) {
+    if let KeyCode::Char(c) = code
+        && let Some(pos) = ACTIONS.iter().position(|(k, _, _)| *k == c) {
             return trigger_action(app, pos);
         }
-    }
 
     if let Screen::Actions(ref mut s) = app.screen {
         match app.active_panel {
@@ -939,11 +925,10 @@ fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                     None
                 }
                 KeyCode::Char('l') | KeyCode::Right => {
-                    if let Some(ref mut res) = s.results {
-                        if !res.columns.is_empty() {
+                    if let Some(ref mut res) = s.results
+                        && !res.columns.is_empty() {
                             res.scroll_h = (res.scroll_h + 1).min(res.columns.len().saturating_sub(1));
                         }
-                    }
                     None
                 }
                 KeyCode::Char('h') | KeyCode::Left => {
@@ -1306,7 +1291,7 @@ pub fn dispatch_command(
                         _ => {
                             let show_create_query = queries::show_create(&catalog, &schema, &table);
                             let ddl_str = match client.execute(&show_create_query).await {
-                                Ok(res2) => res2.data.get(0).and_then(|r| r.get(0)).cloned().unwrap_or_default(),
+                                Ok(res2) => res2.data.first().and_then(|r| r.first()).cloned().unwrap_or_default(),
                                 Err(_) => String::new(),
                             };
                             crate::tui::screens::partition_tree::build_tree_lines(&[ddl_str])
@@ -1316,7 +1301,7 @@ pub fn dispatch_command(
                     let columns = match client.execute(&desc_query).await {
                         Ok(res) => {
                             res.data.iter().enumerate().map(|(idx, r)| {
-                                let name = r.get(0).cloned().unwrap_or_default();
+                                let name = r.first().cloned().unwrap_or_default();
                                 let dtype = r.get(1).cloned().unwrap_or_default();
                                 let is_nullable = r.get(2).cloned().unwrap_or_default();
                                 let comment = r.get(3).cloned().unwrap_or_default();

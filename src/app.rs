@@ -129,13 +129,12 @@ pub struct ResultsState {
 
 impl ResultsState {
     pub fn selection_range(&self) -> Option<(usize, usize)> {
-        if let Some(anchor) = self.selection_anchor {
-            if anchor != self.query_cursor {
+        if let Some(anchor) = self.selection_anchor
+            && anchor != self.query_cursor {
                 let start = anchor.min(self.query_cursor);
                 let end = anchor.max(self.query_cursor);
                 return Some((start, end));
             }
-        }
         None
     }
 

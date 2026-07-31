@@ -168,15 +168,14 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
     let visible_lines = area.height.saturating_sub(2).max(1) as usize;
 
     let mut scroll_y: u16 = 0;
-    if is_editing {
-        if let Some(pos) = cursor_pos {
+    if is_editing
+        && let Some(pos) = cursor_pos {
             let cursor_index = 7 + pos;
             let line_offset = cursor_index / inner_w;
             if line_offset >= visible_lines {
                 scroll_y = (line_offset - visible_lines + 1) as u16;
             }
         }
-    }
 
     let mut line_spans = vec![Span::styled(" SQL > ", Style::default().fg(Color::Yellow))];
     line_spans.extend(spans);
@@ -187,8 +186,8 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
     .scroll((scroll_y, 0));
     frame.render_widget(p, area);
 
-    if is_editing {
-        if let Some(pos) = cursor_pos {
+    if is_editing
+        && let Some(pos) = cursor_pos {
             let cursor_index = 7 + pos;
             let line_offset = cursor_index / inner_w;
             let col_offset = cursor_index % inner_w;
@@ -200,7 +199,6 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
                 frame.set_cursor_position((cursor_x, cursor_y));
             }
         }
-    }
 }
 
 
@@ -231,7 +229,7 @@ fn ui(frame: &mut Frame, app: &App) {
                 let inner_w = main_chunks[0].width.saturating_sub(2).max(1) as usize;
                 let search_height = if search_active {
                     let total_chars = 3 + app.search_query.len();
-                    let lines = (total_chars + inner_w - 1) / inner_w;
+                    let lines = total_chars.div_ceil(inner_w);
                     (lines as u16 + 2).clamp(3, 8)
                 } else {
                     3
@@ -282,7 +280,7 @@ fn ui(frame: &mut Frame, app: &App) {
 
                 let search_height = if search_active {
                     let total_chars = 3 + app.search_query.len();
-                    let lines = (total_chars + inner_w - 1) / inner_w;
+                    let lines = total_chars.div_ceil(inner_w);
                     (lines as u16 + 2).clamp(3, 8)
                 } else {
                     3
@@ -300,7 +298,7 @@ fn ui(frame: &mut Frame, app: &App) {
                         Screen::Results(r) => r.query_buffer.len(),
                         _ => 0,
                     };
-                    let lines = (total_chars + inner_w - 1) / inner_w;
+                    let lines = total_chars.div_ceil(inner_w);
                     (lines as u16 + 2).clamp(3, 4)
                 } else {
                     3
