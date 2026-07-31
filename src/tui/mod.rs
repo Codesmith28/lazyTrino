@@ -13,19 +13,19 @@
 // limitations under the License.
 
 pub mod handler;
+pub mod theme;
 
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
-    Frame, Terminal,
 };
 use std::io::stdout;
 
@@ -53,12 +53,6 @@ fn spinner(app: &App) -> String {
 
 fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
     let is_editing = matches!(app.mode, Mode::Search);
-    let border_color = if is_editing {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
-
     let title = if is_editing {
         " Centralized Search [EDITING - Press Enter/Esc to finish] "
     } else {
@@ -69,15 +63,15 @@ fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
+        .border_style(theme::border_style(is_editing));
 
     let search_text = if app.search_query.is_empty() {
         Span::styled(
             "Type to filter catalogs, schemas, tables, and columns...",
-            Style::default().fg(Color::DarkGray),
+            theme::muted_style(),
         )
     } else {
-        Span::styled(&app.search_query, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+        Span::styled(&app.search_query, theme::bold_text_style())
     };
 
     let p = Paragraph::new(Line::from(vec![Span::raw(" / "), search_text]))
@@ -102,14 +96,6 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
     let is_editing = matches!(app.mode, Mode::QueryInput);
     let is_table_view = matches!(app.screen, Screen::Results(_));
 
-    let border_color = if is_editing {
-        Color::Yellow
-    } else if is_table_view {
-        Color::Cyan
-    } else {
-        Color::DarkGray
-    };
-
     let title = if is_editing {
         " Table Query Bar [EDITING - Press Enter to run, Esc to cancel] "
     } else if is_table_view {
@@ -122,17 +108,28 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
+        .border_style(theme::style(theme::query_bar_border_color(
+            is_editing,
+            is_table_view,
+        )));
 
     let (buf, cursor, sel_range) = match &app.screen {
         Screen::Actions(state) => {
             if let Some(ref res) = state.results {
-                (res.query_buffer.as_str(), res.query_cursor, res.selection_range())
+                (
+                    res.query_buffer.as_str(),
+                    res.query_cursor,
+                    res.selection_range(),
+                )
             } else {
                 (state.query_buffer.as_str(), state.query_cursor, None)
             }
         }
-        Screen::Results(state) => (state.query_buffer.as_str(), state.query_cursor, state.selection_range()),
+        Screen::Results(state) => (
+            state.query_buffer.as_str(),
+            state.query_cursor,
+            state.selection_range(),
+        ),
         _ => ("", 0, None),
     };
 
@@ -140,7 +137,7 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
         (
             vec![Span::styled(
                 "Write query (e.g. SELECT * FROM table)...",
-                Style::default().fg(Color::DarkGray),
+                theme::muted_style(),
             )],
             if is_editing { Some(0) } else { None },
         )
@@ -153,29 +150,20 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
             let after = &buf[sel_end..];
             (
                 vec![
-                    Span::styled(before, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(selected, Style::default().bg(Color::LightYellow).fg(Color::Black).add_modifier(Modifier::BOLD)),
-                    Span::styled(after, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled(before, theme::bold_text_style()),
+                    Span::styled(selected, theme::query_selection_style()),
+                    Span::styled(after, theme::bold_text_style()),
                 ],
                 Some(cursor),
             )
         } else {
             (
-                vec![Span::styled(
-                    buf,
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-                )],
+                vec![Span::styled(buf, theme::bold_text_style())],
                 Some(cursor),
             )
         }
     } else {
-        (
-            vec![Span::styled(
-                buf,
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            )],
-            None,
-        )
+        (vec![Span::styled(buf, theme::bold_text_style())], None)
     };
 
     let inner_w = area.width.saturating_sub(2).max(1) as usize;
@@ -192,13 +180,13 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    let mut line_spans = vec![Span::styled(" SQL > ", Style::default().fg(Color::Yellow))];
+    let mut line_spans = vec![Span::styled(" SQL > ", theme::warning_style())];
     line_spans.extend(spans);
 
     let p = Paragraph::new(Line::from(line_spans))
-    .block(block)
-    .wrap(ratatui::widgets::Wrap { trim: false })
-    .scroll((scroll_y, 0));
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .scroll((scroll_y, 0));
     frame.render_widget(p, area);
 
     if is_editing {
@@ -217,7 +205,6 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-
 fn ui(frame: &mut Frame, app: &App) {
     match app.screen {
         Screen::Help => {
@@ -226,15 +213,16 @@ fn ui(frame: &mut Frame, app: &App) {
         _ => {
             let is_in_table = matches!(app.screen, Screen::Actions(_) | Screen::Results(_));
 
-            let outer_chunks = Layout::vertical([
-                Constraint::Min(0),
-                Constraint::Length(7),
-            ])
-            .split(frame.area());
+            let outer_chunks =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).split(frame.area());
 
             if !is_in_table {
                 // Phase 1: Default All Tables View (Connect, Catalog, Schema, Table) -> Default 60% list ratio
-                let list_pct = if app.main_panel_pct <= 30 { 60 } else { app.main_panel_pct };
+                let list_pct = if app.main_panel_pct <= 30 {
+                    60
+                } else {
+                    app.main_panel_pct
+                };
                 let main_chunks = Layout::horizontal([
                     Constraint::Percentage(list_pct),
                     Constraint::Percentage(100 - list_pct),
@@ -251,11 +239,9 @@ fn ui(frame: &mut Frame, app: &App) {
                     3
                 };
 
-                let left_chunks = Layout::vertical([
-                    Constraint::Length(search_height),
-                    Constraint::Min(0),
-                ])
-                .split(main_chunks[0]);
+                let left_chunks =
+                    Layout::vertical([Constraint::Length(search_height), Constraint::Min(0)])
+                        .split(main_chunks[0]);
 
                 render_search_bar(frame, left_chunks[0], app);
                 screens::help::render(frame, main_chunks[1]);
@@ -268,19 +254,41 @@ fn ui(frame: &mut Frame, app: &App) {
                         screens::connect::render(frame, main, state, spinner(app));
                     }
                     Screen::Catalog(state) => {
-                        screens::catalog::render(frame, main, state, &app.search_query, main_is_active);
+                        screens::catalog::render(
+                            frame,
+                            main,
+                            state,
+                            &app.search_query,
+                            main_is_active,
+                        );
                     }
                     Screen::Schema(state) => {
-                        screens::schema::render(frame, main, state, &app.search_query, main_is_active);
+                        screens::schema::render(
+                            frame,
+                            main,
+                            state,
+                            &app.search_query,
+                            main_is_active,
+                        );
                     }
                     Screen::Table(state) => {
-                        screens::table::render(frame, main, state, &app.search_query, main_is_active);
+                        screens::table::render(
+                            frame,
+                            main,
+                            state,
+                            &app.search_query,
+                            main_is_active,
+                        );
                     }
                     _ => unreachable!(),
                 }
             } else {
                 // Phase 2: Inside Table View -> Default 15% Menu : 85% Preview (Resizable)
-                let menu_pct = if app.main_panel_pct > 30 { 15 } else { app.main_panel_pct.clamp(8, 30) };
+                let menu_pct = if app.main_panel_pct > 30 {
+                    15
+                } else {
+                    app.main_panel_pct.clamp(8, 30)
+                };
                 let main_chunks = Layout::horizontal([
                     Constraint::Percentage(menu_pct),
                     Constraint::Percentage(100 - menu_pct),
@@ -310,7 +318,11 @@ fn ui(frame: &mut Frame, app: &App) {
 
                 let query_height = if query_active {
                     let total_chars = 7 + match &app.screen {
-                        Screen::Actions(a) => a.results.as_ref().map(|r| r.query_buffer.len()).unwrap_or_else(|| a.query_buffer.len()),
+                        Screen::Actions(a) => a
+                            .results
+                            .as_ref()
+                            .map(|r| r.query_buffer.len())
+                            .unwrap_or_else(|| a.query_buffer.len()),
                         Screen::Results(r) => r.query_buffer.len(),
                         _ => 0,
                     };
@@ -371,19 +383,24 @@ fn ui(frame: &mut Frame, app: &App) {
                     match action {
                         crate::app::Action::Partitions => {
                             if app.loading && selected_idx == 7 {
-                                let border_color = if preview_is_active { Color::Yellow } else { Color::DarkGray };
                                 let title = format!(" Preview — {table_name} (Partitions) ");
                                 let block = Block::default()
                                     .title(title)
                                     .borders(Borders::ALL)
                                     .border_type(BorderType::Rounded)
-                                    .border_style(Style::default().fg(border_color));
+                                    .border_style(theme::border_style(preview_is_active));
                                 let inner = block.inner(preview_pane_area);
                                 frame.render_widget(block, preview_pane_area);
                                 let spin = spinner(app);
                                 let spin_text = Paragraph::new(Line::from(vec![
-                                    Span::styled(format!(" [{spin}] "), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                                    Span::styled("FETCHING PARTITION METADATA...", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                                    Span::styled(
+                                        format!(" [{spin}] "),
+                                        theme::warning_bold_style(),
+                                    ),
+                                    Span::styled(
+                                        "FETCHING PARTITION METADATA...",
+                                        theme::info_bold_style(),
+                                    ),
                                 ]))
                                 .alignment(Alignment::Center);
                                 frame.render_widget(spin_text, inner);
@@ -397,24 +414,35 @@ fn ui(frame: &mut Frame, app: &App) {
                                     preview_is_active,
                                 );
                             } else {
-                                render_placeholder_preview(frame, preview_pane_area, table_name, selected_idx, preview_is_active);
+                                render_placeholder_preview(
+                                    frame,
+                                    preview_pane_area,
+                                    table_name,
+                                    selected_idx,
+                                    preview_is_active,
+                                );
                             }
                         }
                         crate::app::Action::Schema => {
                             if app.loading && selected_idx == 8 {
-                                let border_color = if preview_is_active { Color::Yellow } else { Color::DarkGray };
                                 let title = format!(" Preview — {table_name} (Schema) ");
                                 let block = Block::default()
                                     .title(title)
                                     .borders(Borders::ALL)
                                     .border_type(BorderType::Rounded)
-                                    .border_style(Style::default().fg(border_color));
+                                    .border_style(theme::border_style(preview_is_active));
                                 let inner = block.inner(preview_pane_area);
                                 frame.render_widget(block, preview_pane_area);
                                 let spin = spinner(app);
                                 let spin_text = Paragraph::new(Line::from(vec![
-                                    Span::styled(format!(" [{spin}] "), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                                    Span::styled("FETCHING SCHEMA METADATA...", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                                    Span::styled(
+                                        format!(" [{spin}] "),
+                                        theme::warning_bold_style(),
+                                    ),
+                                    Span::styled(
+                                        "FETCHING SCHEMA METADATA...",
+                                        theme::info_bold_style(),
+                                    ),
                                 ]))
                                 .alignment(Alignment::Center);
                                 frame.render_widget(spin_text, inner);
@@ -428,41 +456,72 @@ fn ui(frame: &mut Frame, app: &App) {
                                     preview_is_active,
                                 );
                             } else {
-                                render_placeholder_preview(frame, preview_pane_area, table_name, selected_idx, preview_is_active);
+                                render_placeholder_preview(
+                                    frame,
+                                    preview_pane_area,
+                                    table_name,
+                                    selected_idx,
+                                    preview_is_active,
+                                );
                             }
                         }
-                        _ => {
-                            match &app.screen {
-                                Screen::Actions(state) => {
-                                    if let Some(ref res_state) = state.results {
-                                        screens::results::render(frame, preview_pane_area, res_state, spinner(app), preview_is_active);
-                                    } else if app.loading {
-                                        let border_color = if preview_is_active { Color::Yellow } else { Color::DarkGray };
-                                        let title = format!(" Preview — {} ({}) ", table_name, crate::app::ACTIONS[selected_idx].1);
-                                        let block = Block::default()
-                                            .title(title)
-                                            .borders(Borders::ALL)
-                                            .border_type(BorderType::Rounded)
-                                            .border_style(Style::default().fg(border_color));
-                                        let inner = block.inner(preview_pane_area);
-                                        frame.render_widget(block, preview_pane_area);
-                                        let spin = spinner(app);
-                                        let spin_text = Paragraph::new(Line::from(vec![
-                                            Span::styled(format!(" [{spin}] "), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                                            Span::styled("EXECUTING TRINO QUERY...", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                                        ]))
-                                        .alignment(Alignment::Center);
-                                        frame.render_widget(spin_text, inner);
-                                    } else {
-                                        render_placeholder_preview(frame, preview_pane_area, table_name, selected_idx, preview_is_active);
-                                    }
+                        _ => match &app.screen {
+                            Screen::Actions(state) => {
+                                if let Some(ref res_state) = state.results {
+                                    screens::results::render(
+                                        frame,
+                                        preview_pane_area,
+                                        res_state,
+                                        spinner(app),
+                                        preview_is_active,
+                                    );
+                                } else if app.loading {
+                                    let title = format!(
+                                        " Preview — {} ({}) ",
+                                        table_name,
+                                        crate::app::ACTIONS[selected_idx].1
+                                    );
+                                    let block = Block::default()
+                                        .title(title)
+                                        .borders(Borders::ALL)
+                                        .border_type(BorderType::Rounded)
+                                        .border_style(theme::border_style(preview_is_active));
+                                    let inner = block.inner(preview_pane_area);
+                                    frame.render_widget(block, preview_pane_area);
+                                    let spin = spinner(app);
+                                    let spin_text = Paragraph::new(Line::from(vec![
+                                        Span::styled(
+                                            format!(" [{spin}] "),
+                                            theme::warning_bold_style(),
+                                        ),
+                                        Span::styled(
+                                            "EXECUTING TRINO QUERY...",
+                                            theme::info_bold_style(),
+                                        ),
+                                    ]))
+                                    .alignment(Alignment::Center);
+                                    frame.render_widget(spin_text, inner);
+                                } else {
+                                    render_placeholder_preview(
+                                        frame,
+                                        preview_pane_area,
+                                        table_name,
+                                        selected_idx,
+                                        preview_is_active,
+                                    );
                                 }
-                                Screen::Results(state) => {
-                                    screens::results::render(frame, preview_pane_area, state, spinner(app), preview_is_active);
-                                }
-                                _ => {}
                             }
-                        }
+                            Screen::Results(state) => {
+                                screens::results::render(
+                                    frame,
+                                    preview_pane_area,
+                                    state,
+                                    spinner(app),
+                                    preview_is_active,
+                                );
+                            }
+                            _ => {}
+                        },
                     }
                 }
             }
@@ -479,7 +538,6 @@ fn render_placeholder_preview(
     selected_idx: usize,
     preview_is_active: bool,
 ) {
-    let border_color = if preview_is_active { Color::Yellow } else { Color::DarkGray };
     let action_name = if selected_idx < crate::app::ACTIONS.len() {
         crate::app::ACTIONS[selected_idx].1
     } else {
@@ -490,21 +548,30 @@ fn render_placeholder_preview(
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
+        .border_style(theme::border_style(preview_is_active));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let info_lines = vec![
-        Line::from(Span::styled(" Table Preview Area", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-        Line::from(""),
         Line::from(Span::styled(
-            format!(" Active Selection: [{}] {action_name}", crate::app::ACTIONS[selected_idx].0),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            " Table Preview Area",
+            theme::info_bold_style(),
         )),
         Line::from(""),
-        Line::from(Span::styled(" Press Enter (or hit hotkey) to load and display preview output.", Style::default().fg(Color::White))),
+        Line::from(Span::styled(
+            format!(
+                " Active Selection: [{}] {action_name}",
+                crate::app::ACTIONS[selected_idx].0
+            ),
+            theme::warning_bold_style(),
+        )),
         Line::from(""),
-        Line::from(Span::styled(" Menu Shortcuts:", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            " Press Enter (or hit hotkey) to load and display preview output.",
+            theme::text_style(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(" Menu Shortcuts:", theme::muted_style())),
         Line::from("   [v] Table View Mode       [d] Describe Table       [c] Table DDL"),
         Line::from("   [i] Info Schema           [s] Show Stats           [n] Row Count"),
         Line::from("   [p] Sample (20 rows)      [P] Partition Tree       [S] Vertical Schema"),
@@ -524,7 +591,11 @@ pub async fn run(app: &mut App) -> Result<()> {
     let res = run_loop(&mut terminal, app).await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     res
@@ -540,7 +611,15 @@ async fn run_loop(
         let url = app.config.url.clone();
         let user = app.config.user.clone();
         let password = app.config.password.clone();
-        handler::dispatch_command(app, handler::Command::Connect { url, user, password }, &tx);
+        handler::dispatch_command(
+            app,
+            handler::Command::Connect {
+                url,
+                user,
+                password,
+            },
+            &tx,
+        );
     }
 
     loop {
@@ -579,4 +658,3 @@ async fn run_loop(
         }
     }
 }
-
