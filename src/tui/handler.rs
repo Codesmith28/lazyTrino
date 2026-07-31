@@ -346,6 +346,8 @@ fn go_back(app: &mut App) {
 
 use crossterm::event::MouseButton;
 
+/// macOS terminals can emit Option+hjkl/g as special glyphs when Option is not configured as Meta.
+/// Remap those characters back to plain vim-style motion keys so Alt/Option navigation still works.
 fn normalize_key_code(code: KeyCode) -> KeyCode {
     match code {
         KeyCode::Char('∆') => KeyCode::Char('j'),
@@ -1762,4 +1764,3 @@ mod tests {
         }
     }
 }
-

@@ -104,9 +104,10 @@ Launch `lazyTrino` using the generated binary or via `make run`:
 | `g` / `G` | Jump to top / bottom of list |
 | `<number> + Enter` | Jump directly to item number |
 | `/` | Open Centralized Search bar |
-| `Tab` | Toggle focus between Menu panel and Main Preview pane |
+| `Shift+H` / `Shift+←` | Focus the Menu Pane from the Main Preview pane (Table Actions / Results views) |
+| `Shift+L` / `Shift+→` / `Tab` | Toggle focus between the Menu Pane and Main Preview pane (Table Actions / Results views) |
 | `?` | Toggle Help overlay |
-| `q` | Quit application (when not in Table View) |
+| `Ctrl+C` | Quit application |
 
 ### Table Actions Menu
 
@@ -132,18 +133,17 @@ When a table is selected, press the corresponding action key or select it from t
 | `h` / `l` or `←` / `→` | Scroll table horizontally across columns |
 | `g` / `G` | Jump to top / bottom of current result set |
 | `q` or `:` | Focus Interactive SQL Query Bar to write custom queries |
-| `Esc` / `h` | Exit table view and return to table actions menu |
+| `Esc` | Focus the Menu Pane, or return to the table actions menu if the Menu Pane is already focused |
 
 ### SQL Query Bar (`q` / `:` in Table View)
 
 | Key | Action |
 | --- | --- |
 | `Enter` | Validate and execute custom SQL query |
-| `Esc` | Cancel query editing and return focus to results viewer |
+| `Esc` | Cancel query editing and return to normal navigation on the current table screen |
 | `←` / `→` | Move text cursor left / right |
 | `Home` / `End` | Jump cursor to start / end of query string |
 | `Shift + ← / →` | Select text within query buffer |
-| `Ctrl+C` / `Cmd+C` | Copy selected query text to system clipboard |
 
 ### Mouse & Resizer Controls
 

@@ -20,7 +20,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         Line::from(Span::styled(" Active Pane Concept & Layout", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
         Line::from("  All Tables View               Left: Catalogs/Schemas/Tables | Right: Help Pane"),
         Line::from("  Inside Table View             Left: Menu Pane (10%) | Right: Search, Query & Main Preview (90%)"),
-        Line::from("  Shift+H/L / Tab / Click        Switch focus between Menu Pane (left) and Preview Pane (right)"),
+        Line::from("  Shift+H/L / Shift+←/→ / Tab / Click  Switch focus between Menu Pane (left) and Preview Pane (right)"),
         Line::from("  Option Selection              Selecting a menu option shifts focus to Preview Pane while option stays highlighted"),
         Line::from(""),
         Line::from(Span::styled(" Navigation & Scrolling", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
