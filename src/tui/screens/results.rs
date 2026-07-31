@@ -158,7 +158,7 @@ pub fn render(
 
     if let Some(err) = &state.error {
         let err = Paragraph::new(err.as_str())
-            .style(Style::default().fg(Color::Red))
+            .style(theme::error_style())
             .wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(err, inner);
         return;
