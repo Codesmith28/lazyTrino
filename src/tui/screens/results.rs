@@ -124,7 +124,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
             Line::from(Span::styled("Note: Queries in this view can only target data inside the current table.", Style::default().fg(Color::DarkGray))),
             Line::from(Span::styled("Enter full SQL queries operating on this table (e.g. 'SELECT * FROM table WHERE col = val').", Style::default().fg(Color::DarkGray))),
         ];
-        let p = Paragraph::new(err_lines);
+        let p = Paragraph::new(err_lines).wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(p, inner);
         return;
     }
@@ -132,14 +132,16 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
     if state.columns.is_empty() && state.rows.is_empty() {
         let empty = Paragraph::new("No results returned")
             .style(Style::default().fg(Color::Gray))
-            .alignment(ratatui::layout::Alignment::Center);
+            .alignment(ratatui::layout::Alignment::Center)
+            .wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(empty, inner);
         return;
     }
 
     if state.columns.is_empty() && !state.rows.is_empty() && state.rows[0].len() == 1 {
         let err = Paragraph::new(state.rows[0][0].as_str())
-            .style(Style::default().fg(Color::Red));
+            .style(Style::default().fg(Color::Red))
+            .wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(err, inner);
         return;
     }

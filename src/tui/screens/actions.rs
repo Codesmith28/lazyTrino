@@ -11,7 +11,7 @@ use crate::app::ACTIONS;
 pub fn render(frame: &mut Frame, area: Rect, _catalog: &str, _schema: &str, table: &str, selected: usize, is_active: bool) {
     let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
     let block = Block::default()
-        .title(format!(" Actions — {table} "))
+        .title(if area.width < 25 { " Menu ".to_string() } else { format!(" Menu — {table} ") })
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color));
@@ -22,9 +22,16 @@ pub fn render(frame: &mut Frame, area: Rect, _catalog: &str, _schema: &str, tabl
         .iter()
         .enumerate()
         .map(|(i, (key, label, _))| {
-            let line = if i == selected {
+            let is_selected = i == selected;
+            let prefix = if is_selected { "▸ " } else { "  " };
+            let text = if inner.width < 22 {
+                format!("{prefix}[{key}] {label}")
+            } else {
+                format!("{prefix}[{key}] {label}")
+            };
+            let line = if is_selected {
                 Line::styled(
-                    format!(" {key}  {label}"),
+                    text,
                     Style::default()
                         .fg(Color::Black)
                         .bg(Color::Cyan)
@@ -32,7 +39,7 @@ pub fn render(frame: &mut Frame, area: Rect, _catalog: &str, _schema: &str, tabl
                 )
             } else {
                 Line::styled(
-                    format!(" {key}  {label}"),
+                    text,
                     Style::default().fg(Color::White),
                 )
             };
