@@ -8,12 +8,13 @@ use ratatui::{
 
 use crate::app::TableState;
 
-pub fn render(frame: &mut Frame, area: Rect, state: &TableState, search: &str) {
+pub fn render(frame: &mut Frame, area: Rect, state: &TableState, search: &str, is_active: bool) {
+    let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
     let block = Block::default()
         .title(format!(" Tables — {}.{} ", state.catalog, state.schema))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(border_color));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

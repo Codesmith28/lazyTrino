@@ -42,8 +42,12 @@ pub fn count(catalog: &str, schema: &str, table: &str) -> String {
     format!("SELECT COUNT(*) AS total_records FROM {}.{}.{}", q(catalog), q(schema), q(table))
 }
 
-pub fn preview(catalog: &str, schema: &str, table: &str) -> String {
-    format!("SELECT * FROM {}.{}.{} LIMIT 10", q(catalog), q(schema), q(table))
+pub fn sample(catalog: &str, schema: &str, table: &str) -> String {
+    format!("SELECT * FROM {}.{}.{} LIMIT 20", q(catalog), q(schema), q(table))
+}
+
+pub fn page_query(catalog: &str, schema: &str, table: &str, offset: usize, limit: usize) -> String {
+    format!("SELECT * FROM {}.{}.{} OFFSET {offset} LIMIT {limit}", q(catalog), q(schema), q(table))
 }
 
 pub fn partitions(catalog: &str, schema: &str, table: &str) -> String {
