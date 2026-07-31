@@ -22,7 +22,6 @@ pub struct QueryLogEntry {
 
 #[derive(Clone, Debug)]
 pub struct VerticalColumn {
-    #[allow(dead_code)]
     pub index: usize,
     pub name: String,
     pub data_type: String,
@@ -34,10 +33,6 @@ pub struct VerticalColumn {
 pub enum ActivePanel {
     MenuPane,
     MainViewer,
-    #[allow(dead_code)]
-    PartitionTree,
-    #[allow(dead_code)]
-    SchemaInspector,
 }
 
 #[derive(Clone)]
@@ -68,8 +63,6 @@ impl Default for ConnectState {
 pub struct CatalogState {
     pub items: Vec<String>,
     pub selected: usize,
-    #[allow(dead_code)]
-    pub scroll: usize,
 }
 
 #[derive(Clone)]
@@ -77,8 +70,6 @@ pub struct SchemaState {
     pub catalog: String,
     pub items: Vec<String>,
     pub selected: usize,
-    #[allow(dead_code)]
-    pub scroll: usize,
 }
 
 #[derive(Clone)]
@@ -87,8 +78,6 @@ pub struct TableState {
     pub schema: String,
     pub items: Vec<String>,
     pub selected: usize,
-    #[allow(dead_code)]
-    pub scroll: usize,
 }
 
 #[derive(Clone)]
@@ -104,8 +93,6 @@ pub struct ActionState {
 
 #[derive(Clone)]
 pub struct ResultsState {
-    #[allow(dead_code)]
-    pub query: String,
     pub query_buffer: String,
     pub query_cursor: usize,
     pub columns: Vec<String>,
@@ -113,7 +100,6 @@ pub struct ResultsState {
     pub scroll_v: usize,
     pub scroll_h: usize,
     pub loading: bool,
-    #[allow(dead_code)]
     pub error: Option<String>,
     pub is_paginated: bool,
     pub catalog: String,
@@ -138,7 +124,6 @@ impl ResultsState {
         None
     }
 
-    #[allow(dead_code)]
     pub fn delete_selection(&mut self) -> bool {
         if let Some((start, end)) = self.selection_range() {
             let start = start.min(self.query_buffer.len());
@@ -153,12 +138,10 @@ impl ResultsState {
         false
     }
 
-    #[allow(dead_code)]
     pub fn clear_selection(&mut self) {
         self.selection_anchor = None;
     }
 
-    #[allow(dead_code)]
     pub fn select_all(&mut self) {
         self.selection_anchor = Some(0);
         self.query_cursor = self.query_buffer.len();
@@ -172,18 +155,11 @@ pub enum Screen {
     Schema(SchemaState),
     Table(TableState),
     Actions(ActionState),
-    #[allow(dead_code)]
-    Results(ResultsState),
     Help,
 }
 
 pub enum Mode {
     Normal,
-    #[allow(dead_code)]
-    Leader {
-        #[allow(dead_code)]
-        keys: String,
-    },
     Search,
     QueryInput,
 }
@@ -250,15 +226,10 @@ pub struct App {
     pub partition_scroll: usize,
     pub vertical_schema_cols: Vec<VerticalColumn>,
     pub schema_scroll: usize,
-    #[allow(dead_code)]
-    pub active_table_name: Option<String>,
     pub auto_connect: bool,
     pub main_panel_pct: u16,
     pub control_panel_split_pct: u16,
     pub is_dragging_resizer: bool,
-    #[allow(dead_code)]
-    pub is_dragging_v_resizer: bool,
-    #[allow(dead_code)]
     pub is_dragging_query_select: bool,
     pub query_inspector_scroll: usize,
     pub mouse_selection_anchor: Option<(u16, u16)>,
@@ -296,12 +267,10 @@ impl App {
             partition_scroll: 0,
             vertical_schema_cols: Vec::new(),
             schema_scroll: 0,
-            active_table_name: None,
             auto_connect,
             main_panel_pct: 60,
             control_panel_split_pct: 40,
             is_dragging_resizer: false,
-            is_dragging_v_resizer: false,
             is_dragging_query_select: false,
             query_inspector_scroll: 0,
             mouse_selection_anchor: None,
@@ -338,12 +307,4 @@ impl App {
             entry.error_msg = Some(err);
         }
     }
-
-    pub fn action_for(&self, key: char) -> Option<&'static Action> {
-        ACTIONS
-            .iter()
-            .find(|(k, _, _)| *k == key)
-            .map(|(_, _, a)| a)
-    }
 }
-

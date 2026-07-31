@@ -148,12 +148,21 @@ When a table is selected, press the corresponding action key or select it from t
 | `←` / `→` | Move text cursor left / right |
 | `Home` / `End` | Jump cursor to start / end of query string |
 | `Shift + ← / →` | Select text within query buffer |
+| `Ctrl+A` / `Cmd+A` | Select the full query buffer |
+| `Ctrl+C` / `Cmd+C` | Copy selected query text to system clipboard (while the Query Bar is focused) |
+| `Ctrl+V` / `Cmd+V` | Paste clipboard text at the cursor / over the selection |
+| `Backspace` / `Delete` | Remove the current selection (or delete adjacent text) |
+| `Alt + ← / →` | Jump by word while editing |
+
+> **Note:** `Ctrl+C` is context-sensitive — it copies the selected query text while the Query Bar
+> is focused, and quits lazyTrino everywhere else (see the Navigation table above).
 
 ### Mouse & Resizer Controls
 
 | Input | Action |
 | --- | --- |
 | Left Click | Select catalog, schema, table, or action menu item |
+| Click / Drag Query Bar | Place the query cursor and select SQL text while editing |
 | Mouse Wheel Up / Down | Scroll lists, partition trees, and query result rows |
 | Mouse Wheel Left / Right | Scroll query result tables horizontally |
 | Click & Drag Vertical Border | Dynamically resize split ratio between Menu panel and Main Preview pane |

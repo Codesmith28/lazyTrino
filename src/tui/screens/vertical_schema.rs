@@ -50,9 +50,8 @@ pub fn render(
     let rows: Vec<Row> = columns
         .iter()
         .skip(scroll)
-        .enumerate()
-        .map(|(idx, col)| {
-            let num = format!("{:>2}", scroll + idx + 1);
+        .map(|col| {
+            let num = format!("{:>2}", col.index);
             let name_lines = crate::tui::screens::results::wrap_text(&col.name, col_w1);
             let dtype_lines = crate::tui::screens::results::wrap_text(&col.data_type, col_w2);
             let key_str = if col.key_meta.is_empty() {
