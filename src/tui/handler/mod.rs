@@ -19,6 +19,7 @@ use crate::app::*;
 use crate::trino::client::TrinoClient;
 
 mod commands;
+mod export;
 mod mouse;
 mod navigation;
 mod query;

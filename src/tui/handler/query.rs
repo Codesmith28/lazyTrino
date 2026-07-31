@@ -139,7 +139,7 @@ fn next_word_pos(s: &str, cursor: usize) -> usize {
     i
 }
 
-pub(super) fn copy_to_clipboard(text: &str) {
+pub(crate) fn copy_to_clipboard(text: &str) {
     if let Ok(mut board) = arboard::Clipboard::new() {
         let _ = board.set_text(text);
     }
