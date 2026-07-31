@@ -4,7 +4,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use super::queries;
 use super::types::{format_value, QueryResults, TrinoResponse};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TrinoClient {
     http: reqwest::Client,
     server_url: String,

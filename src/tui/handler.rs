@@ -538,6 +538,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
 
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
+            app.mouse_selection_anchor = Some((mouse.column, mouse.row));
+            app.mouse_selection_current = Some((mouse.column, mouse.row));
+            app.is_selecting_text = true;
+
             if mouse.row < bottom_y && (mouse.column as i32 - border_x as i32).abs() <= 1 {
                 app.is_dragging_resizer = true;
                 app.is_dragging_v_resizer = false;
@@ -607,6 +611,9 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
+            if app.is_selecting_text {
+                app.mouse_selection_current = Some((mouse.column, mouse.row));
+            }
             if app.is_dragging_resizer {
                 let pct = ((mouse.column as u32 * 100) / term_width as u32) as u16;
                 app.main_panel_pct = pct.clamp(20, 80);
@@ -641,8 +648,22 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             if app.is_dragging_query_select {
                 app.is_dragging_query_select = false;
                 if let Screen::Results(ref mut state) = app.screen {
-                    if state.selection_anchor == Some(state.query_cursor) {
+                    if let Some((start, end)) = state.selection_range() {
+                        let sel_text = state.query_buffer[start..end].to_string();
+                        copy_to_clipboard(&sel_text);
+                        app.copied_toast = Some((sel_text.chars().take(30).collect(), std::time::Instant::now()));
+                    } else {
                         state.clear_selection();
+                    }
+                }
+            }
+            if app.is_selecting_text {
+                app.is_selecting_text = false;
+                if let (Some(anchor), Some(current)) = (app.mouse_selection_anchor, app.mouse_selection_current) {
+                    let text = extract_selected_text(app, anchor, current);
+                    if !text.is_empty() {
+                        copy_to_clipboard(&text);
+                        app.copied_toast = Some((text.chars().take(30).collect(), std::time::Instant::now()));
                     }
                 }
             }
@@ -1427,166 +1448,302 @@ fn results_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
     None
 }
 
-pub async fn execute_command(app: &mut App, cmd: Command) {
+#[derive(Debug)]
+pub enum AsyncResult {
+    Connect {
+        log_id: usize,
+        url: String,
+        user: String,
+        password: String,
+        client: TrinoClient,
+        result: Result<Vec<String>, String>,
+    },
+    FetchSchemas {
+        log_id: usize,
+        catalog: String,
+        result: Result<Vec<String>, String>,
+    },
+    FetchTables {
+        log_id: usize,
+        catalog: String,
+        schema: String,
+        result: Result<Vec<String>, String>,
+    },
+    FetchTableMetadata {
+        partitions_log_id: usize,
+        cols_log_id: usize,
+        partition_lines: Vec<String>,
+        columns: Vec<VerticalColumn>,
+    },
+    ExecuteQuery {
+        log_id: usize,
+        query: String,
+        query_buffer: String,
+        query_cursor: usize,
+        catalog: String,
+        schema: String,
+        table: String,
+        is_paginated: bool,
+        result: Result<crate::trino::types::QueryResults, String>,
+    },
+    FetchNextPage {
+        log_id: usize,
+        offset: usize,
+        limit: usize,
+        result: Result<crate::trino::types::QueryResults, String>,
+    },
+}
+
+pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -> String {
+    let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
+    if term_width == 0 || term_height == 0 {
+        return String::new();
+    }
+
+    let bottom_y = term_height.saturating_sub(7);
+    let border_x = ((term_width as u32 * app.main_panel_pct as u32) / 100) as u16;
+    let height_right = bottom_y;
+    let border_y = ((height_right as u32 * app.control_panel_split_pct as u32) / 100) as u16;
+
+    let start_row = anchor.1.min(current.1);
+    let end_row = anchor.1.max(current.1);
+
+    if anchor.1 >= bottom_y || current.1 >= bottom_y {
+        let mut lines = Vec::new();
+        let inner_y = bottom_y + 1;
+        let rev_logs: Vec<&QueryLogEntry> = app.query_logs.iter().rev().collect();
+        for r in start_row..=end_row {
+            if r >= inner_y && r < term_height.saturating_sub(1) {
+                let idx = (r - inner_y) as usize + app.query_inspector_scroll;
+                if idx < rev_logs.len() {
+                    lines.push(rev_logs[idx].sql.clone());
+                }
+            }
+        }
+        return lines.join("\n");
+    }
+
+    if anchor.0 < border_x && current.0 < border_x {
+        match &app.screen {
+            Screen::Results(state) => {
+                let mut lines = Vec::new();
+                let inner_y_start = 4;
+                for r in start_row..=end_row {
+                    if r >= inner_y_start {
+                        let row_idx = (r - inner_y_start) as usize + state.scroll_v;
+                        if row_idx < state.rows.len() {
+                            lines.push(state.rows[row_idx].join("\t"));
+                        }
+                    }
+                }
+                return lines.join("\n");
+            }
+            Screen::Catalog(s) => {
+                let mut lines = Vec::new();
+                let inner_y = 4;
+                for r in start_row..=end_row {
+                    if r >= inner_y {
+                        let idx = (r - inner_y) as usize;
+                        if idx < s.items.len() {
+                            lines.push(s.items[idx].clone());
+                        }
+                    }
+                }
+                return lines.join("\n");
+            }
+            Screen::Schema(s) => {
+                let mut lines = Vec::new();
+                let inner_y = 4;
+                for r in start_row..=end_row {
+                    if r >= inner_y {
+                        let idx = (r - inner_y) as usize;
+                        if idx < s.items.len() {
+                            lines.push(s.items[idx].clone());
+                        }
+                    }
+                }
+                return lines.join("\n");
+            }
+            Screen::Table(s) => {
+                let mut lines = Vec::new();
+                let inner_y = 4;
+                for r in start_row..=end_row {
+                    if r >= inner_y {
+                        let idx = (r - inner_y) as usize;
+                        if idx < s.items.len() {
+                            lines.push(s.items[idx].clone());
+                        }
+                    }
+                }
+                return lines.join("\n");
+            }
+            Screen::Actions(_) => {
+                let mut lines = Vec::new();
+                let inner_y = 4;
+                for r in start_row..=end_row {
+                    if r >= inner_y {
+                        let idx = (r - inner_y) as usize;
+                        if idx < ACTIONS.len() {
+                            lines.push(ACTIONS[idx].1.to_string());
+                        }
+                    }
+                }
+                return lines.join("\n");
+            }
+            _ => {}
+        }
+    }
+
+    if anchor.0 >= border_x && current.0 >= border_x {
+        if start_row < border_y {
+            let mut lines = Vec::new();
+            let inner_y = 1;
+            for r in start_row..=end_row {
+                if r >= inner_y {
+                    let idx = (r - inner_y) as usize + app.partition_scroll;
+                    if idx < app.partition_tree_lines.len() {
+                        lines.push(app.partition_tree_lines[idx].clone());
+                    }
+                }
+            }
+            return lines.join("\n");
+        } else {
+            let mut lines = Vec::new();
+            let inner_y = border_y + 1;
+            for r in start_row..=end_row {
+                if r >= inner_y {
+                    let idx = (r - inner_y) as usize + app.schema_scroll;
+                    if idx < app.vertical_schema_cols.len() {
+                        let col = &app.vertical_schema_cols[idx];
+                        lines.push(format!("{} {}", col.name, col.data_type));
+                    }
+                }
+            }
+            return lines.join("\n");
+        }
+    }
+
+    String::new()
+}
+
+pub fn dispatch_command(
+    app: &mut App,
+    cmd: Command,
+    tx: &tokio::sync::mpsc::UnboundedSender<AsyncResult>,
+) {
     match cmd {
         Command::Connect { url, user, password } => {
             let sql = queries::show_catalogs();
-            let log_id = app.add_query_log(sql.clone());
-            let client = TrinoClient::new(&url, &user);
+            let log_id = app.add_query_log(sql);
             app.loading = true;
-            info!("Fetching catalogs...");
-            match client.fetch_catalogs().await {
-                Ok(catalogs) => {
-                    info!(count = catalogs.len(), "Catalogs fetched");
-                    app.complete_query_log_success(log_id, 15, catalogs.len());
-                    app.config.url = url;
-                    app.config.user = user;
-                    app.config.password = password;
-                    app.trino_client = Some(client);
-                    app.catalogs = catalogs.iter().map(|c| c.trim().to_string()).collect();
-                    app.screen = Screen::Catalog(CatalogState {
-                        items: app.catalogs.clone(),
-                        selected: 0,
-                        scroll: 0,
-                    });
-                }
-                Err(e) => {
-                    error!(error = %e, "Failed to connect");
-                    app.complete_query_log_error(log_id, e.to_string());
-                    if let Screen::Connect(s) = &mut app.screen {
-                        s.loading = false;
-                        s.error = Some(format!("Connection failed: {e}"));
-                    }
-                }
+            if let Screen::Connect(s) = &mut app.screen {
+                s.loading = true;
+                s.error = None;
             }
-            app.loading = false;
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let client = TrinoClient::new(&url, &user);
+                let res = client.fetch_catalogs().await.map_err(|e| e.to_string());
+                let _ = tx.send(AsyncResult::Connect {
+                    log_id,
+                    url,
+                    user,
+                    password,
+                    client,
+                    result: res,
+                });
+            });
         }
         Command::FetchSchemas { catalog } => {
-            let client = app.trino_client.clone().expect("TrinoClient not initialized");
             let sql = queries::show_schemas(&catalog);
-            let log_id = app.add_query_log(sql.clone());
+            let log_id = app.add_query_log(sql);
             app.loading = true;
-            info!(%catalog, "Fetching schemas");
-            match client.fetch_schemas(&catalog).await {
-                Ok(schemas) => {
-                    let trimmed: Vec<String> = schemas.iter().map(|s| s.trim().to_string()).collect();
-                    app.complete_query_log_success(log_id, 25, trimmed.len());
-                    app.schemas.insert(catalog.clone(), trimmed.clone());
-                    app.screen = Screen::Schema(SchemaState {
-                        catalog: catalog.clone(),
-                        items: trimmed,
-                        selected: 0,
-                        scroll: 0,
+            if let Some(client) = app.trino_client.clone() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let res = client.fetch_schemas(&catalog).await.map_err(|e| e.to_string());
+                    let _ = tx.send(AsyncResult::FetchSchemas {
+                        log_id,
+                        catalog,
+                        result: res,
                     });
-                }
-                Err(e) => {
-                    error!(%catalog, error = %e, "Failed to fetch schemas");
-                    app.complete_query_log_error(log_id, e.to_string());
-                }
+                });
             }
-            app.loading = false;
         }
         Command::FetchTables { catalog, schema } => {
-            let client = app.trino_client.clone().expect("TrinoClient not initialized");
             let sql = queries::show_tables(&catalog, &schema);
-            let log_id = app.add_query_log(sql.clone());
+            let log_id = app.add_query_log(sql);
             app.loading = true;
-            info!(%catalog, %schema, "Fetching tables");
-            match client.fetch_tables(&catalog, &schema).await {
-                Ok(tables) => {
-                    let trimmed: Vec<String> = tables.iter().map(|t| t.trim().to_string()).collect();
-                    app.complete_query_log_success(log_id, 35, trimmed.len());
-                    app.tables.insert((catalog.clone(), schema.clone()), trimmed.clone());
-                    app.screen = Screen::Table(TableState {
-                        catalog: catalog.clone(),
-                        schema: schema.clone(),
-                        items: trimmed,
-                        selected: 0,
-                        scroll: 0,
+            if let Some(client) = app.trino_client.clone() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let res = client.fetch_tables(&catalog, &schema).await.map_err(|e| e.to_string());
+                    let _ = tx.send(AsyncResult::FetchTables {
+                        log_id,
+                        catalog,
+                        schema,
+                        result: res,
                     });
-                }
-                Err(e) => {
-                    error!(%catalog, %schema, error = %e, "Failed to fetch tables");
-                    app.complete_query_log_error(log_id, e.to_string());
-                }
+                });
             }
-            app.loading = false;
         }
         Command::FetchTableMetadata { catalog, schema, table } => {
-            let client = match app.trino_client.clone() {
-                Some(c) => c,
-                None => return,
-            };
+            if let Some(client) = app.trino_client.clone() {
+                let part_query = queries::partitions(&catalog, &schema, &table);
+                let part_log_id = app.add_query_log(part_query.clone());
+                let desc_query = queries::info_schema_columns(&catalog, &schema, &table);
+                let cols_log_id = app.add_query_log(desc_query.clone());
+                app.loading = true;
 
-            let part_query = queries::partitions(&catalog, &schema, &table);
-            let log_id = app.add_query_log(part_query.clone());
-            match client.execute(&part_query).await {
-                Ok(res) if !res.data.is_empty() => {
-                    app.complete_query_log_success(log_id, res.duration_ms, res.data.len());
-                    let raw_lines: Vec<String> = res.data.into_iter().map(|r| r.join("/")).collect();
-                    app.partition_tree_lines = crate::tui::screens::partition_tree::build_tree_lines(&raw_lines);
-                }
-                _ => {
-                    let show_create_query = queries::show_create(&catalog, &schema, &table);
-                    let log_id2 = app.add_query_log(show_create_query.clone());
-                    match client.execute(&show_create_query).await {
-                        Ok(res2) => {
-                            app.complete_query_log_success(log_id2, res2.duration_ms, res2.data.len());
-                            let ddl_str = res2.data.get(0).and_then(|r| r.get(0)).cloned().unwrap_or_default();
-                            app.partition_tree_lines = crate::tui::screens::partition_tree::build_tree_lines(&[ddl_str]);
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let partition_lines = match client.execute(&part_query).await {
+                        Ok(res) if !res.data.is_empty() => {
+                            let raw_lines: Vec<String> = res.data.into_iter().map(|r| r.join("/")).collect();
+                            crate::tui::screens::partition_tree::build_tree_lines(&raw_lines)
                         }
-                        Err(e) => {
-                            app.complete_query_log_error(log_id2, e.to_string());
-                            app.partition_tree_lines = crate::tui::screens::partition_tree::build_tree_lines(&[]);
-                        }
-                    }
-                }
-            }
-
-            let desc_query = queries::info_schema_columns(&catalog, &schema, &table);
-            let log_id3 = app.add_query_log(desc_query.clone());
-            match client.execute(&desc_query).await {
-                Ok(res) => {
-                    app.complete_query_log_success(log_id3, res.duration_ms, res.data.len());
-                    let cols: Vec<VerticalColumn> = res
-                        .data
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, r)| {
-                            let name = r.get(0).cloned().unwrap_or_default();
-                            let dtype = r.get(1).cloned().unwrap_or_default();
-                            let is_nullable = r.get(2).cloned().unwrap_or_default();
-                            let comment = r.get(3).cloned().unwrap_or_default();
-
-                            let key_meta = if name.starts_with("_hoodie") {
-                                "Hudi Metadata".to_string()
-                            } else if name.starts_with("$") || name.contains("iceberg") {
-                                "Iceberg Meta".to_string()
-                            } else if is_nullable == "NO" {
-                                "PK".to_string()
-                            } else {
-                                String::new()
+                        _ => {
+                            let show_create_query = queries::show_create(&catalog, &schema, &table);
+                            let ddl_str = match client.execute(&show_create_query).await {
+                                Ok(res2) => res2.data.get(0).and_then(|r| r.get(0)).cloned().unwrap_or_default(),
+                                Err(_) => String::new(),
                             };
+                            crate::tui::screens::partition_tree::build_tree_lines(&[ddl_str])
+                        }
+                    };
 
-                            VerticalColumn {
-                                index: idx + 1,
-                                name,
-                                data_type: dtype,
-                                key_meta,
-                                description: comment,
-                            }
-                        })
-                        .collect();
-                    app.vertical_schema_cols = cols;
-                }
-                Err(e) => {
-                    app.complete_query_log_error(log_id3, e.to_string());
-                }
+                    let columns = match client.execute(&desc_query).await {
+                        Ok(res) => {
+                            res.data.iter().enumerate().map(|(idx, r)| {
+                                let name = r.get(0).cloned().unwrap_or_default();
+                                let dtype = r.get(1).cloned().unwrap_or_default();
+                                let is_nullable = r.get(2).cloned().unwrap_or_default();
+                                let comment = r.get(3).cloned().unwrap_or_default();
+                                let key_meta = if name.starts_with("_hoodie") {
+                                    "Hudi Metadata".to_string()
+                                } else if name.starts_with("$") || name.contains("iceberg") {
+                                    "Iceberg Meta".to_string()
+                                } else if is_nullable == "NO" {
+                                    "PK".to_string()
+                                } else {
+                                    String::new()
+                                };
+                                VerticalColumn { index: idx + 1, name, data_type: dtype, key_meta, description: comment }
+                            }).collect()
+                        }
+                        Err(_) => Vec::new(),
+                    };
+
+                    let _ = tx.send(AsyncResult::FetchTableMetadata {
+                        partitions_log_id: part_log_id,
+                        cols_log_id,
+                        partition_lines,
+                        columns,
+                    });
+                });
             }
         }
         Command::ExecuteQuery { query, is_paginated, catalog, schema, table } => {
-            let client = app.trino_client.clone().expect("TrinoClient not initialized");
-            info!(%query, "Executing query");
             let log_id = app.add_query_log(query.clone());
             app.loading = true;
             app.prev_screen = Some(Box::new(app.screen.clone()));
@@ -1617,13 +1774,132 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                 invalid_query_error: None,
                 selection_anchor: None,
             });
-            match client.execute(&query).await {
+
+            if let Some(client) = app.trino_client.clone() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let res = client.execute(&query).await.map_err(|e| e.to_string());
+                    let _ = tx.send(AsyncResult::ExecuteQuery {
+                        log_id,
+                        query,
+                        query_buffer,
+                        query_cursor,
+                        catalog,
+                        schema,
+                        table,
+                        is_paginated,
+                        result: res,
+                    });
+                });
+            }
+        }
+        Command::FetchNextPage { catalog, schema, table, offset, limit } => {
+            let query = queries::page_query(&catalog, &schema, &table, offset, limit);
+            let log_id = app.add_query_log(query.clone());
+            if let Screen::Results(ref mut state) = app.screen {
+                state.is_fetching_next_page = true;
+            }
+
+            if let Some(client) = app.trino_client.clone() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let res = client.execute(&query).await.map_err(|e| e.to_string());
+                    let _ = tx.send(AsyncResult::FetchNextPage {
+                        log_id,
+                        offset,
+                        limit,
+                        result: res,
+                    });
+                });
+            }
+        }
+    }
+}
+
+pub fn handle_async_result(app: &mut App, result: AsyncResult) {
+    match result {
+        AsyncResult::Connect { log_id, url, user, password, client, result } => {
+            app.loading = false;
+            match result {
+                Ok(catalogs) => {
+                    app.complete_query_log_success(log_id, 15, catalogs.len());
+                    app.config.url = url;
+                    app.config.user = user;
+                    app.config.password = password;
+                    app.trino_client = Some(client);
+                    app.catalogs = catalogs.iter().map(|c| c.trim().to_string()).collect();
+                    app.screen = Screen::Catalog(CatalogState {
+                        items: app.catalogs.clone(),
+                        selected: 0,
+                        scroll: 0,
+                    });
+                }
+                Err(e) => {
+                    error!(error = %e, "Connect failed");
+                    app.complete_query_log_error(log_id, e.clone());
+                    if let Screen::Connect(s) = &mut app.screen {
+                        s.loading = false;
+                        s.error = Some(format!("Connection failed: {e}"));
+                    }
+                }
+            }
+        }
+        AsyncResult::FetchSchemas { log_id, catalog, result } => {
+            app.loading = false;
+            match result {
+                Ok(schemas) => {
+                    let trimmed: Vec<String> = schemas.iter().map(|s| s.trim().to_string()).collect();
+                    app.complete_query_log_success(log_id, 25, trimmed.len());
+                    app.schemas.insert(catalog.clone(), trimmed.clone());
+                    app.screen = Screen::Schema(SchemaState {
+                        catalog: catalog.clone(),
+                        items: trimmed,
+                        selected: 0,
+                        scroll: 0,
+                    });
+                }
+                Err(e) => {
+                    error!(error = %e, "Fetch schemas failed");
+                    app.complete_query_log_error(log_id, e);
+                }
+            }
+        }
+        AsyncResult::FetchTables { log_id, catalog, schema, result } => {
+            app.loading = false;
+            match result {
+                Ok(tables) => {
+                    let trimmed: Vec<String> = tables.iter().map(|t| t.trim().to_string()).collect();
+                    app.complete_query_log_success(log_id, 35, trimmed.len());
+                    app.tables.insert((catalog.clone(), schema.clone()), trimmed.clone());
+                    app.screen = Screen::Table(TableState {
+                        catalog: catalog.clone(),
+                        schema: schema.clone(),
+                        items: trimmed,
+                        selected: 0,
+                        scroll: 0,
+                    });
+                }
+                Err(e) => {
+                    error!(error = %e, "Fetch tables failed");
+                    app.complete_query_log_error(log_id, e);
+                }
+            }
+        }
+        AsyncResult::FetchTableMetadata { partitions_log_id, cols_log_id, partition_lines, columns } => {
+            app.loading = false;
+            app.complete_query_log_success(partitions_log_id, 20, partition_lines.len());
+            app.complete_query_log_success(cols_log_id, 20, columns.len());
+            app.partition_tree_lines = partition_lines;
+            app.vertical_schema_cols = columns;
+        }
+        AsyncResult::ExecuteQuery { log_id, query, query_buffer, query_cursor, catalog, schema, table, is_paginated, result } => {
+            app.loading = false;
+            match result {
                 Ok(results) => {
                     app.complete_query_log_success(log_id, results.duration_ms, results.data.len());
                     let cols: Vec<String> = results.columns.iter().map(|c| c.name.clone()).collect();
                     let rows = results.data;
                     let has_more = if is_paginated { rows.len() >= 100 } else { false };
-                    info!(row_count = rows.len(), "Query completed");
                     app.screen = Screen::Results(ResultsState {
                         query,
                         query_buffer,
@@ -1647,8 +1923,8 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                     });
                 }
                 Err(e) => {
-                    error!(error = %e, "Query failed");
-                    app.complete_query_log_error(log_id, e.to_string());
+                    error!(error = %e, "Execute query failed");
+                    app.complete_query_log_error(log_id, e.clone());
                     app.screen = Screen::Results(ResultsState {
                         query,
                         query_buffer,
@@ -1658,7 +1934,7 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                         scroll_v: 0,
                         scroll_h: 0,
                         loading: false,
-                        error: Some(e.to_string()),
+                        error: Some(e),
                         is_paginated: false,
                         catalog,
                         schema,
@@ -1672,18 +1948,9 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                     });
                 }
             }
-            app.loading = false;
         }
-        Command::FetchNextPage { catalog, schema, table, offset, limit } => {
-            let client = match app.trino_client.clone() {
-                Some(c) => c,
-                None => return,
-            };
-            let query = queries::page_query(&catalog, &schema, &table, offset, limit);
-            info!(%query, %offset, %limit, "Fetching next page for infinite scroll");
-            let log_id = app.add_query_log(query.clone());
-
-            match client.execute(&query).await {
+        AsyncResult::FetchNextPage { log_id, offset, limit, result } => {
+            match result {
                 Ok(results) => {
                     app.complete_query_log_success(log_id, results.duration_ms, results.data.len());
                     let new_rows = results.data;
@@ -1698,8 +1965,8 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                     }
                 }
                 Err(e) => {
-                    error!(error = %e, "Failed to fetch next page");
-                    app.complete_query_log_error(log_id, e.to_string());
+                    error!(error = %e, "Fetch next page failed");
+                    app.complete_query_log_error(log_id, e);
                     if let Screen::Results(ref mut state) = app.screen {
                         state.is_fetching_next_page = false;
                         state.has_more_rows = false;

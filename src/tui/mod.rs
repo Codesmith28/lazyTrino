@@ -284,7 +284,7 @@ fn render_control_panel(frame: &mut Frame, area: Rect, app: &App) {
             Line::from(Span::styled(" <space>                      : Action Leader", Style::default().fg(Color::Gray))),
             Line::from(Span::styled(" Ctrl+C                       : Quit", Style::default().fg(Color::Gray))),
         ];
-        let info_widget = Paragraph::new(conn_lines);
+        let info_widget = Paragraph::new(conn_lines).wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(info_widget, sections[0]);
     }
 
@@ -430,22 +430,29 @@ async fn run_loop(
     terminal: &mut Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
 ) -> Result<()> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<handler::AsyncResult>();
+
     if app.auto_connect {
         let url = app.config.url.clone();
         let user = app.config.user.clone();
         let password = app.config.password.clone();
-        handler::execute_command(app, handler::Command::Connect { url, user, password }).await;
+        handler::dispatch_command(app, handler::Command::Connect { url, user, password }, &tx);
     }
 
     loop {
         app.frame_count += 1;
+
+        while let Ok(result) = rx.try_recv() {
+            handler::handle_async_result(app, result);
+        }
+
         terminal.draw(|frame| ui(frame, app))?;
 
         if app.should_quit {
             break Ok(());
         }
 
-        if event::poll(std::time::Duration::from_millis(100))? {
+        if event::poll(std::time::Duration::from_millis(33))? {
             match event::read()? {
                 Event::Key(key) => {
                     if key.kind != KeyEventKind::Press {
@@ -453,18 +460,14 @@ async fn run_loop(
                     }
 
                     let cmd = handler::handle_key_sync(app, key);
-
                     if let Some(cmd) = cmd {
-                        app.loading = true;
-                        app.frame_count += 1;
-                        terminal.draw(|frame| ui(frame, app))?;
-                        handler::execute_command(app, cmd).await;
+                        handler::dispatch_command(app, cmd, &tx);
                     }
                 }
                 Event::Mouse(mouse) => {
                     let cmd = handler::handle_mouse_sync(app, mouse);
                     if let Some(cmd) = cmd {
-                        handler::execute_command(app, cmd).await;
+                        handler::dispatch_command(app, cmd, &tx);
                     }
                 }
                 _ => {}
