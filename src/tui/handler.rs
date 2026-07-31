@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use tracing::{error, info, warn};
 
 use crate::app::*;
@@ -258,6 +258,7 @@ fn handle_search_mode(app: &mut App, key: KeyEvent) -> Option<Command> {
 
 fn go_back(app: &mut App) {
     let logged_in = app.trino_client.is_some();
+    app.main_panel_pct = 60;
 
     let next = match &app.screen {
         Screen::Help => app.prev_screen.take().map(|p| *p),
@@ -374,6 +375,7 @@ fn is_enter_key(code: KeyCode) -> bool {
     matches!(code, KeyCode::Enter | KeyCode::Char('\r') | KeyCode::Char('\n'))
 }
 
+#[allow(dead_code)]
 fn prev_word_pos(s: &str, cursor: usize) -> usize {
     if cursor == 0 {
         return 0;
@@ -389,6 +391,7 @@ fn prev_word_pos(s: &str, cursor: usize) -> usize {
     i
 }
 
+#[allow(dead_code)]
 fn next_word_pos(s: &str, cursor: usize) -> usize {
     let chars: Vec<char> = s.chars().collect();
     let len = chars.len();
@@ -408,6 +411,7 @@ fn copy_to_clipboard(text: &str) {
     }
 }
 
+#[allow(dead_code)]
 fn paste_from_clipboard() -> Option<String> {
     if let Ok(mut board) = arboard::Clipboard::new() {
         board.get_text().ok()
@@ -416,6 +420,7 @@ fn paste_from_clipboard() -> Option<String> {
     }
 }
 
+#[allow(dead_code)]
 fn query_text_index_from_mouse(
     mouse_col: u16,
     mouse_row: u16,
@@ -442,94 +447,89 @@ fn query_text_index_from_mouse(
     char_idx.min(buffer_len)
 }
 
+#[allow(dead_code)]
 fn is_mac_option_code(code: KeyCode) -> bool {
     matches!(code, KeyCode::Char('∆') | KeyCode::Char('˚') | KeyCode::Char('˙') | KeyCode::Char('¬') | KeyCode::Char('©'))
 }
 
-fn handle_pane_activation(app: &mut App, key: KeyEvent) -> bool {
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let mac_opt = is_mac_option_code(key.code);
-    let has_pane_modifier = shift || alt || mac_opt;
-
+pub fn handle_pane_focus_keys(app: &mut App, key: KeyEvent) -> bool {
+    let has_pane_modifier = key.modifiers.contains(KeyModifiers::SHIFT);
     let code = normalize_key_code(key.code);
     let is_h = (code == KeyCode::Char('H')) || (code == KeyCode::Char('h') && has_pane_modifier);
-    let is_j = (code == KeyCode::Char('J')) || (code == KeyCode::Char('j') && has_pane_modifier);
-    let is_k = (code == KeyCode::Char('K')) || (code == KeyCode::Char('k') && has_pane_modifier);
     let is_l = (code == KeyCode::Char('L')) || (code == KeyCode::Char('l') && has_pane_modifier);
 
     let is_left = key.code == KeyCode::Left && has_pane_modifier;
     let is_right = key.code == KeyCode::Right && has_pane_modifier;
-    let is_up = key.code == KeyCode::Up && has_pane_modifier;
-    let is_down = key.code == KeyCode::Down && has_pane_modifier;
 
-    if !(is_h || is_j || is_k || is_l || is_left || is_right || is_up || is_down) {
+    if !(is_h || is_l || is_left || is_right || code == KeyCode::Tab) {
         return false;
     }
 
-    let active_table = match &app.screen {
-        Screen::Actions(_) => true,
-        Screen::Table(t) => !t.items.is_empty(),
-        _ => false,
-    };
+    let is_in_table = matches!(app.screen, Screen::Actions(_) | Screen::Results(_));
 
-    if is_k || is_up {
-        match app.active_panel {
-            ActivePanel::SchemaInspector => {
-                if active_table {
-                    app.active_panel = ActivePanel::PartitionTree;
-                } else {
-                    app.active_panel = ActivePanel::MainViewer;
-                }
-            }
-            ActivePanel::PartitionTree => {
+    if is_in_table {
+        if is_h || is_left {
+            app.active_panel = ActivePanel::MenuPane;
+            return true;
+        }
+        if is_l || is_right || code == KeyCode::Tab {
+            if app.active_panel == ActivePanel::MenuPane {
                 app.active_panel = ActivePanel::MainViewer;
+            } else {
+                app.active_panel = ActivePanel::MenuPane;
             }
-            ActivePanel::MainViewer => {}
+            return true;
         }
-        return true;
-    }
-
-    if is_j || is_down {
-        match app.active_panel {
-            ActivePanel::MainViewer => {
-                if active_table {
-                    app.active_panel = ActivePanel::PartitionTree;
-                }
-            }
-            ActivePanel::PartitionTree => {
-                if active_table {
-                    app.active_panel = ActivePanel::SchemaInspector;
-                }
-            }
-            ActivePanel::SchemaInspector => {}
-        }
-        return true;
-    }
-
-    if is_h || is_left {
-        match app.active_panel {
-            ActivePanel::PartitionTree | ActivePanel::SchemaInspector => {
-                app.active_panel = ActivePanel::MainViewer;
-            }
-            ActivePanel::MainViewer => {}
-        }
-        return true;
-    }
-
-    if is_l || is_right {
-        match app.active_panel {
-            ActivePanel::MainViewer => {
-                if active_table {
-                    app.active_panel = ActivePanel::PartitionTree;
-                }
-            }
-            ActivePanel::PartitionTree | ActivePanel::SchemaInspector => {}
-        }
-        return true;
     }
 
     false
+}
+
+pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
+    if action_idx >= ACTIONS.len() {
+        return None;
+    }
+    if let Screen::Actions(ref mut s) = app.screen {
+        s.selected = action_idx;
+        app.active_panel = ActivePanel::MainViewer;
+        let action = &ACTIONS[action_idx].2;
+        match action {
+            Action::Partitions => {
+                if app.partition_tree_lines.is_empty() {
+                    return Some(Command::FetchTableMetadata {
+                        catalog: s.catalog.clone(),
+                        schema: s.schema.clone(),
+                        table: s.table.clone(),
+                    });
+                }
+                None
+            }
+            Action::Schema => {
+                if app.vertical_schema_cols.is_empty() {
+                    return Some(Command::FetchTableMetadata {
+                        catalog: s.catalog.clone(),
+                        schema: s.schema.clone(),
+                        table: s.table.clone(),
+                    });
+                }
+                None
+            }
+            _ => {
+                let is_paginated = matches!(action, Action::TableView);
+                let query = action.build_query(&s.catalog, &s.schema, &s.table);
+                s.results = None;
+                Some(Command::ExecuteQuery {
+                    query,
+                    is_paginated,
+                    catalog: s.catalog.clone(),
+                    schema: s.schema.clone(),
+                    table: s.table.clone(),
+                })
+            }
+        }
+    } else {
+        None
+    }
 }
 
 pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
@@ -540,15 +540,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
 
     let bottom_y = term_height.saturating_sub(7);
     let border_x = ((term_width as u32 * app.main_panel_pct as u32) / 100) as u16;
-
-    let height_right = bottom_y;
-    let border_y = ((height_right as u32 * app.control_panel_split_pct as u32) / 100) as u16;
-
-    let active_table = match &app.screen {
-        Screen::Actions(_) => true,
-        Screen::Table(t) => !t.items.is_empty(),
-        _ => false,
-    };
+    let is_in_table = matches!(app.screen, Screen::Actions(_) | Screen::Results(_));
 
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
@@ -558,69 +550,24 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
 
             if mouse.row < bottom_y && (mouse.column as i32 - border_x as i32).abs() <= 1 {
                 app.is_dragging_resizer = true;
-                app.is_dragging_v_resizer = false;
-            } else if mouse.column >= border_x && active_table && (mouse.row as i32 - border_y as i32).abs() <= 1 {
-                app.is_dragging_v_resizer = true;
-                app.is_dragging_resizer = false;
             } else {
                 app.is_dragging_resizer = false;
-                app.is_dragging_v_resizer = false;
 
                 if mouse.column < border_x && mouse.row < bottom_y {
-                    let is_table_view = matches!(app.screen, Screen::Results(_));
-                    let search_active = matches!(app.mode, Mode::Search);
-                    let query_active = matches!(app.mode, Mode::QueryInput);
-                    let inner_w = border_x.saturating_sub(2).max(1) as usize;
-
-                    let search_h: u16 = if search_active {
-                        let total = 3 + app.search_query.len();
-                        let lines = (total + inner_w - 1) / inner_w;
-                        (lines as u16 + 2).clamp(3, 8)
-                    } else {
-                        3
-                    };
-
-                    let query_h: u16 = if is_table_view {
-                        if query_active {
-                            if let Screen::Results(ref s) = app.screen {
-                                let total = 7 + s.query_buffer.len();
-                                let lines = (total + inner_w - 1) / inner_w;
-                                (lines as u16 + 2).clamp(3, 4)
-                            } else {
-                                3
-                            }
+                    if is_in_table {
+                        let clicked_row = mouse.row.saturating_sub(1) as usize;
+                        if clicked_row < ACTIONS.len() {
+                            return trigger_action(app, clicked_row);
                         } else {
-                            3
-                        }
-                    } else {
-                        0
-                    };
-
-                    if mouse.row < search_h {
-                        app.mode = Mode::Search;
-                        app.is_dragging_query_select = false;
-                    } else if is_table_view && mouse.row < search_h + query_h {
-                        app.mode = Mode::QueryInput;
-                        app.is_dragging_query_select = true;
-                        if let Screen::Results(ref mut state) = app.screen {
-                            let idx = query_text_index_from_mouse(mouse.column, mouse.row, search_h, inner_w, state.query_buffer.len());
-                            state.selection_anchor = Some(idx);
-                            state.query_cursor = idx;
+                            app.active_panel = ActivePanel::MenuPane;
                         }
                     } else {
                         app.mode = Mode::Normal;
                         app.active_panel = ActivePanel::MainViewer;
-                        app.is_dragging_query_select = false;
-                        if let Screen::Results(ref mut state) = app.screen {
-                            state.clear_selection();
-                        }
                     }
-                } else if mouse.column >= border_x && mouse.row < bottom_y && active_table {
-                    if mouse.row < border_y {
-                        app.active_panel = ActivePanel::PartitionTree;
-                    } else {
-                        app.active_panel = ActivePanel::SchemaInspector;
-                    }
+                } else if mouse.column >= border_x && mouse.row < bottom_y {
+                    app.mode = Mode::Normal;
+                    app.active_panel = ActivePanel::MainViewer;
                 }
             }
         }
@@ -630,47 +577,11 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
             if app.is_dragging_resizer {
                 let pct = ((mouse.column as u32 * 100) / term_width as u32) as u16;
-                app.main_panel_pct = pct.clamp(20, 80);
-            } else if app.is_dragging_v_resizer {
-                let rel_y = mouse.row as u32;
-                if height_right > 0 {
-                    let pct = ((rel_y * 100) / height_right as u32) as u16;
-                    app.control_panel_split_pct = pct.clamp(20, 80);
-                }
-            } else if app.is_dragging_query_select {
-                if let Screen::Results(ref mut state) = app.screen {
-                    let search_active = matches!(app.mode, Mode::Search);
-                    let inner_w = border_x.saturating_sub(2).max(1) as usize;
-                    let search_h: u16 = if search_active {
-                        let total = 3 + app.search_query.len();
-                        let lines = (total + inner_w - 1) / inner_w;
-                        (lines as u16 + 2).clamp(3, 8)
-                    } else {
-                        3
-                    };
-                    let idx = query_text_index_from_mouse(mouse.column, mouse.row, search_h, inner_w, state.query_buffer.len());
-                    if state.selection_anchor.is_none() {
-                        state.selection_anchor = Some(state.query_cursor);
-                    }
-                    state.query_cursor = idx;
-                }
+                app.main_panel_pct = pct.clamp(8, 80);
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
             app.is_dragging_resizer = false;
-            app.is_dragging_v_resizer = false;
-            if app.is_dragging_query_select {
-                app.is_dragging_query_select = false;
-                if let Screen::Results(ref mut state) = app.screen {
-                    if let Some((start, end)) = state.selection_range() {
-                        let sel_text = state.query_buffer[start..end].to_string();
-                        copy_to_clipboard(&sel_text);
-                        app.copied_toast = Some((sel_text.chars().take(30).collect(), std::time::Instant::now()));
-                    } else {
-                        state.clear_selection();
-                    }
-                }
-            }
             if app.is_selecting_text {
                 app.is_selecting_text = false;
                 if let (Some(anchor), Some(current)) = (app.mouse_selection_anchor, app.mouse_selection_current) {
@@ -684,71 +595,59 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
         }
         MouseEventKind::ScrollDown => {
             let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
-            match app.active_panel {
-                ActivePanel::MainViewer => {
-                    if let Screen::Results(ref mut state) = app.screen {
+            if is_in_table {
+                let selected_idx = match &app.screen {
+                    Screen::Actions(a) => a.selected,
+                    _ => 0,
+                };
+                if selected_idx == 7 {
+                    let max_lines = app.partition_tree_lines.len().saturating_sub(1);
+                    app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
+                } else if selected_idx == 8 {
+                    let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
+                    app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
+                } else if let Screen::Actions(ref mut a) = app.screen {
+                    if let Some(ref mut res) = a.results {
                         if shift {
-                            if !state.columns.is_empty() {
-                                state.scroll_h = (state.scroll_h + 1).min(state.columns.len().saturating_sub(1));
+                            if !res.columns.is_empty() {
+                                res.scroll_h = (res.scroll_h + 1).min(res.columns.len().saturating_sub(1));
                             }
-                        } else if !state.rows.is_empty() {
-                            state.scroll_v = (state.scroll_v + 1).min(state.rows.len().saturating_sub(1));
+                        } else if !res.rows.is_empty() {
+                            res.scroll_v = (res.scroll_v + 1).min(res.rows.len().saturating_sub(1));
                             return check_trigger_infinite_scroll(app);
-                        }
-                    } else if let Some(items) = extract_list_labels(&app.screen) {
-                        if !items.is_empty() {
-                            if let Some(s) = get_selected(&app.screen) {
-                                mod_list_selected(&mut app.screen, (s + 1).min(items.len().saturating_sub(1)));
-                            }
                         }
                     }
                 }
-                ActivePanel::PartitionTree => {
-                    let max_lines = app.partition_tree_lines.len().saturating_sub(1);
-                    app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
-                }
-                ActivePanel::SchemaInspector => {
-                    let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
-                    app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
+            } else if let Some(items) = extract_list_labels(&app.screen) {
+                if !items.is_empty() {
+                    if let Some(s) = get_selected(&app.screen) {
+                        mod_list_selected(&mut app.screen, (s + 1).min(items.len().saturating_sub(1)));
+                    }
                 }
             }
         }
         MouseEventKind::ScrollUp => {
             let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
-            match app.active_panel {
-                ActivePanel::MainViewer => {
-                    if let Screen::Results(ref mut state) = app.screen {
-                        if shift {
-                            state.scroll_h = state.scroll_h.saturating_sub(1);
-                        } else {
-                            state.scroll_v = state.scroll_v.saturating_sub(1);
-                        }
-                    } else if let Some(s) = get_selected(&app.screen) {
-                        mod_list_selected(&mut app.screen, s.saturating_sub(1));
-                    }
-                }
-                ActivePanel::PartitionTree => {
+            if is_in_table {
+                let selected_idx = match &app.screen {
+                    Screen::Actions(a) => a.selected,
+                    _ => 0,
+                };
+                if selected_idx == 7 {
                     app.partition_scroll = app.partition_scroll.saturating_sub(1);
-                }
-                ActivePanel::SchemaInspector => {
+                } else if selected_idx == 8 {
                     app.schema_scroll = app.schema_scroll.saturating_sub(1);
-                }
-            }
-        }
-        MouseEventKind::ScrollRight => {
-            if app.active_panel == ActivePanel::MainViewer {
-                if let Screen::Results(ref mut state) = app.screen {
-                    if !state.columns.is_empty() {
-                        state.scroll_h = (state.scroll_h + 1).min(state.columns.len().saturating_sub(1));
+                } else if let Screen::Actions(ref mut a) = app.screen {
+                    if let Some(ref mut res) = a.results {
+                        if shift {
+                            res.scroll_h = res.scroll_h.saturating_sub(1);
+                        } else {
+                            res.scroll_v = res.scroll_v.saturating_sub(1);
+                        }
                     }
                 }
-            }
-        }
-        MouseEventKind::ScrollLeft => {
-            if app.active_panel == ActivePanel::MainViewer {
-                if let Screen::Results(ref mut state) = app.screen {
-                    state.scroll_h = state.scroll_h.saturating_sub(1);
-                }
+            } else if let Some(s) = get_selected(&app.screen) {
+                mod_list_selected(&mut app.screen, s.saturating_sub(1));
             }
         }
         _ => {}
@@ -765,288 +664,20 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return None;
     }
 
-    if matches!(app.mode, Mode::Search) {
-        match code {
-            KeyCode::Esc | KeyCode::Enter => {
-                app.mode = Mode::Normal;
-            }
-            KeyCode::Backspace => {
-                app.search_query.pop();
-            }
-            KeyCode::Char(c) => {
-                app.search_query.push(c);
-            }
-            _ => {}
-        }
+    if handle_pane_focus_keys(app, key) {
         return None;
     }
 
-    if matches!(app.mode, Mode::QueryInput) {
-        if let Screen::Results(ref mut state) = app.screen {
-            let alt = key.modifiers.contains(KeyModifiers::ALT) || is_mac_option_code(key.code);
-            let super_cmd = key.modifiers.contains(KeyModifiers::SUPER) || key.modifiers.contains(KeyModifiers::CONTROL);
-            let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-
-            if is_enter_key(code) {
-                app.mode = Mode::Normal;
-                state.clear_selection();
-                let input = state.query_buffer.clone();
-                let cat = state.catalog.clone();
-                let sch = state.schema.clone();
-                let tbl = state.table.clone();
-                let is_paginated = state.is_paginated;
-
-                match validate_and_build_query(&input, &cat, &sch, &tbl) {
-                    Ok(full_sql) => {
-                        state.invalid_query_error = None;
-                        return Some(Command::ExecuteQuery {
-                            query: full_sql,
-                            is_paginated,
-                            catalog: cat,
-                            schema: sch,
-                            table: tbl,
-                        });
-                    }
-                    Err(err_msg) => {
-                        state.invalid_query_error = Some(err_msg);
-                        return None;
-                    }
-                }
-            }
-
+    match app.mode {
+        Mode::Leader { .. } => return handle_leader_mode(app, key),
+        Mode::Search => return handle_search_mode(app, key),
+        Mode::QueryInput => {
             if code == KeyCode::Esc {
                 app.mode = Mode::Normal;
-                state.clear_selection();
                 return None;
-            }
-
-            // Select All: Cmd+A / Ctrl+A
-            if super_cmd && (code == KeyCode::Char('a') || code == KeyCode::Char('A')) {
-                state.select_all();
-                return None;
-            }
-
-            // Copy: Cmd+C / Ctrl+C
-            if super_cmd && (code == KeyCode::Char('c') || code == KeyCode::Char('C')) {
-                if let Some((start, end)) = state.selection_range() {
-                    copy_to_clipboard(&state.query_buffer[start..end]);
-                } else {
-                    copy_to_clipboard(&state.query_buffer);
-                }
-                return None;
-            }
-
-            // Cut: Cmd+X / Ctrl+X
-            if super_cmd && (code == KeyCode::Char('x') || code == KeyCode::Char('X')) {
-                if let Some((start, end)) = state.selection_range() {
-                    copy_to_clipboard(&state.query_buffer[start..end]);
-                    state.delete_selection();
-                }
-                return None;
-            }
-
-            // Paste: Cmd+V / Ctrl+V / Ctrl+Y
-            if super_cmd && (code == KeyCode::Char('v') || code == KeyCode::Char('V') || code == KeyCode::Char('y')) {
-                if let Some(clip) = paste_from_clipboard() {
-                    state.delete_selection();
-                    let idx = state.query_cursor.min(state.query_buffer.len());
-                    state.query_buffer.insert_str(idx, &clip);
-                    state.query_cursor += clip.len();
-                    state.clear_selection();
-                }
-                return None;
-            }
-
-            // Word Delete Backward: Option+Backspace / Alt+Backspace / Ctrl+W / 'å' / 'w' with Alt/Ctrl
-            if (alt && code == KeyCode::Backspace)
-                || (super_cmd && code == KeyCode::Char('w'))
-                || (code == KeyCode::Char('å') || code == KeyCode::Char('Å'))
-                || (alt && code == KeyCode::Char('w'))
-            {
-                if !state.delete_selection() && state.query_cursor > 0 {
-                    let prev = prev_word_pos(&state.query_buffer, state.query_cursor);
-                    state.query_buffer.drain(prev..state.query_cursor);
-                    state.query_cursor = prev;
-                }
-                state.clear_selection();
-                return None;
-            }
-
-            // Line Delete Backward: Cmd+Backspace / Super+Backspace / Ctrl+U
-            if (super_cmd && code == KeyCode::Backspace) || (super_cmd && code == KeyCode::Char('u')) {
-                if !state.delete_selection() && state.query_cursor > 0 {
-                    state.query_buffer.drain(0..state.query_cursor);
-                    state.query_cursor = 0;
-                }
-                state.clear_selection();
-                return None;
-            }
-
-            // Word Delete Forward: Option+Delete / Alt+Delete
-            if alt && code == KeyCode::Delete {
-                if !state.delete_selection() && state.query_cursor < state.query_buffer.len() {
-                    let next = next_word_pos(&state.query_buffer, state.query_cursor);
-                    state.query_buffer.drain(state.query_cursor..next);
-                }
-                state.clear_selection();
-                return None;
-            }
-
-            // Line Delete Forward: Cmd+Delete / Super+Delete / Ctrl+K
-            if (super_cmd && code == KeyCode::Delete) || (super_cmd && code == KeyCode::Char('k')) {
-                if !state.delete_selection() && state.query_cursor < state.query_buffer.len() {
-                    state.query_buffer.truncate(state.query_cursor);
-                }
-                state.clear_selection();
-                return None;
-            }
-
-            // Single Backspace
-            if code == KeyCode::Backspace {
-                if !state.delete_selection() && state.query_cursor > 0 {
-                    let idx = state.query_cursor - 1;
-                    state.query_buffer.remove(idx);
-                    state.query_cursor -= 1;
-                }
-                state.clear_selection();
-                return None;
-            }
-
-            // Single Delete
-            if code == KeyCode::Delete {
-                if !state.delete_selection() && state.query_cursor < state.query_buffer.len() {
-                    state.query_buffer.remove(state.query_cursor);
-                }
-                state.clear_selection();
-                return None;
-            }
-
-            // Word Jump Left: Option+Left / Alt+Left / Option+b / '∫'
-            if (alt && code == KeyCode::Left) || (alt && (code == KeyCode::Char('b') || code == KeyCode::Char('B'))) || code == KeyCode::Char('∫') {
-                let next_pos = prev_word_pos(&state.query_buffer, state.query_cursor);
-                if shift {
-                    if state.selection_anchor.is_none() {
-                        state.selection_anchor = Some(state.query_cursor);
-                    }
-                } else {
-                    state.clear_selection();
-                }
-                state.query_cursor = next_pos;
-                return None;
-            }
-
-            // Word Jump Right: Option+Right / Alt+Right / Option+f / 'ƒ'
-            if (alt && code == KeyCode::Right) || (alt && (code == KeyCode::Char('f') || code == KeyCode::Char('F'))) || code == KeyCode::Char('ƒ') {
-                let next_pos = next_word_pos(&state.query_buffer, state.query_cursor);
-                if shift {
-                    if state.selection_anchor.is_none() {
-                        state.selection_anchor = Some(state.query_cursor);
-                    }
-                } else {
-                    state.clear_selection();
-                }
-                state.query_cursor = next_pos;
-                return None;
-            }
-
-            // Line Jump Left / Home: Cmd+Left / Home
-            if (super_cmd && code == KeyCode::Left) || code == KeyCode::Home {
-                if shift {
-                    if state.selection_anchor.is_none() {
-                        state.selection_anchor = Some(state.query_cursor);
-                    }
-                } else {
-                    state.clear_selection();
-                }
-                state.query_cursor = 0;
-                return None;
-            }
-
-            // Line Jump Right / End: Cmd+Right / End
-            if (super_cmd && code == KeyCode::Right) || code == KeyCode::End {
-                if shift {
-                    if state.selection_anchor.is_none() {
-                        state.selection_anchor = Some(state.query_cursor);
-                    }
-                } else {
-                    state.clear_selection();
-                }
-                state.query_cursor = state.query_buffer.len();
-                return None;
-            }
-
-            // Arrow Left
-            if code == KeyCode::Left {
-                let next_pos = state.query_cursor.saturating_sub(1);
-                if shift {
-                    if state.selection_anchor.is_none() {
-                        state.selection_anchor = Some(state.query_cursor);
-                    }
-                } else {
-                    state.clear_selection();
-                }
-                state.query_cursor = next_pos;
-                return None;
-            }
-
-            // Arrow Right
-            if code == KeyCode::Right {
-                let next_pos = (state.query_cursor + 1).min(state.query_buffer.len());
-                if shift {
-                    if state.selection_anchor.is_none() {
-                        state.selection_anchor = Some(state.query_cursor);
-                    }
-                } else {
-                    state.clear_selection();
-                }
-                state.query_cursor = next_pos;
-                return None;
-            }
-
-            // Normal Char insertion
-            if let KeyCode::Char(c) = code {
-                if c != '\r' && c != '\n' && c != 'å' && c != 'Å' && c != '∫' && c != 'ƒ' {
-                    state.delete_selection();
-                    let idx = state.query_cursor.min(state.query_buffer.len());
-                    state.query_buffer.insert(idx, c);
-                    state.query_cursor += 1;
-                    state.clear_selection();
-                }
-            }
-        } else {
-            app.mode = Mode::Normal;
-        }
-        return None;
-    }
-
-    if handle_pane_activation(app, key) {
-        return None;
-    }
-
-    if code == KeyCode::Char('/') {
-        app.mode = Mode::Search;
-        return None;
-    }
-
-    if matches!(app.mode, Mode::Leader { .. }) {
-        if let KeyCode::Char(c) = code {
-            if let Screen::Actions(s) = &app.screen {
-                if let Some(action) = app.action_for(c) {
-                    let is_table_view = matches!(action, Action::TableView);
-                    let query = action.build_query(&s.catalog, &s.schema, &s.table);
-                    app.mode = Mode::Normal;
-                    return Some(Command::ExecuteQuery {
-                        query,
-                        is_paginated: is_table_view,
-                        catalog: s.catalog.clone(),
-                        schema: s.schema.clone(),
-                        table: s.table.clone(),
-                    });
-                }
             }
         }
-        app.mode = Mode::Normal;
-        return None;
+        Mode::Normal => {}
     }
 
     if code == KeyCode::Char('?') {
@@ -1055,14 +686,21 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return None;
     }
 
-    if key.kind != KeyEventKind::Press {
+    if code == KeyCode::Char('/') {
+        app.mode = Mode::Search;
         return None;
     }
 
     if code == KeyCode::Esc {
         app.number_buffer.clear();
-        go_back(app);
-        return None;
+        let is_in_table = matches!(app.screen, Screen::Actions(_) | Screen::Results(_));
+        if is_in_table && app.active_panel == ActivePanel::MainViewer {
+            app.active_panel = ActivePanel::MenuPane;
+            return None;
+        } else {
+            go_back(app);
+            return None;
+        }
     }
 
     if code == KeyCode::Enter && !app.number_buffer.is_empty() {
@@ -1074,154 +712,6 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         if c.is_ascii_digit() && matches!(app.active_panel, ActivePanel::MainViewer) {
             update_number_buffer(app, c);
             return None;
-        }
-    }
-
-    match app.active_panel {
-        ActivePanel::MainViewer => {
-            match code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if let Screen::Results(state) = &mut app.screen {
-                        if !state.rows.is_empty() {
-                            state.scroll_v = (state.scroll_v + 1).min(state.rows.len().saturating_sub(1));
-                        }
-                        return check_trigger_infinite_scroll(app);
-                    } else if let Some(items) = extract_list_labels(&app.screen) {
-                        if !items.is_empty() {
-                            if let Some(s) = get_selected(&app.screen) {
-                                mod_list_selected(&mut app.screen, (s + 1).min(items.len() - 1));
-                            }
-                        }
-                    }
-                    return None;
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    if let Screen::Results(state) = &mut app.screen {
-                        state.scroll_v = state.scroll_v.saturating_sub(1);
-                    } else if let Some(s) = get_selected(&app.screen) {
-                        mod_list_selected(&mut app.screen, s.saturating_sub(1));
-                    }
-                    return None;
-                }
-                KeyCode::Char('h') | KeyCode::Left => {
-                    if let Screen::Results(state) = &mut app.screen {
-                        state.scroll_h = state.scroll_h.saturating_sub(1);
-                    } else {
-                        app.number_buffer.clear();
-                        go_back(app);
-                    }
-                    return None;
-                }
-                KeyCode::Char('l') | KeyCode::Right => {
-                    if let Screen::Results(state) = &mut app.screen {
-                        if !state.columns.is_empty() {
-                            state.scroll_h = (state.scroll_h + 1).min(state.columns.len().saturating_sub(1));
-                        }
-                        return None;
-                    } else {
-                        return select_current_item(app);
-                    }
-                }
-                KeyCode::Enter => {
-                    if let Screen::Results(state) = &mut app.screen {
-                        let input = state.query_buffer.clone();
-                        let cat = state.catalog.clone();
-                        let sch = state.schema.clone();
-                        let tbl = state.table.clone();
-                        let is_paginated = state.is_paginated;
-
-                        match validate_and_build_query(&input, &cat, &sch, &tbl) {
-                            Ok(full_sql) => {
-                                state.invalid_query_error = None;
-                                return Some(Command::ExecuteQuery {
-                                    query: full_sql,
-                                    is_paginated,
-                                    catalog: cat,
-                                    schema: sch,
-                                    table: tbl,
-                                });
-                            }
-                            Err(err_msg) => {
-                                state.invalid_query_error = Some(err_msg);
-                                return None;
-                            }
-                        }
-                    } else {
-                        return select_current_item(app);
-                    }
-                }
-                KeyCode::Char('g') => {
-                    if let Screen::Results(state) = &mut app.screen {
-                        state.scroll_v = 0;
-                    } else {
-                        mod_list_selected(&mut app.screen, 0);
-                    }
-                    return None;
-                }
-                KeyCode::Char('G') => {
-                    if let Screen::Results(state) = &mut app.screen {
-                        state.scroll_v = state.rows.len().saturating_sub(1);
-                        return check_trigger_infinite_scroll(app);
-                    } else if let Some(items) = extract_list_labels(&app.screen) {
-                        if !items.is_empty() {
-                            mod_list_selected(&mut app.screen, items.len() - 1);
-                        }
-                    }
-                    return None;
-                }
-                KeyCode::Char(' ') => {
-                    if matches!(app.screen, Screen::Table(_) | Screen::Actions(_)) {
-                        info!("Leader mode entered");
-                        app.mode = Mode::Leader { keys: String::new() };
-                    }
-                    return None;
-                }
-                _ => {}
-            }
-        }
-        ActivePanel::PartitionTree => {
-            let max_lines = app.partition_tree_lines.len().saturating_sub(1);
-            match code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
-                    return None;
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    app.partition_scroll = app.partition_scroll.saturating_sub(1);
-                    return None;
-                }
-                KeyCode::Char('g') => {
-                    app.partition_scroll = 0;
-                    return None;
-                }
-                KeyCode::Char('G') => {
-                    app.partition_scroll = max_lines;
-                    return None;
-                }
-                _ => {}
-            }
-        }
-        ActivePanel::SchemaInspector => {
-            let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
-            match code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
-                    return None;
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    app.schema_scroll = app.schema_scroll.saturating_sub(1);
-                    return None;
-                }
-                KeyCode::Char('g') => {
-                    app.schema_scroll = 0;
-                    return None;
-                }
-                KeyCode::Char('G') => {
-                    app.schema_scroll = max_cols;
-                    return None;
-                }
-                _ => {}
-            }
         }
     }
 
@@ -1286,32 +776,26 @@ fn select_current_item(app: &mut App) -> Option<Command> {
             let catalog = s.catalog.clone();
             let schema = s.schema.clone();
             let table = s.items[s.selected].trim().to_string();
+            app.main_panel_pct = 15;
+            app.active_panel = ActivePanel::MenuPane;
+            app.partition_tree_lines.clear();
+            app.vertical_schema_cols.clear();
+            let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
+            let query_len = default_query.len();
             app.screen = Screen::Actions(ActionState {
-                catalog: catalog.clone(),
-                schema: schema.clone(),
-                table: table.clone(),
-                selected: 0,
-            });
-            Some(Command::FetchTableMetadata {
                 catalog,
                 schema,
                 table,
-            })
+                selected: 0,
+                query_buffer: default_query,
+                query_cursor: query_len,
+                results: None,
+            });
+            None
         }
         Screen::Actions(s) => {
-            if ACTIONS.is_empty() {
-                return None;
-            }
-            let (_, _, action) = &ACTIONS[s.selected];
-            let is_paginated = matches!(action, Action::TableView);
-            let query = action.build_query(&s.catalog, &s.schema, &s.table);
-            Some(Command::ExecuteQuery {
-                query,
-                is_paginated,
-                catalog: s.catalog.clone(),
-                schema: s.schema.clone(),
-                table: s.table.clone(),
-            })
+            let idx = s.selected;
+            trigger_action(app, idx)
         }
         _ => None,
     }
@@ -1359,50 +843,167 @@ fn connect_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
     None
 }
 
-fn catalog_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    if matches!(key.code, KeyCode::Enter | KeyCode::Char('l')) {
-        select_current_item(app)
-    } else {
-        None
-    }
-}
-
-fn schema_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    if matches!(key.code, KeyCode::Enter | KeyCode::Char('l')) {
-        select_current_item(app)
-    } else {
-        None
-    }
-}
-
-fn table_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    if key.code == KeyCode::Enter {
-        select_current_item(app)
-    } else {
-        None
-    }
-}
-
-fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    match key.code {
-        KeyCode::Enter | KeyCode::Char('l') => select_current_item(app),
-        KeyCode::Char(c) => {
-            if let Screen::Actions(s) = &app.screen {
-                if let Some(action) = app.action_for(c) {
-                    let is_table_view = matches!(action, Action::TableView);
-                    let query = action.build_query(&s.catalog, &s.schema, &s.table);
-                    return Some(Command::ExecuteQuery {
-                        query,
-                        is_paginated: is_table_view,
-                        catalog: s.catalog.clone(),
-                        schema: s.schema.clone(),
-                        table: s.table.clone(),
-                    });
+fn handle_list_navigation_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    let code = normalize_key_code(key.code);
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(items) = extract_list_labels(&app.screen) {
+                if !items.is_empty() {
+                    if let Some(s) = get_selected(&app.screen) {
+                        mod_list_selected(&mut app.screen, (s + 1).min(items.len() - 1));
+                    }
+                }
+            }
+            None
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(s) = get_selected(&app.screen) {
+                mod_list_selected(&mut app.screen, s.saturating_sub(1));
+            }
+            None
+        }
+        KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => select_current_item(app),
+        KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
+            app.number_buffer.clear();
+            go_back(app);
+            None
+        }
+        KeyCode::Char('g') => {
+            mod_list_selected(&mut app.screen, 0);
+            None
+        }
+        KeyCode::Char('G') => {
+            if let Some(items) = extract_list_labels(&app.screen) {
+                if !items.is_empty() {
+                    mod_list_selected(&mut app.screen, items.len() - 1);
                 }
             }
             None
         }
         _ => None,
+    }
+}
+
+fn catalog_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    handle_list_navigation_keys(app, key)
+}
+
+fn schema_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    handle_list_navigation_keys(app, key)
+}
+
+fn table_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    handle_list_navigation_keys(app, key)
+}
+
+fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    let code = normalize_key_code(key.code);
+
+    if let KeyCode::Char(c) = code {
+        if let Some(pos) = ACTIONS.iter().position(|(k, _, _)| *k == c) {
+            return trigger_action(app, pos);
+        }
+    }
+
+    if let Screen::Actions(ref mut s) = app.screen {
+        match app.active_panel {
+            ActivePanel::MenuPane => match code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    s.selected = (s.selected + 1) % ACTIONS.len();
+                    None
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    s.selected = if s.selected == 0 { ACTIONS.len() - 1 } else { s.selected - 1 };
+                    None
+                }
+                KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+                    let idx = s.selected;
+                    trigger_action(app, idx)
+                }
+                KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
+                    go_back(app);
+                    None
+                }
+                _ => None,
+            },
+            ActivePanel::MainViewer => match code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if s.selected == 7 {
+                        let max_lines = app.partition_tree_lines.len().saturating_sub(1);
+                        app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
+                    } else if s.selected == 8 {
+                        let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
+                        app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
+                    } else if let Some(ref mut res) = s.results {
+                        if !res.rows.is_empty() {
+                            res.scroll_v = (res.scroll_v + 1).min(res.rows.len().saturating_sub(1));
+                        }
+                        return check_trigger_infinite_scroll(app);
+                    }
+                    None
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if s.selected == 7 {
+                        app.partition_scroll = app.partition_scroll.saturating_sub(1);
+                    } else if s.selected == 8 {
+                        app.schema_scroll = app.schema_scroll.saturating_sub(1);
+                    } else if let Some(ref mut res) = s.results {
+                        res.scroll_v = res.scroll_v.saturating_sub(1);
+                    }
+                    None
+                }
+                KeyCode::Char('l') | KeyCode::Right => {
+                    if let Some(ref mut res) = s.results {
+                        if !res.columns.is_empty() {
+                            res.scroll_h = (res.scroll_h + 1).min(res.columns.len().saturating_sub(1));
+                        }
+                    }
+                    None
+                }
+                KeyCode::Char('h') | KeyCode::Left => {
+                    if let Some(ref mut res) = s.results {
+                        res.scroll_h = res.scroll_h.saturating_sub(1);
+                    }
+                    None
+                }
+                KeyCode::Esc => {
+                    app.active_panel = ActivePanel::MenuPane;
+                    None
+                }
+                KeyCode::Char('g') => {
+                    if s.selected == 7 {
+                        app.partition_scroll = 0;
+                    } else if s.selected == 8 {
+                        app.schema_scroll = 0;
+                    } else if let Some(ref mut res) = s.results {
+                        res.scroll_v = 0;
+                        res.scroll_h = 0;
+                    }
+                    None
+                }
+                KeyCode::Char('G') => {
+                    if s.selected == 7 {
+                        app.partition_scroll = app.partition_tree_lines.len().saturating_sub(1);
+                    } else if s.selected == 8 {
+                        app.schema_scroll = app.vertical_schema_cols.len().saturating_sub(1);
+                    } else if let Some(ref mut res) = s.results {
+                        res.scroll_v = res.rows.len().saturating_sub(1);
+                        return check_trigger_infinite_scroll(app);
+                    }
+                    None
+                }
+                KeyCode::Char('q') | KeyCode::Char(':') => {
+                    if s.selected < ACTIONS.len() && matches!(ACTIONS[s.selected].2, Action::TableView) {
+                        app.mode = Mode::QueryInput;
+                    }
+                    None
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    } else {
+        None
     }
 }
 
@@ -1760,14 +1361,19 @@ pub fn dispatch_command(
         Command::ExecuteQuery { query, is_paginated, catalog, schema, table } => {
             let log_id = app.add_query_log(query.clone());
             app.loading = true;
-            app.prev_screen = Some(Box::new(app.screen.clone()));
-
             let (query_buffer, query_cursor) = match &app.screen {
+                Screen::Actions(a) => {
+                    if let Some(ref r) = a.results {
+                        (r.query_buffer.clone(), r.query_cursor)
+                    } else {
+                        (a.query_buffer.clone(), a.query_cursor)
+                    }
+                }
                 Screen::Results(s) => (s.query_buffer.clone(), s.query_cursor),
                 _ => (query.clone(), query.len()),
             };
 
-            app.screen = Screen::Results(ResultsState {
+            let res_state = ResultsState {
                 query: query.clone(),
                 query_buffer: query_buffer.clone(),
                 query_cursor,
@@ -1787,7 +1393,22 @@ pub fn dispatch_command(
                 has_more_rows: true,
                 invalid_query_error: None,
                 selection_anchor: None,
-            });
+            };
+
+            if let Screen::Actions(ref mut a) = app.screen {
+                a.results = Some(res_state);
+            } else {
+                app.prev_screen = Some(Box::new(app.screen.clone()));
+                app.screen = Screen::Actions(ActionState {
+                    catalog: catalog.clone(),
+                    schema: schema.clone(),
+                    table: table.clone(),
+                    selected: 0,
+                    query_buffer: query_buffer.clone(),
+                    query_cursor,
+                    results: Some(res_state),
+                });
+            }
 
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
@@ -1914,7 +1535,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     let cols: Vec<String> = results.columns.iter().map(|c| c.name.clone()).collect();
                     let rows = results.data;
                     let has_more = if is_paginated { rows.len() >= 100 } else { false };
-                    app.screen = Screen::Results(ResultsState {
+                    let res_state = ResultsState {
                         query,
                         query_buffer,
                         query_cursor,
@@ -1925,21 +1546,38 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         loading: false,
                         error: None,
                         is_paginated,
-                        catalog,
-                        schema,
-                        table,
+                        catalog: catalog.clone(),
+                        schema: schema.clone(),
+                        table: table.clone(),
                         offset: 0,
                         page_size: 100,
                         is_fetching_next_page: false,
                         has_more_rows: has_more,
                         invalid_query_error: None,
                         selection_anchor: None,
-                    });
+                    };
+
+                    let cur_selected = if let Screen::Actions(ref a) = app.screen { a.selected } else { 0 };
+                    if let Screen::Actions(ref mut a) = app.screen {
+                        a.results = Some(res_state);
+                    } else {
+                        let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
+                        let query_len = default_query.len();
+                        app.screen = Screen::Actions(ActionState {
+                            catalog,
+                            schema,
+                            table,
+                            selected: cur_selected,
+                            query_buffer: default_query,
+                            query_cursor: query_len,
+                            results: Some(res_state),
+                        });
+                    }
                 }
                 Err(e) => {
                     error!(error = %e, "Execute query failed");
                     app.complete_query_log_error(log_id, e.clone());
-                    app.screen = Screen::Results(ResultsState {
+                    let res_state = ResultsState {
                         query,
                         query_buffer,
                         query_cursor,
@@ -1950,16 +1588,33 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         loading: false,
                         error: Some(e),
                         is_paginated: false,
-                        catalog,
-                        schema,
-                        table,
+                        catalog: catalog.clone(),
+                        schema: schema.clone(),
+                        table: table.clone(),
                         offset: 0,
                         page_size: 100,
                         is_fetching_next_page: false,
                         has_more_rows: false,
                         invalid_query_error: None,
                         selection_anchor: None,
-                    });
+                    };
+
+                    let cur_selected = if let Screen::Actions(ref a) = app.screen { a.selected } else { 0 };
+                    if let Screen::Actions(ref mut a) = app.screen {
+                        a.results = Some(res_state);
+                    } else {
+                        let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
+                        let query_len = default_query.len();
+                        app.screen = Screen::Actions(ActionState {
+                            catalog,
+                            schema,
+                            table,
+                            selected: cur_selected,
+                            query_buffer: default_query,
+                            query_cursor: query_len,
+                            results: Some(res_state),
+                        });
+                    }
                 }
             }
         }

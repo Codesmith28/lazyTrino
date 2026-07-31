@@ -46,8 +46,11 @@ pub struct VerticalColumn {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ActivePanel {
+    MenuPane,
     MainViewer,
+    #[allow(dead_code)]
     PartitionTree,
+    #[allow(dead_code)]
     SchemaInspector,
 }
 
@@ -107,6 +110,9 @@ pub struct ActionState {
     pub schema: String,
     pub table: String,
     pub selected: usize,
+    pub query_buffer: String,
+    pub query_cursor: usize,
+    pub results: Option<ResultsState>,
 }
 
 #[derive(Clone)]
@@ -146,6 +152,7 @@ impl ResultsState {
         None
     }
 
+    #[allow(dead_code)]
     pub fn delete_selection(&mut self) -> bool {
         if let Some((start, end)) = self.selection_range() {
             let start = start.min(self.query_buffer.len());
@@ -160,10 +167,12 @@ impl ResultsState {
         false
     }
 
+    #[allow(dead_code)]
     pub fn clear_selection(&mut self) {
         self.selection_anchor = None;
     }
 
+    #[allow(dead_code)]
     pub fn select_all(&mut self) {
         self.selection_anchor = Some(0);
         self.query_cursor = self.query_buffer.len();
@@ -177,12 +186,14 @@ pub enum Screen {
     Schema(SchemaState),
     Table(TableState),
     Actions(ActionState),
+    #[allow(dead_code)]
     Results(ResultsState),
     Help,
 }
 
 pub enum Mode {
     Normal,
+    #[allow(dead_code)]
     Leader {
         #[allow(dead_code)]
         keys: String,
@@ -191,39 +202,44 @@ pub enum Mode {
     QueryInput,
 }
 
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
+    TableView,
     Describe,
     TableDDL,
     InfoSchema,
     ShowStats,
     Count,
     Sample,
-    TableView,
     Partitions,
+    Schema,
 }
 
 pub const ACTIONS: &[(char, &str, Action)] = &[
+    ('v', "Table View Mode", Action::TableView),
     ('d', "Describe", Action::Describe),
     ('c', "Table DDL", Action::TableDDL),
     ('i', "Info Schema", Action::InfoSchema),
     ('s', "Show Stats", Action::ShowStats),
     ('n', "Count", Action::Count),
     ('p', "Sample Mode (20 rows)", Action::Sample),
-    ('v', "Table View Mode (Infinite Scroll)", Action::TableView),
     ('P', "Partitions", Action::Partitions),
+    ('S', "Schema", Action::Schema),
 ];
 
 impl Action {
     pub fn build_query(&self, catalog: &str, schema: &str, table: &str) -> String {
         match self {
+            Action::TableView => crate::trino::queries::page_query(catalog, schema, table, 0, 100),
             Action::Describe => crate::trino::queries::describe(catalog, schema, table),
             Action::TableDDL => crate::trino::queries::show_create(catalog, schema, table),
             Action::InfoSchema => crate::trino::queries::info_schema_columns(catalog, schema, table),
             Action::ShowStats => crate::trino::queries::show_stats(catalog, schema, table),
             Action::Count => crate::trino::queries::count(catalog, schema, table),
             Action::Sample => crate::trino::queries::sample(catalog, schema, table),
-            Action::TableView => crate::trino::queries::page_query(catalog, schema, table, 0, 100),
             Action::Partitions => crate::trino::queries::partitions(catalog, schema, table),
+            Action::Schema => crate::trino::queries::describe(catalog, schema, table),
         }
     }
 }
@@ -254,7 +270,9 @@ pub struct App {
     pub main_panel_pct: u16,
     pub control_panel_split_pct: u16,
     pub is_dragging_resizer: bool,
+    #[allow(dead_code)]
     pub is_dragging_v_resizer: bool,
+    #[allow(dead_code)]
     pub is_dragging_query_select: bool,
     pub query_inspector_scroll: usize,
     pub mouse_selection_anchor: Option<(u16, u16)>,
