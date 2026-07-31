@@ -131,6 +131,43 @@ pub struct ResultsState {
     pub is_fetching_next_page: bool,
     pub has_more_rows: bool,
     pub invalid_query_error: Option<String>,
+    pub selection_anchor: Option<usize>,
+}
+
+impl ResultsState {
+    pub fn selection_range(&self) -> Option<(usize, usize)> {
+        if let Some(anchor) = self.selection_anchor {
+            if anchor != self.query_cursor {
+                let start = anchor.min(self.query_cursor);
+                let end = anchor.max(self.query_cursor);
+                return Some((start, end));
+            }
+        }
+        None
+    }
+
+    pub fn delete_selection(&mut self) -> bool {
+        if let Some((start, end)) = self.selection_range() {
+            let start = start.min(self.query_buffer.len());
+            let end = end.min(self.query_buffer.len());
+            if start < end {
+                self.query_buffer.drain(start..end);
+                self.query_cursor = start;
+                self.selection_anchor = None;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+    }
+
+    pub fn select_all(&mut self) {
+        self.selection_anchor = Some(0);
+        self.query_cursor = self.query_buffer.len();
+    }
 }
 
 #[derive(Clone)]

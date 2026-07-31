@@ -91,62 +91,32 @@ pub fn validate_and_build_query(
         return Ok(crate::trino::queries::page_query(catalog, schema, table, 0, 100));
     }
 
-    let full_target = format!("{catalog}.{schema}.{table}");
-    let schema_target = format!("{schema}.{table}");
+    let full_target = format!("{catalog}.{schema}.{table}").to_lowercase();
+    let schema_target = format!("{schema}.{table}").to_lowercase();
+    let table_target = table.to_lowercase();
 
     let extracted_tables = extract_from_tables(trimmed);
 
-    if !extracted_tables.is_empty() {
-        for t in &extracted_tables {
-            let normalized = t.trim().trim_matches(|c| c == '"' || c == '`' || c == '\'').to_lowercase();
-            let matches_table = normalized == table.to_lowercase()
-                || normalized == schema_target.to_lowercase()
-                || normalized == full_target.to_lowercase();
-            if !matches_table {
-                return Err(format!(
-                    "Query targets table '{}', but current view scope is '{}.{}.{}'. Queries in this view must operate on table '{}'.",
-                    t, catalog, schema, table, table
-                ));
-            }
-        }
-        Ok(trimmed.to_string())
-    } else {
-        let upper_input = trimmed.to_uppercase();
-        if upper_input.starts_with("SELECT") {
-            let clause_keywords = [" WHERE ", " GROUP BY ", " HAVING ", " ORDER BY ", " LIMIT "];
-            let mut insert_idx = None;
-            for kw in &clause_keywords {
-                if let Some(pos) = upper_input.find(kw) {
-                    if insert_idx.map_or(true, |p| pos < p) {
-                        insert_idx = Some(pos);
-                    }
-                }
-            }
-            if let Some(pos) = insert_idx {
-                let (select_part, rest) = trimmed.split_at(pos);
-                Ok(format!("{select_part} FROM {full_target}{rest}"))
-            } else {
-                Ok(format!("{trimmed} FROM {full_target}"))
-            }
-        } else if upper_input.starts_with("WHERE")
-            || upper_input.starts_with("GROUP BY")
-            || upper_input.starts_with("HAVING")
-            || upper_input.starts_with("ORDER BY")
-            || upper_input.starts_with("LIMIT")
-        {
-            Ok(format!("SELECT * FROM {full_target} {trimmed}"))
-        } else if upper_input.contains('=')
-            || upper_input.contains('>')
-            || upper_input.contains('<')
-            || upper_input.contains(" LIKE ")
-            || upper_input.contains(" IN ")
-            || upper_input.contains(" IS ")
-        {
-            Ok(format!("SELECT * FROM {full_target} WHERE {trimmed}"))
-        } else {
-            Ok(format!("SELECT {trimmed} FROM {full_target}"))
+    if extracted_tables.is_empty() {
+        return Err(format!(
+            "Invalid query: Please enter a full SQL query targeting table '{table}' (e.g. SELECT * FROM {table} WHERE ...)."
+        ));
+    }
+
+    for t in &extracted_tables {
+        let normalized = t.replace('"', "").replace('`', "").replace('\'', "").to_lowercase();
+        let matches_table = normalized == table_target
+            || normalized == schema_target
+            || normalized == full_target;
+        if !matches_table {
+            return Err(format!(
+                "Query targets table '{}', but current view scope is '{}.{}.{}'. Queries in this view must operate on table '{}'.",
+                t, catalog, schema, table, table
+            ));
         }
     }
+
+    Ok(trimmed.to_string())
 }
 
 fn check_trigger_infinite_scroll(app: &mut App) -> Option<Command> {
@@ -397,6 +367,52 @@ fn normalize_key_code(code: KeyCode) -> KeyCode {
         KeyCode::Char('¬') => KeyCode::Char('l'),
         KeyCode::Char('©') => KeyCode::Char('g'),
         _ => code,
+    }
+}
+
+fn is_enter_key(code: KeyCode) -> bool {
+    matches!(code, KeyCode::Enter | KeyCode::Char('\r') | KeyCode::Char('\n'))
+}
+
+fn prev_word_pos(s: &str, cursor: usize) -> usize {
+    if cursor == 0 {
+        return 0;
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = cursor.min(chars.len());
+    while i > 0 && chars[i - 1].is_whitespace() {
+        i -= 1;
+    }
+    while i > 0 && !chars[i - 1].is_whitespace() {
+        i -= 1;
+    }
+    i
+}
+
+fn next_word_pos(s: &str, cursor: usize) -> usize {
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    let mut i = cursor.min(len);
+    while i < len && !chars[i].is_whitespace() {
+        i += 1;
+    }
+    while i < len && chars[i].is_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+fn copy_to_clipboard(text: &str) {
+    if let Ok(mut board) = arboard::Clipboard::new() {
+        let _ = board.set_text(text);
+    }
+}
+
+fn paste_from_clipboard() -> Option<String> {
+    if let Ok(mut board) = arboard::Clipboard::new() {
+        board.get_text().ok()
+    } else {
+        None
     }
 }
 
@@ -687,66 +703,235 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
 
     if matches!(app.mode, Mode::QueryInput) {
         if let Screen::Results(ref mut state) = app.screen {
-            match code {
-                KeyCode::Esc => {
-                    app.mode = Mode::Normal;
-                    return None;
-                }
-                KeyCode::Enter => {
-                    app.mode = Mode::Normal;
-                    let input = state.query_buffer.clone();
-                    let cat = state.catalog.clone();
-                    let sch = state.schema.clone();
-                    let tbl = state.table.clone();
-                    let is_paginated = state.is_paginated;
+            let alt = key.modifiers.contains(KeyModifiers::ALT) || is_mac_option_code(key.code);
+            let super_cmd = key.modifiers.contains(KeyModifiers::SUPER) || key.modifiers.contains(KeyModifiers::CONTROL);
+            let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
-                    match validate_and_build_query(&input, &cat, &sch, &tbl) {
-                        Ok(full_sql) => {
-                            state.invalid_query_error = None;
-                            return Some(Command::ExecuteQuery {
-                                query: full_sql,
-                                is_paginated,
-                                catalog: cat,
-                                schema: sch,
-                                table: tbl,
-                            });
-                        }
-                        Err(err_msg) => {
-                            state.invalid_query_error = Some(err_msg);
-                            return None;
-                        }
+            if is_enter_key(code) {
+                app.mode = Mode::Normal;
+                state.clear_selection();
+                let input = state.query_buffer.clone();
+                let cat = state.catalog.clone();
+                let sch = state.schema.clone();
+                let tbl = state.table.clone();
+                let is_paginated = state.is_paginated;
+
+                match validate_and_build_query(&input, &cat, &sch, &tbl) {
+                    Ok(full_sql) => {
+                        state.invalid_query_error = None;
+                        return Some(Command::ExecuteQuery {
+                            query: full_sql,
+                            is_paginated,
+                            catalog: cat,
+                            schema: sch,
+                            table: tbl,
+                        });
+                    }
+                    Err(err_msg) => {
+                        state.invalid_query_error = Some(err_msg);
+                        return None;
                     }
                 }
-                KeyCode::Backspace => {
-                    if state.query_cursor > 0 && !state.query_buffer.is_empty() {
-                        let idx = state.query_cursor - 1;
-                        state.query_buffer.remove(idx);
-                        state.query_cursor -= 1;
-                    }
+            }
+
+            if code == KeyCode::Esc {
+                app.mode = Mode::Normal;
+                state.clear_selection();
+                return None;
+            }
+
+            // Select All: Cmd+A / Ctrl+A
+            if super_cmd && (code == KeyCode::Char('a') || code == KeyCode::Char('A')) {
+                state.select_all();
+                return None;
+            }
+
+            // Copy: Cmd+C / Ctrl+C
+            if super_cmd && (code == KeyCode::Char('c') || code == KeyCode::Char('C')) {
+                if let Some((start, end)) = state.selection_range() {
+                    copy_to_clipboard(&state.query_buffer[start..end]);
+                } else {
+                    copy_to_clipboard(&state.query_buffer);
                 }
-                KeyCode::Delete => {
-                    if state.query_cursor < state.query_buffer.len() {
-                        state.query_buffer.remove(state.query_cursor);
-                    }
+                return None;
+            }
+
+            // Cut: Cmd+X / Ctrl+X
+            if super_cmd && (code == KeyCode::Char('x') || code == KeyCode::Char('X')) {
+                if let Some((start, end)) = state.selection_range() {
+                    copy_to_clipboard(&state.query_buffer[start..end]);
+                    state.delete_selection();
                 }
-                KeyCode::Left => {
-                    state.query_cursor = state.query_cursor.saturating_sub(1);
+                return None;
+            }
+
+            // Paste: Cmd+V / Ctrl+V / Ctrl+Y
+            if super_cmd && (code == KeyCode::Char('v') || code == KeyCode::Char('V') || code == KeyCode::Char('y')) {
+                if let Some(clip) = paste_from_clipboard() {
+                    state.delete_selection();
+                    let idx = state.query_cursor.min(state.query_buffer.len());
+                    state.query_buffer.insert_str(idx, &clip);
+                    state.query_cursor += clip.len();
+                    state.clear_selection();
                 }
-                KeyCode::Right => {
-                    state.query_cursor = (state.query_cursor + 1).min(state.query_buffer.len());
+                return None;
+            }
+
+            // Word Delete Backward: Option+Backspace / Alt+Backspace / Ctrl+W / 'å' / 'w' with Alt/Ctrl
+            if (alt && code == KeyCode::Backspace)
+                || (super_cmd && code == KeyCode::Char('w'))
+                || (code == KeyCode::Char('å') || code == KeyCode::Char('Å'))
+                || (alt && code == KeyCode::Char('w'))
+            {
+                if !state.delete_selection() && state.query_cursor > 0 {
+                    let prev = prev_word_pos(&state.query_buffer, state.query_cursor);
+                    state.query_buffer.drain(prev..state.query_cursor);
+                    state.query_cursor = prev;
                 }
-                KeyCode::Home => {
+                state.clear_selection();
+                return None;
+            }
+
+            // Line Delete Backward: Cmd+Backspace / Super+Backspace / Ctrl+U
+            if (super_cmd && code == KeyCode::Backspace) || (super_cmd && code == KeyCode::Char('u')) {
+                if !state.delete_selection() && state.query_cursor > 0 {
+                    state.query_buffer.drain(0..state.query_cursor);
                     state.query_cursor = 0;
                 }
-                KeyCode::End => {
-                    state.query_cursor = state.query_buffer.len();
+                state.clear_selection();
+                return None;
+            }
+
+            // Word Delete Forward: Option+Delete / Alt+Delete
+            if alt && code == KeyCode::Delete {
+                if !state.delete_selection() && state.query_cursor < state.query_buffer.len() {
+                    let next = next_word_pos(&state.query_buffer, state.query_cursor);
+                    state.query_buffer.drain(state.query_cursor..next);
                 }
-                KeyCode::Char(c) => {
+                state.clear_selection();
+                return None;
+            }
+
+            // Line Delete Forward: Cmd+Delete / Super+Delete / Ctrl+K
+            if (super_cmd && code == KeyCode::Delete) || (super_cmd && code == KeyCode::Char('k')) {
+                if !state.delete_selection() && state.query_cursor < state.query_buffer.len() {
+                    state.query_buffer.truncate(state.query_cursor);
+                }
+                state.clear_selection();
+                return None;
+            }
+
+            // Single Backspace
+            if code == KeyCode::Backspace {
+                if !state.delete_selection() && state.query_cursor > 0 {
+                    let idx = state.query_cursor - 1;
+                    state.query_buffer.remove(idx);
+                    state.query_cursor -= 1;
+                }
+                state.clear_selection();
+                return None;
+            }
+
+            // Single Delete
+            if code == KeyCode::Delete {
+                if !state.delete_selection() && state.query_cursor < state.query_buffer.len() {
+                    state.query_buffer.remove(state.query_cursor);
+                }
+                state.clear_selection();
+                return None;
+            }
+
+            // Word Jump Left: Option+Left / Alt+Left / Option+b / '∫'
+            if (alt && code == KeyCode::Left) || (alt && (code == KeyCode::Char('b') || code == KeyCode::Char('B'))) || code == KeyCode::Char('∫') {
+                let next_pos = prev_word_pos(&state.query_buffer, state.query_cursor);
+                if shift {
+                    if state.selection_anchor.is_none() {
+                        state.selection_anchor = Some(state.query_cursor);
+                    }
+                } else {
+                    state.clear_selection();
+                }
+                state.query_cursor = next_pos;
+                return None;
+            }
+
+            // Word Jump Right: Option+Right / Alt+Right / Option+f / 'ƒ'
+            if (alt && code == KeyCode::Right) || (alt && (code == KeyCode::Char('f') || code == KeyCode::Char('F'))) || code == KeyCode::Char('ƒ') {
+                let next_pos = next_word_pos(&state.query_buffer, state.query_cursor);
+                if shift {
+                    if state.selection_anchor.is_none() {
+                        state.selection_anchor = Some(state.query_cursor);
+                    }
+                } else {
+                    state.clear_selection();
+                }
+                state.query_cursor = next_pos;
+                return None;
+            }
+
+            // Line Jump Left / Home: Cmd+Left / Home
+            if (super_cmd && code == KeyCode::Left) || code == KeyCode::Home {
+                if shift {
+                    if state.selection_anchor.is_none() {
+                        state.selection_anchor = Some(state.query_cursor);
+                    }
+                } else {
+                    state.clear_selection();
+                }
+                state.query_cursor = 0;
+                return None;
+            }
+
+            // Line Jump Right / End: Cmd+Right / End
+            if (super_cmd && code == KeyCode::Right) || code == KeyCode::End {
+                if shift {
+                    if state.selection_anchor.is_none() {
+                        state.selection_anchor = Some(state.query_cursor);
+                    }
+                } else {
+                    state.clear_selection();
+                }
+                state.query_cursor = state.query_buffer.len();
+                return None;
+            }
+
+            // Arrow Left
+            if code == KeyCode::Left {
+                let next_pos = state.query_cursor.saturating_sub(1);
+                if shift {
+                    if state.selection_anchor.is_none() {
+                        state.selection_anchor = Some(state.query_cursor);
+                    }
+                } else {
+                    state.clear_selection();
+                }
+                state.query_cursor = next_pos;
+                return None;
+            }
+
+            // Arrow Right
+            if code == KeyCode::Right {
+                let next_pos = (state.query_cursor + 1).min(state.query_buffer.len());
+                if shift {
+                    if state.selection_anchor.is_none() {
+                        state.selection_anchor = Some(state.query_cursor);
+                    }
+                } else {
+                    state.clear_selection();
+                }
+                state.query_cursor = next_pos;
+                return None;
+            }
+
+            // Normal Char insertion
+            if let KeyCode::Char(c) = code {
+                if c != '\r' && c != '\n' && c != 'å' && c != 'Å' && c != '∫' && c != 'ƒ' {
+                    state.delete_selection();
                     let idx = state.query_cursor.min(state.query_buffer.len());
                     state.query_buffer.insert(idx, c);
                     state.query_cursor += 1;
+                    state.clear_selection();
                 }
-                _ => {}
             }
         } else {
             app.mode = Mode::Normal;
@@ -858,8 +1043,29 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
                     }
                 }
                 KeyCode::Enter => {
-                    if matches!(app.screen, Screen::Results(_)) {
-                        return None;
+                    if let Screen::Results(state) = &mut app.screen {
+                        let input = state.query_buffer.clone();
+                        let cat = state.catalog.clone();
+                        let sch = state.schema.clone();
+                        let tbl = state.table.clone();
+                        let is_paginated = state.is_paginated;
+
+                        match validate_and_build_query(&input, &cat, &sch, &tbl) {
+                            Ok(full_sql) => {
+                                state.invalid_query_error = None;
+                                return Some(Command::ExecuteQuery {
+                                    query: full_sql,
+                                    is_paginated,
+                                    catalog: cat,
+                                    schema: sch,
+                                    table: tbl,
+                                });
+                            }
+                            Err(err_msg) => {
+                                state.invalid_query_error = Some(err_msg);
+                                return None;
+                            }
+                        }
                     } else {
                         return select_current_item(app);
                     }
@@ -1123,6 +1329,31 @@ fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
 fn results_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
     if let Screen::Results(state) = &mut app.screen {
         let code = normalize_key_code(key.code);
+        if is_enter_key(code) {
+            let input = state.query_buffer.clone();
+            let cat = state.catalog.clone();
+            let sch = state.schema.clone();
+            let tbl = state.table.clone();
+            let is_paginated = state.is_paginated;
+
+            match validate_and_build_query(&input, &cat, &sch, &tbl) {
+                Ok(full_sql) => {
+                    state.invalid_query_error = None;
+                    return Some(Command::ExecuteQuery {
+                        query: full_sql,
+                        is_paginated,
+                        catalog: cat,
+                        schema: sch,
+                        table: tbl,
+                    });
+                }
+                Err(err_msg) => {
+                    state.invalid_query_error = Some(err_msg);
+                    return None;
+                }
+            }
+        }
+
         match code {
             KeyCode::Char('q') | KeyCode::Char(':') => {
                 app.mode = Mode::QueryInput;
@@ -1339,6 +1570,7 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                 is_fetching_next_page: false,
                 has_more_rows: true,
                 invalid_query_error: None,
+                selection_anchor: None,
             });
             match client.execute(&query).await {
                 Ok(results) => {
@@ -1366,6 +1598,7 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                         is_fetching_next_page: false,
                         has_more_rows: has_more,
                         invalid_query_error: None,
+                        selection_anchor: None,
                     });
                 }
                 Err(e) => {
@@ -1390,6 +1623,7 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                         is_fetching_next_page: false,
                         has_more_rows: false,
                         invalid_query_error: None,
+                        selection_anchor: None,
                     });
                 }
             }
@@ -1452,49 +1686,22 @@ mod tests {
     }
 
     #[test]
-    fn test_partial_query_where_clause() {
+    fn test_full_query_table_name() {
         let res = validate_and_build_query(
-            "WHERE status = 'ACTIVE'",
+            "SELECT * FROM some_table WHERE status = 'ACTIVE'",
             "datalake",
             "some_db",
             "some_table",
         );
+        assert!(res.is_ok());
         assert_eq!(
             res.unwrap(),
-            "SELECT * FROM datalake.some_db.some_table WHERE status = 'ACTIVE'"
+            "SELECT * FROM some_table WHERE status = 'ACTIVE'"
         );
     }
 
     #[test]
-    fn test_partial_query_select_where() {
-        let res = validate_and_build_query(
-            "SELECT name, age WHERE age > 25",
-            "datalake",
-            "some_db",
-            "some_table",
-        );
-        assert_eq!(
-            res.unwrap(),
-            "SELECT name, age FROM datalake.some_db.some_table WHERE age > 25"
-        );
-    }
-
-    #[test]
-    fn test_partial_query_order_by() {
-        let res = validate_and_build_query(
-            "ORDER BY created_at DESC LIMIT 10",
-            "datalake",
-            "some_db",
-            "some_table",
-        );
-        assert_eq!(
-            res.unwrap(),
-            "SELECT * FROM datalake.some_db.some_table ORDER BY created_at DESC LIMIT 10"
-        );
-    }
-
-    #[test]
-    fn test_valid_full_query_same_table() {
+    fn test_full_query_qualified() {
         let res = validate_and_build_query(
             "SELECT * FROM datalake.some_db.some_table WHERE age > 10",
             "datalake",
@@ -1509,6 +1716,48 @@ mod tests {
     }
 
     #[test]
+    fn test_missing_from_clause() {
+        let res = validate_and_build_query(
+            "WHERE age > 10",
+            "datalake",
+            "some_db",
+            "some_table",
+        );
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Please enter a full SQL query"));
+    }
+
+    #[test]
+    fn test_quoted_table_query() {
+        let res = validate_and_build_query(
+            "SELECT * FROM \"datalake\".\"some_db\".\"some_table\" OFFSET 0 LIMIT 100",
+            "datalake",
+            "some_db",
+            "some_table",
+        );
+        assert!(res.is_ok());
+        assert_eq!(
+            res.unwrap(),
+            "SELECT * FROM \"datalake\".\"some_db\".\"some_table\" OFFSET 0 LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn test_partially_quoted_table_query() {
+        let res = validate_and_build_query(
+            "SELECT * FROM \"some_db\".\"some_table\"",
+            "datalake",
+            "some_db",
+            "some_table",
+        );
+        assert!(res.is_ok());
+        assert_eq!(
+            res.unwrap(),
+            "SELECT * FROM \"some_db\".\"some_table\""
+        );
+    }
+
+    #[test]
     fn test_invalid_query_different_table() {
         let res = validate_and_build_query(
             "SELECT * FROM table_a WHERE age > 10",
@@ -1518,6 +1767,15 @@ mod tests {
         );
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Query targets table 'table_a'"));
+    }
+
+    #[test]
+    fn test_word_navigation() {
+        let text = "SELECT * FROM orders";
+        assert_eq!(prev_word_pos(text, 20), 14);
+        assert_eq!(prev_word_pos(text, 14), 9);
+        assert_eq!(next_word_pos(text, 0), 7);
+        assert_eq!(next_word_pos(text, 7), 9);
     }
 
     #[test]
