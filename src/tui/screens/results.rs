@@ -143,6 +143,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
         return;
     }
 
+    if let Some(err) = &state.error {
+        let err = Paragraph::new(err.as_str())
+            .style(Style::default().fg(Color::Red))
+            .wrap(ratatui::widgets::Wrap { trim: false });
+        frame.render_widget(err, inner);
+        return;
+    }
+
     if state.columns.is_empty() && state.rows.is_empty() {
         let empty = Paragraph::new("No results returned")
             .style(Style::default().fg(Color::Gray))

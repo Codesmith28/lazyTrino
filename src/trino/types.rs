@@ -16,12 +16,6 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct TrinoResponse {
-    #[allow(dead_code)]
-    #[serde(default)]
-    pub id: Option<String>,
-    #[allow(dead_code)]
-    #[serde(rename = "infoUri", default)]
-    pub info_uri: Option<String>,
     #[serde(rename = "nextUri", default)]
     pub next_uri: Option<String>,
     #[serde(default)]
@@ -35,21 +29,12 @@ pub struct TrinoResponse {
 #[derive(Debug, Deserialize, Clone)]
 pub struct Column {
     pub name: String,
-    #[allow(dead_code)]
-    #[serde(rename = "type")]
-    pub type_: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct TrinoError {
     #[serde(default)]
     pub message: Option<String>,
-    #[allow(dead_code)]
-    #[serde(rename = "errorCode", default)]
-    pub error_code: Option<u32>,
-    #[allow(dead_code)]
-    #[serde(rename = "errorName", default)]
-    pub error_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
