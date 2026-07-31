@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph},
 };
 
-use crate::app::{ActivePanel, App, Mode, Screen};
+use crate::app::{ACTIONS, Action, ActivePanel, App, Mode, Screen};
 
 use super::{screens, theme};
 
@@ -133,14 +133,13 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
     let visible_lines = area.height.saturating_sub(2).max(1) as usize;
 
     let mut scroll_y: u16 = 0;
-    if is_editing
-        && let Some(pos) = cursor_pos {
-            let cursor_index = 7 + pos;
-            let line_offset = cursor_index / inner_w;
-            if line_offset >= visible_lines {
-                scroll_y = (line_offset - visible_lines + 1) as u16;
-            }
+    if is_editing && let Some(pos) = cursor_pos {
+        let cursor_index = 7 + pos;
+        let line_offset = cursor_index / inner_w;
+        if line_offset >= visible_lines {
+            scroll_y = (line_offset - visible_lines + 1) as u16;
         }
+    }
 
     let mut line_spans = vec![Span::styled(" SQL > ", theme::warning_style())];
     line_spans.extend(spans);
@@ -151,19 +150,92 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
         .scroll((scroll_y, 0));
     frame.render_widget(p, area);
 
-    if is_editing
-        && let Some(pos) = cursor_pos {
-            let cursor_index = 7 + pos;
-            let line_offset = cursor_index / inner_w;
-            let col_offset = cursor_index % inner_w;
+    if is_editing && let Some(pos) = cursor_pos {
+        let cursor_index = 7 + pos;
+        let line_offset = cursor_index / inner_w;
+        let col_offset = cursor_index % inner_w;
 
-            let rel_line = line_offset.saturating_sub(scroll_y as usize);
-            let cursor_x = area.x + 1 + (col_offset as u16);
-            let cursor_y = area.y + 1 + (rel_line as u16);
-            if cursor_y < area.y + area.height - 1 && cursor_x < area.x + area.width - 1 {
-                frame.set_cursor_position((cursor_x, cursor_y));
-            }
+        let rel_line = line_offset.saturating_sub(scroll_y as usize);
+        let cursor_x = area.x + 1 + (col_offset as u16);
+        let cursor_y = area.y + 1 + (rel_line as u16);
+        if cursor_y < area.y + area.height - 1 && cursor_x < area.x + area.width - 1 {
+            frame.set_cursor_position((cursor_x, cursor_y));
         }
+    }
+}
+
+fn footer_hint(app: &App) -> Option<&'static str> {
+    match app.mode {
+        Mode::Search => Some(" Type:filter  Bksp:del  Enter:close  Esc:clear "),
+        Mode::QueryInput => Some(" Enter:run  Esc:cancel  Ctrl+A:all  Ctrl+C:copy  Ctrl+V:paste "),
+        Mode::Normal => match &app.screen {
+            Screen::Connect(_) => Some(" Tab:next field  Enter:connect  ?:help  Ctrl+C:quit "),
+            Screen::Catalog(_) => Some(" j/k:move  l/Enter:select  /:search  ?:help  Ctrl+C:quit "),
+            Screen::Schema(_) | Screen::Table(_) => {
+                Some(" j/k:move  l/Enter:select  h/Esc:back  /:search  ?:help  Ctrl+C:quit ")
+            }
+            Screen::Actions(state) => {
+                let selected_action = ACTIONS.get(state.selected).map(|(_, _, action)| *action);
+
+                match app.active_panel {
+                    ActivePanel::MenuPane => Some(
+                        " j/k:move  l/Enter:run  h/Esc:back  v/d/c/P/S:action  Tab:pane  ?:help  Ctrl+C:quit ",
+                    ),
+                    ActivePanel::MainViewer => match selected_action {
+                        Some(Action::TableView) if state.results.is_some() => Some(
+                            " j/k:rows  h/l:cols  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/d/c/P/S:action  ?:help  Ctrl+C:quit ",
+                        ),
+                        Some(Action::Partitions) if !app.partition_tree_lines.is_empty() => Some(
+                            " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/d/c/P/S:action  ?:help  Ctrl+C:quit ",
+                        ),
+                        Some(Action::Schema) if !app.vertical_schema_cols.is_empty() => Some(
+                            " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/d/c/P/S:action  ?:help  Ctrl+C:quit ",
+                        ),
+                        _ if state.results.is_some() => Some(
+                            " j/k:rows  h/l:cols  g/G:top/btm  Esc:menu  Tab:pane  v/d/c/P/S:action  ?:help  Ctrl+C:quit ",
+                        ),
+                        Some(Action::TableView) => Some(
+                            " q/:query  Esc:menu  Tab:pane  v/d/c/P/S:action  ?:help  Ctrl+C:quit ",
+                        ),
+                        _ => Some(" Esc:menu  Tab:pane  v/d/c/P/S:action  ?:help  Ctrl+C:quit "),
+                    },
+                }
+            }
+            Screen::Help => None,
+        },
+    }
+}
+
+fn truncate_hint(hint: &str, width: usize) -> String {
+    if hint.chars().count() <= width {
+        return hint.to_string();
+    }
+
+    if width <= 1 {
+        return "…".to_string();
+    }
+
+    let mut truncated = hint.chars().take(width - 1).collect::<String>();
+    while truncated.ends_with(' ') {
+        truncated.pop();
+    }
+    truncated.push('…');
+    truncated
+}
+
+fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let Some(hint) = footer_hint(app) else {
+        return;
+    };
+
+    let footer = Paragraph::new(Line::from(truncate_hint(hint, area.width as usize)))
+        .style(theme::footer_style())
+        .wrap(ratatui::widgets::Wrap { trim: true });
+    frame.render_widget(footer, area);
 }
 
 pub(super) fn ui(frame: &mut Frame, app: &App) {
@@ -176,6 +248,8 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
 
             let outer_chunks =
                 Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).split(frame.area());
+            let bottom_chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(1)])
+                .split(outer_chunks[1]);
 
             if !is_in_table {
                 // Phase 1: Default All Tables View (Connect, Catalog, Schema, Table) -> Default 60% list ratio
@@ -460,7 +534,10 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                 }
             }
 
-            screens::query_inspector::render(frame, outer_chunks[1], app);
+            if bottom_chunks[0].height > 0 {
+                screens::query_inspector::render(frame, bottom_chunks[0], app);
+            }
+            render_footer(frame, bottom_chunks[1], app);
         }
     }
 }
