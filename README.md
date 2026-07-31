@@ -86,8 +86,12 @@ Launch `lazyTrino` using the generated binary or via `make run`:
 | `--url` | | `http://localhost:8080` | Trino coordinator REST server URL |
 | `--user` | | `$USER` (or `trino`) | Trino username |
 | `--password` | `--pass` | *(none)* | Trino password (optional) |
+| `--log-level <LEVEL>` | | `info` | Override the default log level when `RUST_LOG` is not set (`trace`, `debug`, `info`, `warn`, `error`) |
+| `--no-log` | | `false` | Disable file logging |
 | `-h`, `--help` | | | Print CLI help information |
 | `-V`, `--version` | | | Print version information |
+
+Logs are written to an OS-specific cache directory by default (for example `~/.cache/lazytrino/lazytrino.log` on Linux or `~/Library/Caches/lazytrino/lazytrino.log` on macOS). Use `--no-log` to disable file logging entirely.
 
 ---
 
