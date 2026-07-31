@@ -66,9 +66,10 @@ pub struct ConnectState {
 
 impl Default for ConnectState {
     fn default() -> Self {
+        let default_config = ConnectionConfig::default();
         Self {
-            url: "http://localhost:57574".to_string(),
-            user: "sarthak".to_string(),
+            url: default_config.url,
+            user: default_config.user,
             password: String::new(),
             focused: 0,
             loading: false,
