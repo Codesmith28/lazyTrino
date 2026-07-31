@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::*;
 
-use super::Command;
+use super::{Command, export};
 
 pub(super) fn check_trigger_infinite_scroll(app: &mut App) -> Option<Command> {
     if let Screen::Actions(ref mut action_state) = app.screen
@@ -532,6 +532,26 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                     {
                         app.mode = Mode::QueryInput;
                     }
+                    None
+                }
+                KeyCode::Char('y')
+                    if s.selected < ACTIONS.len()
+                        && !matches!(
+                            ACTIONS[s.selected].2,
+                            Action::Partitions | Action::Schema
+                        ) =>
+                {
+                    export::copy_results_to_clipboard(app);
+                    None
+                }
+                KeyCode::Char('Y')
+                    if s.selected < ACTIONS.len()
+                        && !matches!(
+                            ACTIONS[s.selected].2,
+                            Action::Partitions | Action::Schema
+                        ) =>
+                {
+                    export::export_results_to_csv_file(app);
                     None
                 }
                 _ => None,

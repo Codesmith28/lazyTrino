@@ -47,6 +47,9 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ),
         Line::from("  g / G                          Jump to top / bottom of active preview pane"),
         Line::from(
+            "  y / Y                          Copy loaded result grid as TSV / export it as CSV",
+        ),
+        Line::from(
             "  h / ← / Esc                    Switch focus to Menu Pane / Go back to Tables list",
         ),
         Line::from("  l / → / Enter                  Select menu option & focus Preview Pane"),

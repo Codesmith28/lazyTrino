@@ -6,6 +6,7 @@ use crate::trino::client::TrinoClient;
 use crate::trino::error::TrinoClientError;
 
 mod commands;
+mod export;
 mod mouse;
 mod navigation;
 mod query;
