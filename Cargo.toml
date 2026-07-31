@@ -23,3 +23,6 @@ clap = { version = "4", features = ["derive"] }
 arboard = "3"
 dirs = "5"
 toml = "0.8"
+
+[dev-dependencies]
+mockito = "1"

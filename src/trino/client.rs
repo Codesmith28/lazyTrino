@@ -210,6 +210,9 @@ fn format_response_body(body: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockito::{Matcher, Server};
+    use reqwest::StatusCode;
+    use serde_json::json;
 
     #[test]
     fn headers_reject_invalid_user_values() {
@@ -225,5 +228,141 @@ mod tests {
         let headers = client.headers().unwrap();
 
         assert_eq!(headers["X-Trino-User"], "valid-user");
+    }
+
+    #[tokio::test]
+    async fn execute_collects_paginated_results_and_formats_values() {
+        let mut server = Server::new_async().await;
+        let post_mock = server
+            .mock("POST", "/v1/statement")
+            .match_body(Matcher::Exact("SELECT * FROM test_table".to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "columns": [
+                        { "name": "id" },
+                        { "name": "tags" },
+                        { "name": "meta" }
+                    ],
+                    "data": [
+                        [1, ["alpha", true], { "k": "v" }]
+                    ],
+                    "nextUri": "http://ignored.invalid/v1/statement/queued/1"
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let get_mock = server
+            .mock("GET", "/v1/statement/queued/1")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "data": [
+                        [null, ["beta"], { "n": 2 }]
+                    ]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let client = TrinoClient::new(&server.url(), "test_user").unwrap();
+        let results = client.execute("SELECT * FROM test_table").await.unwrap();
+
+        post_mock.assert_async().await;
+        get_mock.assert_async().await;
+
+        assert_eq!(
+            results
+                .columns
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "tags", "meta"]
+        );
+        assert_eq!(
+            results.data,
+            vec![
+                vec!["1".to_string(), "[alpha, true]".to_string(), "{\"k\":\"v\"}".to_string()],
+                vec!["NULL".to_string(), "[beta]".to_string(), "{\"n\":2}".to_string()],
+            ]
+        );
+        assert!(results.duration_ms < 5_000);
+    }
+
+    #[tokio::test]
+    async fn execute_returns_http_status_error_for_non_success_response() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/statement")
+            .with_status(503)
+            .with_header("content-type", "text/plain")
+            .with_body("coordinator unavailable")
+            .create_async()
+            .await;
+
+        let client = TrinoClient::new(&server.url(), "test_user").unwrap();
+        let err = client.execute("SELECT 1").await.unwrap_err();
+
+        mock.assert_async().await;
+
+        match err {
+            TrinoClientError::HttpStatus { status, body } => {
+                assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+                assert_eq!(body, "coordinator unavailable");
+            }
+            other => panic!("expected HttpStatus error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_returns_query_error_for_trino_error_payload() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/statement")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({ "error": { "message": "column not found" } }).to_string())
+            .create_async()
+            .await;
+
+        let client = TrinoClient::new(&server.url(), "test_user").unwrap();
+        let err = client.execute("SELECT missing").await.unwrap_err();
+
+        mock.assert_async().await;
+
+        match err {
+            TrinoClientError::QueryError { message } => {
+                assert_eq!(message, "column not found");
+            }
+            other => panic!("expected QueryError, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_returns_parse_error_for_malformed_json() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/statement")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("{not-json")
+            .create_async()
+            .await;
+
+        let client = TrinoClient::new(&server.url(), "test_user").unwrap();
+        let err = client.execute("SELECT 1").await.unwrap_err();
+
+        mock.assert_async().await;
+
+        match err {
+            TrinoClientError::ResponseParseFailed { stage, .. } => {
+                assert_eq!(stage, "query");
+            }
+            other => panic!("expected ResponseParseFailed error, got {other:?}"),
+        }
     }
 }
