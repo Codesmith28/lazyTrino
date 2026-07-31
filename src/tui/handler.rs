@@ -191,18 +191,24 @@ fn handle_search_mode(app: &mut App, key: KeyEvent) -> Option<Command> {
 }
 
 fn go_back(app: &mut App) {
+    let logged_in = app.trino_client.is_some();
+
     let next = match &app.screen {
         Screen::Help => app.prev_screen.take().map(|p| *p),
         Screen::Catalog(_) => {
-            let c = app.config.clone();
-            Some(Screen::Connect(ConnectState {
-                url: c.url,
-                user: c.user,
-                password: c.password,
-                focused: 0,
-                loading: false,
-                error: None,
-            }))
+            if logged_in {
+                None
+            } else {
+                let c = app.config.clone();
+                Some(Screen::Connect(ConnectState {
+                    url: c.url,
+                    user: c.user,
+                    password: c.password,
+                    focused: 0,
+                    loading: false,
+                    error: None,
+                }))
+            }
         }
         Screen::Schema(s) => {
             let cat = s.catalog.clone();
@@ -244,29 +250,44 @@ fn go_back(app: &mut App) {
             }))
         }
         Screen::Connect(_) => None,
-        Screen::Results(_) => app.prev_screen.take().map(|p| *p).or_else(|| {
-            if let Some(_cat) = app.catalogs.first() {
-                Some(Screen::Catalog(CatalogState {
-                    items: app.catalogs.clone(),
-                    selected: 0,
-                    scroll: 0,
-                }))
-            } else {
-                let c = app.config.clone();
-                Some(Screen::Connect(ConnectState {
-                    url: c.url,
-                    user: c.user,
-                    password: c.password,
-                    focused: 0,
-                    loading: false,
-                    error: None,
-                }))
+        Screen::Results(_) => {
+            let prev = app.prev_screen.take().map(|p| *p);
+            match prev {
+                Some(Screen::Connect(_)) if logged_in => {
+                    Some(Screen::Catalog(CatalogState {
+                        items: app.catalogs.clone(),
+                        selected: 0,
+                        scroll: 0,
+                    }))
+                }
+                Some(p) => Some(p),
+                None => {
+                    if !app.catalogs.is_empty() {
+                        Some(Screen::Catalog(CatalogState {
+                            items: app.catalogs.clone(),
+                            selected: 0,
+                            scroll: 0,
+                        }))
+                    } else if !logged_in {
+                        let c = app.config.clone();
+                        Some(Screen::Connect(ConnectState {
+                            url: c.url,
+                            user: c.user,
+                            password: c.password,
+                            focused: 0,
+                            loading: false,
+                            error: None,
+                        }))
+                    } else {
+                        None
+                    }
+                }
             }
-        }),
+        }
     };
-    if let Some(next) = next {
-        info!("Navigating back");
-        app.screen = next;
+
+    if let Some(s) = next {
+        app.screen = s;
     }
 }
 
