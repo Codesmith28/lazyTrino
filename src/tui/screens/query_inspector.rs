@@ -23,8 +23,18 @@ use ratatui::{
 use crate::app::{App, QueryStatus};
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    let title = if let Some((ref msg, ref instant)) = app.copied_toast {
+        if instant.elapsed().as_secs() < 3 {
+            format!(" Executed Queries — Copied: \"{}\" ", msg)
+        } else {
+            " Executed Queries ".to_string()
+        }
+    } else {
+        " Executed Queries ".to_string()
+    };
+
     let block = Block::default()
-        .title(" Executed Queries ")
+        .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::DarkGray));
@@ -47,7 +57,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .iter()
         .rev()
         .skip(app.query_inspector_scroll)
-        .take(inner.height as usize)
         .map(|entry| {
             let (symbol, style) = match &entry.status {
                 QueryStatus::Success => (
@@ -77,16 +86,28 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 QueryStatus::Running => " [running] ".to_string(),
             };
 
-            let line = Line::from(vec![
-                Span::styled(format!(" {symbol}"), style),
-                Span::styled(meta, Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    entry.sql.clone(),
-                    Style::default().fg(Color::White),
-                ),
-            ]);
+            let header_prefix = format!(" {symbol}{meta}");
+            let header_len = header_prefix.len();
+            let avail_w = (inner.width as usize).saturating_sub(header_len).max(10);
+            let wrapped_sql = crate::tui::screens::results::wrap_text(&entry.sql, avail_w);
 
-            ListItem::new(line)
+            let mut lines = Vec::new();
+            if let Some(first_line) = wrapped_sql.first() {
+                lines.push(Line::from(vec![
+                    Span::styled(format!(" {symbol}"), style),
+                    Span::styled(meta, Style::default().fg(Color::DarkGray)),
+                    Span::styled(first_line.clone(), Style::default().fg(Color::White)),
+                ]));
+            }
+            let indent = " ".repeat(header_len);
+            for remaining in wrapped_sql.iter().skip(1) {
+                lines.push(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled(remaining.clone(), Style::default().fg(Color::White)),
+                ]));
+            }
+
+            ListItem::new(lines)
         })
         .collect();
 

@@ -257,6 +257,10 @@ pub struct App {
     pub is_dragging_v_resizer: bool,
     pub is_dragging_query_select: bool,
     pub query_inspector_scroll: usize,
+    pub mouse_selection_anchor: Option<(u16, u16)>,
+    pub mouse_selection_current: Option<(u16, u16)>,
+    pub is_selecting_text: bool,
+    pub copied_toast: Option<(String, std::time::Instant)>,
 }
 
 impl App {
@@ -296,6 +300,10 @@ impl App {
             is_dragging_v_resizer: false,
             is_dragging_query_select: false,
             query_inspector_scroll: 0,
+            mouse_selection_anchor: None,
+            mouse_selection_current: None,
+            is_selecting_text: false,
+            copied_toast: None,
         }
     }
 
