@@ -22,12 +22,13 @@ use ratatui::{
 
 use crate::app::ACTIONS;
 
-pub fn render(frame: &mut Frame, area: Rect, _catalog: &str, _schema: &str, table: &str, selected: usize) {
+pub fn render(frame: &mut Frame, area: Rect, _catalog: &str, _schema: &str, table: &str, selected: usize, is_active: bool) {
+    let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
     let block = Block::default()
         .title(format!(" Actions — {table} "))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(border_color));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

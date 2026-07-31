@@ -22,12 +22,13 @@ use ratatui::{
 
 use crate::app::ResultsState;
 
-pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: String) {
+pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: String, is_active: bool) {
+    let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
     let block = Block::default()
         .title(" Query Results ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(border_color));
     frame.render_widget(&block, area);
 
     let inner = block.inner(area);
@@ -124,12 +125,37 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
         })
         .collect();
 
-    let title_text = format!(
-        " Results ({} rows, col {}/{}) ",
-        state.rows.len(),
-        state.scroll_h + 1,
-        state.columns.len().max(1)
-    );
+    let title_text = if state.is_paginated {
+        if state.is_fetching_next_page {
+            format!(
+                " Table View — Infinite Scroll ({} rows loaded, col {}/{}) [Fetching page...] ",
+                state.rows.len(),
+                state.scroll_h + 1,
+                state.columns.len().max(1)
+            )
+        } else if !state.has_more_rows {
+            format!(
+                " Table View — Infinite Scroll (All {} rows loaded, col {}/{}) ",
+                state.rows.len(),
+                state.scroll_h + 1,
+                state.columns.len().max(1)
+            )
+        } else {
+            format!(
+                " Table View — Infinite Scroll ({} rows loaded, col {}/{}) ",
+                state.rows.len(),
+                state.scroll_h + 1,
+                state.columns.len().max(1)
+            )
+        }
+    } else {
+        format!(
+            " Sample Mode ({} sample rows, col {}/{}) ",
+            state.rows.len(),
+            state.scroll_h + 1,
+            state.columns.len().max(1)
+        )
+    };
     let table = Table::new(visible_rows, col_widths)
         .header(header)
         .column_spacing(2)
@@ -138,7 +164,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
                 .title(title_text)
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(border_color)),
         );
 
     use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};

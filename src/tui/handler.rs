@@ -39,7 +39,37 @@ pub enum Command {
     },
     ExecuteQuery {
         query: String,
+        is_paginated: bool,
+        catalog: String,
+        schema: String,
+        table: String,
     },
+    FetchNextPage {
+        catalog: String,
+        schema: String,
+        table: String,
+        offset: usize,
+        limit: usize,
+    },
+}
+
+fn check_trigger_infinite_scroll(app: &mut App) -> Option<Command> {
+    if let Screen::Results(ref mut state) = app.screen {
+        if state.is_paginated && !state.is_fetching_next_page && state.has_more_rows {
+            if state.scroll_v + 15 >= state.rows.len() {
+                state.is_fetching_next_page = true;
+                let offset = state.rows.len();
+                return Some(Command::FetchNextPage {
+                    catalog: state.catalog.clone(),
+                    schema: state.schema.clone(),
+                    table: state.table.clone(),
+                    offset,
+                    limit: state.page_size,
+                });
+            }
+        }
+    }
+    None
 }
 
 fn extract_list_labels(screen: &Screen) -> Option<Vec<String>> {
@@ -115,10 +145,17 @@ fn handle_leader_mode(app: &mut App, key: KeyEvent) -> Option<Command> {
                 _ => return None,
             };
             if let Some(action) = app.action_for(c) {
+                let is_paginated = matches!(action, Action::TableView);
                 let query = action.build_query(&cat, &schema, &table);
                 info!(%query, "Leader action triggered");
                 app.mode = Mode::Normal;
-                return Some(Command::ExecuteQuery { query });
+                return Some(Command::ExecuteQuery {
+                    query,
+                    is_paginated,
+                    catalog: cat,
+                    schema,
+                    table,
+                });
             }
             warn!(char = %c, "Unknown leader key");
             app.mode = Mode::Normal;
@@ -336,10 +373,10 @@ fn handle_pane_activation(app: &mut App, key: KeyEvent) -> bool {
     false
 }
 
-pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) {
+pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
     let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
     if term_width == 0 || term_height == 0 {
-        return;
+        return None;
     }
 
     let bottom_y = term_height.saturating_sub(7);
@@ -408,6 +445,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) {
                             }
                         } else if !state.rows.is_empty() {
                             state.scroll_v = (state.scroll_v + 1).min(state.rows.len().saturating_sub(1));
+                            return check_trigger_infinite_scroll(app);
                         }
                     } else if let Some(items) = extract_list_labels(&app.screen) {
                         if !items.is_empty() {
@@ -467,6 +505,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) {
         }
         _ => {}
     }
+    None
 }
 
 pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
@@ -507,9 +546,16 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         if let KeyCode::Char(c) = code {
             if let Screen::Actions(s) = &app.screen {
                 if let Some(action) = app.action_for(c) {
+                    let is_table_view = matches!(action, Action::TableView);
                     let query = action.build_query(&s.catalog, &s.schema, &s.table);
                     app.mode = Mode::Normal;
-                    return Some(Command::ExecuteQuery { query });
+                    return Some(Command::ExecuteQuery {
+                        query,
+                        is_paginated: is_table_view,
+                        catalog: s.catalog.clone(),
+                        schema: s.schema.clone(),
+                        table: s.table.clone(),
+                    });
                 }
             }
         }
@@ -553,6 +599,7 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
                         if !state.rows.is_empty() {
                             state.scroll_v = (state.scroll_v + 1).min(state.rows.len().saturating_sub(1));
                         }
+                        return check_trigger_infinite_scroll(app);
                     } else if let Some(items) = extract_list_labels(&app.screen) {
                         if !items.is_empty() {
                             if let Some(s) = get_selected(&app.screen) {
@@ -607,6 +654,7 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
                 KeyCode::Char('G') => {
                     if let Screen::Results(state) = &mut app.screen {
                         state.scroll_v = state.rows.len().saturating_sub(1);
+                        return check_trigger_infinite_scroll(app);
                     } else if let Some(items) = extract_list_labels(&app.screen) {
                         if !items.is_empty() {
                             mod_list_selected(&mut app.screen, items.len() - 1);
@@ -748,8 +796,15 @@ fn select_current_item(app: &mut App) -> Option<Command> {
                 return None;
             }
             let (_, _, action) = &ACTIONS[s.selected];
+            let is_paginated = matches!(action, Action::TableView);
             let query = action.build_query(&s.catalog, &s.schema, &s.table);
-            Some(Command::ExecuteQuery { query })
+            Some(Command::ExecuteQuery {
+                query,
+                is_paginated,
+                catalog: s.catalog.clone(),
+                schema: s.schema.clone(),
+                table: s.table.clone(),
+            })
         }
         _ => None,
     }
@@ -827,8 +882,15 @@ fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
         KeyCode::Char(c) => {
             if let Screen::Actions(s) = &app.screen {
                 if let Some(action) = app.action_for(c) {
+                    let is_table_view = matches!(action, Action::TableView);
                     let query = action.build_query(&s.catalog, &s.schema, &s.table);
-                    return Some(Command::ExecuteQuery { query });
+                    return Some(Command::ExecuteQuery {
+                        query,
+                        is_paginated: is_table_view,
+                        catalog: s.catalog.clone(),
+                        schema: s.schema.clone(),
+                        table: s.table.clone(),
+                    });
                 }
             }
             None
@@ -1019,7 +1081,7 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                 }
             }
         }
-        Command::ExecuteQuery { query } => {
+        Command::ExecuteQuery { query, is_paginated, catalog, schema, table } => {
             let client = app.trino_client.clone().expect("TrinoClient not initialized");
             info!(%query, "Executing query");
             let log_id = app.add_query_log(query.clone());
@@ -1033,12 +1095,21 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                 scroll_h: 0,
                 loading: true,
                 error: None,
+                is_paginated,
+                catalog: catalog.clone(),
+                schema: schema.clone(),
+                table: table.clone(),
+                offset: 0,
+                page_size: 100,
+                is_fetching_next_page: false,
+                has_more_rows: true,
             });
             match client.execute(&query).await {
                 Ok(results) => {
                     app.complete_query_log_success(log_id, results.duration_ms, results.data.len());
                     let cols: Vec<String> = results.columns.iter().map(|c| c.name.clone()).collect();
                     let rows = results.data;
+                    let has_more = if is_paginated { rows.len() >= 100 } else { false };
                     info!(row_count = rows.len(), "Query completed");
                     app.screen = Screen::Results(ResultsState {
                         query,
@@ -1048,6 +1119,14 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                         scroll_h: 0,
                         loading: false,
                         error: None,
+                        is_paginated,
+                        catalog,
+                        schema,
+                        table,
+                        offset: 0,
+                        page_size: 100,
+                        is_fetching_next_page: false,
+                        has_more_rows: has_more,
                     });
                 }
                 Err(e) => {
@@ -1061,10 +1140,51 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                         scroll_h: 0,
                         loading: false,
                         error: Some(e.to_string()),
+                        is_paginated: false,
+                        catalog,
+                        schema,
+                        table,
+                        offset: 0,
+                        page_size: 100,
+                        is_fetching_next_page: false,
+                        has_more_rows: false,
                     });
                 }
             }
             app.loading = false;
+        }
+        Command::FetchNextPage { catalog, schema, table, offset, limit } => {
+            let client = match app.trino_client.clone() {
+                Some(c) => c,
+                None => return,
+            };
+            let query = queries::page_query(&catalog, &schema, &table, offset, limit);
+            info!(%query, %offset, %limit, "Fetching next page for infinite scroll");
+            let log_id = app.add_query_log(query.clone());
+
+            match client.execute(&query).await {
+                Ok(results) => {
+                    app.complete_query_log_success(log_id, results.duration_ms, results.data.len());
+                    let new_rows = results.data;
+                    let fetched_count = new_rows.len();
+                    if let Screen::Results(ref mut state) = app.screen {
+                        state.rows.extend(new_rows);
+                        state.offset = offset;
+                        state.is_fetching_next_page = false;
+                        if fetched_count < limit {
+                            state.has_more_rows = false;
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!(error = %e, "Failed to fetch next page");
+                    app.complete_query_log_error(log_id, e.to_string());
+                    if let Screen::Results(ref mut state) = app.screen {
+                        state.is_fetching_next_page = false;
+                        state.has_more_rows = false;
+                    }
+                }
+            }
         }
     }
 }

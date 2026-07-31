@@ -209,18 +209,20 @@ fn ui(frame: &mut Frame, app: &App) {
 
             let main = left_chunks[1];
 
+            let main_is_active = app.active_panel == ActivePanel::MainViewer;
+
             match &app.screen {
                 Screen::Connect(state) => {
                     screens::connect::render(frame, main, state, spinner(app));
                 }
                 Screen::Catalog(state) => {
-                    screens::catalog::render(frame, main, state, &app.search_query);
+                    screens::catalog::render(frame, main, state, &app.search_query, main_is_active);
                 }
                 Screen::Schema(state) => {
-                    screens::schema::render(frame, main, state, &app.search_query);
+                    screens::schema::render(frame, main, state, &app.search_query, main_is_active);
                 }
                 Screen::Table(state) => {
-                    screens::table::render(frame, main, state, &app.search_query);
+                    screens::table::render(frame, main, state, &app.search_query, main_is_active);
                 }
                 Screen::Actions(state) => {
                     screens::actions::render(
@@ -230,10 +232,11 @@ fn ui(frame: &mut Frame, app: &App) {
                         &state.schema,
                         &state.table,
                         state.selected,
+                        main_is_active,
                     );
                 }
                 Screen::Results(state) => {
-                    screens::results::render(frame, main, state, spinner(app));
+                    screens::results::render(frame, main, state, spinner(app), main_is_active);
                 }
                 Screen::Help => unreachable!(),
             }
@@ -296,7 +299,10 @@ async fn run_loop(
                     }
                 }
                 Event::Mouse(mouse) => {
-                    handler::handle_mouse_sync(app, mouse);
+                    let cmd = handler::handle_mouse_sync(app, mouse);
+                    if let Some(cmd) = cmd {
+                        handler::execute_command(app, cmd).await;
+                    }
                 }
                 _ => {}
             }

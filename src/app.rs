@@ -119,6 +119,14 @@ pub struct ResultsState {
     pub loading: bool,
     #[allow(dead_code)]
     pub error: Option<String>,
+    pub is_paginated: bool,
+    pub catalog: String,
+    pub schema: String,
+    pub table: String,
+    pub offset: usize,
+    pub page_size: usize,
+    pub is_fetching_next_page: bool,
+    pub has_more_rows: bool,
 }
 
 #[derive(Clone)]
@@ -147,7 +155,8 @@ pub enum Action {
     InfoSchema,
     ShowStats,
     Count,
-    Preview,
+    Sample,
+    TableView,
     Partitions,
 }
 
@@ -157,7 +166,8 @@ pub const ACTIONS: &[(char, &str, Action)] = &[
     ('i', "Info Schema", Action::InfoSchema),
     ('s', "Show Stats", Action::ShowStats),
     ('n', "Count", Action::Count),
-    ('p', "Preview", Action::Preview),
+    ('p', "Sample Mode (20 rows)", Action::Sample),
+    ('v', "Table View Mode (Infinite Scroll)", Action::TableView),
     ('P', "Partitions", Action::Partitions),
 ];
 
@@ -169,7 +179,8 @@ impl Action {
             Action::InfoSchema => crate::trino::queries::info_schema_columns(catalog, schema, table),
             Action::ShowStats => crate::trino::queries::show_stats(catalog, schema, table),
             Action::Count => crate::trino::queries::count(catalog, schema, table),
-            Action::Preview => crate::trino::queries::preview(catalog, schema, table),
+            Action::Sample => crate::trino::queries::sample(catalog, schema, table),
+            Action::TableView => crate::trino::queries::page_query(catalog, schema, table, 0, 100),
             Action::Partitions => crate::trino::queries::partitions(catalog, schema, table),
         }
     }
