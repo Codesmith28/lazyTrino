@@ -122,7 +122,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ResultsState, _spinner: Str
             )),
             Line::from(""),
             Line::from(Span::styled("Note: Queries in this view can only target data inside the current table.", Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled("You can write partial queries like 'WHERE col = val', 'ORDER BY col', or 'LIMIT 10'.", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled("Enter full SQL queries operating on this table (e.g. 'SELECT * FROM table WHERE col = val').", Style::default().fg(Color::DarkGray))),
         ];
         let p = Paragraph::new(err_lines);
         frame.render_widget(p, inner);

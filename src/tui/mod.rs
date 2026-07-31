@@ -110,31 +110,55 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color));
 
-    let (query_text, cursor_pos) = match &app.screen {
+    let (spans, cursor_pos) = match &app.screen {
         Screen::Results(state) => {
             if state.query_buffer.is_empty() {
                 (
-                    Span::styled(
-                        "Write partial query (e.g. WHERE age > 10, ORDER BY id DESC, SELECT col1)...",
+                    vec![Span::styled(
+                        "Write full query (e.g. SELECT * FROM table WHERE age > 10)...",
                         Style::default().fg(Color::DarkGray),
-                    ),
+                    )],
                     if is_editing { Some(0) } else { None },
                 )
+            } else if is_editing {
+                if let Some((sel_start, sel_end)) = state.selection_range() {
+                    let sel_start = sel_start.min(state.query_buffer.len());
+                    let sel_end = sel_end.min(state.query_buffer.len());
+                    let before = &state.query_buffer[..sel_start];
+                    let selected = &state.query_buffer[sel_start..sel_end];
+                    let after = &state.query_buffer[sel_end..];
+                    (
+                        vec![
+                            Span::styled(before, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                            Span::styled(selected, Style::default().bg(Color::LightYellow).fg(Color::Black).add_modifier(Modifier::BOLD)),
+                            Span::styled(after, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                        ],
+                        Some(state.query_cursor),
+                    )
+                } else {
+                    (
+                        vec![Span::styled(
+                            &state.query_buffer,
+                            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                        )],
+                        Some(state.query_cursor),
+                    )
+                }
             } else {
                 (
-                    Span::styled(
+                    vec![Span::styled(
                         &state.query_buffer,
                         Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-                    ),
-                    if is_editing { Some(state.query_cursor) } else { None },
+                    )],
+                    None,
                 )
             }
         }
         _ => (
-            Span::styled(
+            vec![Span::styled(
                 "Query bar works only when viewing full data table view",
                 Style::default().fg(Color::DarkGray),
-            ),
+            )],
             None,
         ),
     };
@@ -153,10 +177,10 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    let p = Paragraph::new(Line::from(vec![
-        Span::styled(" SQL > ", Style::default().fg(Color::Yellow)),
-        query_text,
-    ]))
+    let mut line_spans = vec![Span::styled(" SQL > ", Style::default().fg(Color::Yellow))];
+    line_spans.extend(spans);
+
+    let p = Paragraph::new(Line::from(line_spans))
     .block(block)
     .wrap(ratatui::widgets::Wrap { trim: false })
     .scroll((scroll_y, 0));
