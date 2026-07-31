@@ -13,22 +13,20 @@
 // limitations under the License.
 
 use ratatui::{
+    Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
     text::Line,
     widgets::{Block, BorderType, Borders, List, ListItem, ListState},
-    Frame,
 };
 
-use crate::app::TableState;
+use crate::{app::TableState, tui::theme};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &TableState, search: &str, is_active: bool) {
-    let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
     let block = Block::default()
         .title(format!(" Tables — {}.{} ", state.catalog, state.schema))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
+        .border_style(theme::border_style(is_active));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -36,7 +34,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &TableState, search: &str, i
         .items
         .iter()
         .enumerate()
-        .filter(|(_, name)| search.is_empty() || name.to_lowercase().contains(&search.to_lowercase()))
+        .filter(|(_, name)| {
+            search.is_empty() || name.to_lowercase().contains(&search.to_lowercase())
+        })
         .collect();
 
     if filtered.is_empty() {
@@ -48,37 +48,23 @@ pub fn render(frame: &mut Frame, area: Rect, state: &TableState, search: &str, i
         .map(|(orig_idx, name)| {
             let prefix = format!("{:>3} ", orig_idx + 1);
             let line = if *orig_idx == state.selected {
-                Line::styled(
-                    format!("{prefix}{name}"),
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )
+                Line::styled(format!("{prefix}{name}"), theme::selection_style())
             } else {
-                Line::styled(
-                    format!("{prefix}{name}"),
-                    Style::default().fg(Color::White),
-                )
+                Line::styled(format!("{prefix}{name}"), theme::text_style())
             };
             ListItem::new(line)
         })
         .collect();
 
     let mut list_state = ListState::default().with_selected(Some(state.selected));
-    let list = List::new(items)
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+    let list = List::new(items).highlight_style(theme::selection_style());
 
     frame.render_stateful_widget(list, inner, &mut list_state);
 
     use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
     if filtered.len() > 1 {
-        let mut scrollbar_state = ScrollbarState::new(filtered.len().saturating_sub(1)).position(state.selected);
+        let mut scrollbar_state =
+            ScrollbarState::new(filtered.len().saturating_sub(1)).position(state.selected);
         frame.render_stateful_widget(
             Scrollbar::default()
                 .orientation(ScrollbarOrientation::VerticalRight)
