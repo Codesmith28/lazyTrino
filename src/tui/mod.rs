@@ -38,13 +38,14 @@ fn spinner(app: &App) -> String {
 }
 
 fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
-    let border_color = if matches!(app.mode, Mode::Search) {
+    let is_editing = matches!(app.mode, Mode::Search);
+    let border_color = if is_editing {
         Color::Yellow
     } else {
         Color::DarkGray
     };
 
-    let title = if matches!(app.mode, Mode::Search) {
+    let title = if is_editing {
         " Centralized Search [EDITING - Press Enter/Esc to finish] "
     } else {
         " Centralized Search [Press / to search] "
@@ -65,8 +66,116 @@ fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(&app.search_query, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
     };
 
-    let p = Paragraph::new(Line::from(vec![Span::raw(" / "), search_text])).block(block);
+    let p = Paragraph::new(Line::from(vec![Span::raw(" / "), search_text]))
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: false });
     frame.render_widget(p, area);
+
+    if is_editing {
+        let inner_width = area.width.saturating_sub(2).max(1) as usize;
+        let cursor_index = 3 + app.search_query.len();
+        let line_offset = cursor_index / inner_width;
+        let col_offset = cursor_index % inner_width;
+        let cursor_x = area.x + 1 + (col_offset as u16);
+        let cursor_y = area.y + 1 + (line_offset as u16);
+        if cursor_y < area.y + area.height - 1 && cursor_x < area.x + area.width - 1 {
+            frame.set_cursor_position((cursor_x, cursor_y));
+        }
+    }
+}
+
+fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
+    let is_editing = matches!(app.mode, Mode::QueryInput);
+    let is_table_view = matches!(app.screen, Screen::Results(_));
+
+    let border_color = if is_editing {
+        Color::Yellow
+    } else if is_table_view {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+
+    let title = if is_editing {
+        " Table Query Bar [EDITING - Press Enter to run, Esc to cancel] "
+    } else if is_table_view {
+        " Table Query Bar [Press 'q' or ':' to write query] "
+    } else {
+        " Table Query Bar [Disabled - Active only in full data table view] "
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color));
+
+    let (query_text, cursor_pos) = match &app.screen {
+        Screen::Results(state) => {
+            if state.query_buffer.is_empty() {
+                (
+                    Span::styled(
+                        "Write partial query (e.g. WHERE age > 10, ORDER BY id DESC, SELECT col1)...",
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    if is_editing { Some(0) } else { None },
+                )
+            } else {
+                (
+                    Span::styled(
+                        &state.query_buffer,
+                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    ),
+                    if is_editing { Some(state.query_cursor) } else { None },
+                )
+            }
+        }
+        _ => (
+            Span::styled(
+                "Query bar works only when viewing full data table view",
+                Style::default().fg(Color::DarkGray),
+            ),
+            None,
+        ),
+    };
+
+    let inner_w = area.width.saturating_sub(2).max(1) as usize;
+    let visible_lines = area.height.saturating_sub(2).max(1) as usize;
+
+    let mut scroll_y: u16 = 0;
+    if is_editing {
+        if let Some(pos) = cursor_pos {
+            let cursor_index = 7 + pos;
+            let line_offset = cursor_index / inner_w;
+            if line_offset >= visible_lines {
+                scroll_y = (line_offset - visible_lines + 1) as u16;
+            }
+        }
+    }
+
+    let p = Paragraph::new(Line::from(vec![
+        Span::styled(" SQL > ", Style::default().fg(Color::Yellow)),
+        query_text,
+    ]))
+    .block(block)
+    .wrap(ratatui::widgets::Wrap { trim: false })
+    .scroll((scroll_y, 0));
+    frame.render_widget(p, area);
+
+    if is_editing {
+        if let Some(pos) = cursor_pos {
+            let cursor_index = 7 + pos;
+            let line_offset = cursor_index / inner_w;
+            let col_offset = cursor_index % inner_w;
+
+            let rel_line = line_offset.saturating_sub(scroll_y as usize);
+            let cursor_x = area.x + 1 + (col_offset as u16);
+            let cursor_y = area.y + 1 + (rel_line as u16);
+            if cursor_y < area.y + area.height - 1 && cursor_x < area.x + area.width - 1 {
+                frame.set_cursor_position((cursor_x, cursor_y));
+            }
+        }
+    }
 }
 
 fn render_control_panel(frame: &mut Frame, area: Rect, app: &App) {
@@ -184,16 +293,60 @@ fn ui(frame: &mut Frame, app: &App) {
             ])
             .split(outer_chunks[0]);
 
-            let left_chunks = Layout::vertical([
-                Constraint::Length(3),
-                Constraint::Min(0),
-            ])
-            .split(main_chunks[0]);
+            let is_table_view = matches!(app.screen, Screen::Results(_));
+            let search_active = matches!(app.mode, Mode::Search);
+            let query_active = matches!(app.mode, Mode::QueryInput);
+
+            let inner_w = main_chunks[0].width.saturating_sub(2).max(1) as usize;
+
+            let search_height = if search_active {
+                let total_chars = 3 + app.search_query.len();
+                let lines = (total_chars + inner_w - 1) / inner_w;
+                (lines as u16 + 2).clamp(3, 8)
+            } else {
+                3
+            };
+
+            let query_height = if is_table_view {
+                if query_active {
+                    if let Screen::Results(ref s) = app.screen {
+                        let total_chars = 7 + s.query_buffer.len();
+                        let lines = (total_chars + inner_w - 1) / inner_w;
+                        (lines as u16 + 2).clamp(3, 4)
+                    } else {
+                        3
+                    }
+                } else {
+                    3
+                }
+            } else {
+                0
+            };
+
+            let left_chunks = if is_table_view {
+                Layout::vertical([
+                    Constraint::Length(search_height),
+                    Constraint::Length(query_height),
+                    Constraint::Min(0),
+                ])
+                .split(main_chunks[0])
+            } else {
+                Layout::vertical([
+                    Constraint::Length(search_height),
+                    Constraint::Min(0),
+                ])
+                .split(main_chunks[0])
+            };
 
             render_search_bar(frame, left_chunks[0], app);
             render_control_panel(frame, main_chunks[1], app);
 
-            let main = left_chunks[1];
+            let main = if is_table_view {
+                render_query_bar(frame, left_chunks[1], app);
+                left_chunks[2]
+            } else {
+                left_chunks[1]
+            };
 
             let main_is_active = app.active_panel == ActivePanel::MainViewer;
 

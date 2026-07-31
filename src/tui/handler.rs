@@ -39,6 +39,102 @@ pub enum Command {
     },
 }
 
+pub fn extract_from_tables(sql: &str) -> Vec<String> {
+    let mut tables = Vec::new();
+    let tokens: Vec<&str> = sql.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        let upper = tokens[i].to_uppercase();
+        if upper == "FROM" || upper == "JOIN" {
+            if i + 1 < tokens.len() {
+                let next_token = tokens[i + 1];
+                if !next_token.starts_with('(') {
+                    let clean_table = next_token.trim_matches(|c| c == ',' || c == ';' || c == '(' || c == ')');
+                    let clean_upper = clean_table.to_uppercase();
+                    let sql_keywords = [
+                        "SELECT", "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "JOIN", "LEFT",
+                        "RIGHT", "INNER", "OUTER", "CROSS", "FULL", "ON", "USING", "AS",
+                    ];
+                    if !clean_table.is_empty() && !sql_keywords.contains(&clean_upper.as_str()) {
+                        tables.push(clean_table.to_string());
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    tables
+}
+
+pub fn validate_and_build_query(
+    user_input: &str,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+) -> Result<String, String> {
+    let trimmed = user_input.trim();
+    if trimmed.is_empty() {
+        return Ok(crate::trino::queries::page_query(catalog, schema, table, 0, 100));
+    }
+
+    let full_target = format!("{catalog}.{schema}.{table}");
+    let schema_target = format!("{schema}.{table}");
+
+    let extracted_tables = extract_from_tables(trimmed);
+
+    if !extracted_tables.is_empty() {
+        for t in &extracted_tables {
+            let normalized = t.trim().trim_matches(|c| c == '"' || c == '`' || c == '\'').to_lowercase();
+            let matches_table = normalized == table.to_lowercase()
+                || normalized == schema_target.to_lowercase()
+                || normalized == full_target.to_lowercase();
+            if !matches_table {
+                return Err(format!(
+                    "Query targets table '{}', but current view scope is '{}.{}.{}'. Queries in this view must operate on table '{}'.",
+                    t, catalog, schema, table, table
+                ));
+            }
+        }
+        Ok(trimmed.to_string())
+    } else {
+        let upper_input = trimmed.to_uppercase();
+        if upper_input.starts_with("SELECT") {
+            let clause_keywords = [" WHERE ", " GROUP BY ", " HAVING ", " ORDER BY ", " LIMIT "];
+            let mut insert_idx = None;
+            for kw in &clause_keywords {
+                if let Some(pos) = upper_input.find(kw) {
+                    if insert_idx.map_or(true, |p| pos < p) {
+                        insert_idx = Some(pos);
+                    }
+                }
+            }
+            if let Some(pos) = insert_idx {
+                let (select_part, rest) = trimmed.split_at(pos);
+                Ok(format!("{select_part} FROM {full_target}{rest}"))
+            } else {
+                Ok(format!("{trimmed} FROM {full_target}"))
+            }
+        } else if upper_input.starts_with("WHERE")
+            || upper_input.starts_with("GROUP BY")
+            || upper_input.starts_with("HAVING")
+            || upper_input.starts_with("ORDER BY")
+            || upper_input.starts_with("LIMIT")
+        {
+            Ok(format!("SELECT * FROM {full_target} {trimmed}"))
+        } else if upper_input.contains('=')
+            || upper_input.contains('>')
+            || upper_input.contains('<')
+            || upper_input.contains(" LIKE ")
+            || upper_input.contains(" IN ")
+            || upper_input.contains(" IS ")
+        {
+            Ok(format!("SELECT * FROM {full_target} WHERE {trimmed}"))
+        } else {
+            Ok(format!("SELECT {trimmed} FROM {full_target}"))
+        }
+    }
+}
+
 fn check_trigger_infinite_scroll(app: &mut App) -> Option<Command> {
     if let Screen::Results(ref mut state) = app.screen {
         if state.is_paginated && !state.is_fetching_next_page && state.has_more_rows {
@@ -411,9 +507,44 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 app.is_dragging_v_resizer = false;
 
                 if mouse.column < border_x && mouse.row < bottom_y {
-                    if mouse.row < 3 {
-                        app.mode = Mode::Search;
+                    let is_table_view = matches!(app.screen, Screen::Results(_));
+                    let search_active = matches!(app.mode, Mode::Search);
+                    let query_active = matches!(app.mode, Mode::QueryInput);
+                    let inner_w = border_x.saturating_sub(2).max(1) as usize;
+
+                    let search_h: u16 = if search_active {
+                        let total = 3 + app.search_query.len();
+                        let lines = (total + inner_w - 1) / inner_w;
+                        (lines as u16 + 2).clamp(3, 8)
                     } else {
+                        3
+                    };
+
+                    let query_h: u16 = if is_table_view {
+                        if query_active {
+                            if let Screen::Results(ref s) = app.screen {
+                                let total = 7 + s.query_buffer.len();
+                                let lines = (total + inner_w - 1) / inner_w;
+                                (lines as u16 + 2).clamp(3, 4)
+                            } else {
+                                3
+                            }
+                        } else {
+                            3
+                        }
+                    } else {
+                        0
+                    };
+
+                    if mouse.row < search_h {
+                        app.mode = Mode::Search;
+                    } else if is_table_view && mouse.row < search_h + query_h {
+                        app.mode = Mode::QueryInput;
+                        if let Screen::Results(ref mut state) = app.screen {
+                            state.query_cursor = state.query_buffer.len();
+                        }
+                    } else {
+                        app.mode = Mode::Normal;
                         app.active_panel = ActivePanel::MainViewer;
                     }
                 } else if mouse.column >= border_x && mouse.row < bottom_y && active_table {
@@ -536,6 +667,75 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
                 app.search_query.push(c);
             }
             _ => {}
+        }
+        return None;
+    }
+
+    if matches!(app.mode, Mode::QueryInput) {
+        if let Screen::Results(ref mut state) = app.screen {
+            match code {
+                KeyCode::Esc => {
+                    app.mode = Mode::Normal;
+                    return None;
+                }
+                KeyCode::Enter => {
+                    app.mode = Mode::Normal;
+                    let input = state.query_buffer.clone();
+                    let cat = state.catalog.clone();
+                    let sch = state.schema.clone();
+                    let tbl = state.table.clone();
+                    let is_paginated = state.is_paginated;
+
+                    match validate_and_build_query(&input, &cat, &sch, &tbl) {
+                        Ok(full_sql) => {
+                            state.invalid_query_error = None;
+                            return Some(Command::ExecuteQuery {
+                                query: full_sql,
+                                is_paginated,
+                                catalog: cat,
+                                schema: sch,
+                                table: tbl,
+                            });
+                        }
+                        Err(err_msg) => {
+                            state.invalid_query_error = Some(err_msg);
+                            return None;
+                        }
+                    }
+                }
+                KeyCode::Backspace => {
+                    if state.query_cursor > 0 && !state.query_buffer.is_empty() {
+                        let idx = state.query_cursor - 1;
+                        state.query_buffer.remove(idx);
+                        state.query_cursor -= 1;
+                    }
+                }
+                KeyCode::Delete => {
+                    if state.query_cursor < state.query_buffer.len() {
+                        state.query_buffer.remove(state.query_cursor);
+                    }
+                }
+                KeyCode::Left => {
+                    state.query_cursor = state.query_cursor.saturating_sub(1);
+                }
+                KeyCode::Right => {
+                    state.query_cursor = (state.query_cursor + 1).min(state.query_buffer.len());
+                }
+                KeyCode::Home => {
+                    state.query_cursor = 0;
+                }
+                KeyCode::End => {
+                    state.query_cursor = state.query_buffer.len();
+                }
+                KeyCode::Char(c) => {
+                    let idx = state.query_cursor.min(state.query_buffer.len());
+                    state.query_buffer.insert(idx, c);
+                    state.query_cursor += 1;
+                }
+                _ => {}
+            }
+        } else {
+            app.mode = Mode::Normal;
         }
         return None;
     }
@@ -908,7 +1108,13 @@ fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
 
 fn results_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
     if let Screen::Results(state) = &mut app.screen {
-        match key.code {
+        let code = normalize_key_code(key.code);
+        match code {
+            KeyCode::Char('q') | KeyCode::Char(':') => {
+                app.mode = Mode::QueryInput;
+                state.query_cursor = state.query_buffer.len();
+                return None;
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 if !state.rows.is_empty() {
                     state.scroll_v = (state.scroll_v + 1).min(state.rows.len().saturating_sub(1));
@@ -1094,8 +1300,16 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
             let log_id = app.add_query_log(query.clone());
             app.loading = true;
             app.prev_screen = Some(Box::new(app.screen.clone()));
+
+            let (query_buffer, query_cursor) = match &app.screen {
+                Screen::Results(s) => (s.query_buffer.clone(), s.query_cursor),
+                _ => (query.clone(), query.len()),
+            };
+
             app.screen = Screen::Results(ResultsState {
                 query: query.clone(),
+                query_buffer: query_buffer.clone(),
+                query_cursor,
                 columns: Vec::new(),
                 rows: vec![vec!["Loading...".to_string()]],
                 scroll_v: 0,
@@ -1110,6 +1324,7 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                 page_size: 100,
                 is_fetching_next_page: false,
                 has_more_rows: true,
+                invalid_query_error: None,
             });
             match client.execute(&query).await {
                 Ok(results) => {
@@ -1120,6 +1335,8 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                     info!(row_count = rows.len(), "Query completed");
                     app.screen = Screen::Results(ResultsState {
                         query,
+                        query_buffer,
+                        query_cursor,
                         columns: cols,
                         rows,
                         scroll_v: 0,
@@ -1134,6 +1351,7 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                         page_size: 100,
                         is_fetching_next_page: false,
                         has_more_rows: has_more,
+                        invalid_query_error: None,
                     });
                 }
                 Err(e) => {
@@ -1141,6 +1359,8 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                     app.complete_query_log_error(log_id, e.to_string());
                     app.screen = Screen::Results(ResultsState {
                         query,
+                        query_buffer,
+                        query_cursor,
                         columns: Vec::new(),
                         rows: vec![vec![format!("Error: {e}")]],
                         scroll_v: 0,
@@ -1155,6 +1375,7 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                         page_size: 100,
                         is_fetching_next_page: false,
                         has_more_rows: false,
+                        invalid_query_error: None,
                     });
                 }
             }
@@ -1192,6 +1413,106 @@ pub async fn execute_command(app: &mut App, cmd: Command) {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_from_tables() {
+        assert_eq!(
+            extract_from_tables("SELECT * FROM datalake.some_db.some_table WHERE id > 5"),
+            vec!["datalake.some_db.some_table"]
+        );
+        assert_eq!(
+            extract_from_tables("SELECT * FROM some_table"),
+            vec!["some_table"]
+        );
+        assert_eq!(
+            extract_from_tables("WHERE age > 20 ORDER BY id"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn test_partial_query_where_clause() {
+        let res = validate_and_build_query(
+            "WHERE status = 'ACTIVE'",
+            "datalake",
+            "some_db",
+            "some_table",
+        );
+        assert_eq!(
+            res.unwrap(),
+            "SELECT * FROM datalake.some_db.some_table WHERE status = 'ACTIVE'"
+        );
+    }
+
+    #[test]
+    fn test_partial_query_select_where() {
+        let res = validate_and_build_query(
+            "SELECT name, age WHERE age > 25",
+            "datalake",
+            "some_db",
+            "some_table",
+        );
+        assert_eq!(
+            res.unwrap(),
+            "SELECT name, age FROM datalake.some_db.some_table WHERE age > 25"
+        );
+    }
+
+    #[test]
+    fn test_partial_query_order_by() {
+        let res = validate_and_build_query(
+            "ORDER BY created_at DESC LIMIT 10",
+            "datalake",
+            "some_db",
+            "some_table",
+        );
+        assert_eq!(
+            res.unwrap(),
+            "SELECT * FROM datalake.some_db.some_table ORDER BY created_at DESC LIMIT 10"
+        );
+    }
+
+    #[test]
+    fn test_valid_full_query_same_table() {
+        let res = validate_and_build_query(
+            "SELECT * FROM datalake.some_db.some_table WHERE age > 10",
+            "datalake",
+            "some_db",
+            "some_table",
+        );
+        assert!(res.is_ok());
+        assert_eq!(
+            res.unwrap(),
+            "SELECT * FROM datalake.some_db.some_table WHERE age > 10"
+        );
+    }
+
+    #[test]
+    fn test_invalid_query_different_table() {
+        let res = validate_and_build_query(
+            "SELECT * FROM table_a WHERE age > 10",
+            "datalake",
+            "some_db",
+            "some_table",
+        );
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Query targets table 'table_a'"));
+    }
+
+    #[test]
+    fn test_wrap_text() {
+        use crate::tui::screens::results::wrap_text;
+        let wrapped = wrap_text("hello world this is a test of long text wrapping", 10);
+        assert!(wrapped.len() > 1);
+        for line in &wrapped {
+            assert!(line.len() <= 10);
         }
     }
 }
