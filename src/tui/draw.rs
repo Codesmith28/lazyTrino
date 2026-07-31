@@ -1,0 +1,529 @@
+// Copyright 2026 Sarthak Siddhpura
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use ratatui::{
+    Frame,
+    layout::{Alignment, Constraint, Layout, Rect},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Borders, Paragraph},
+};
+
+use crate::app::{ActivePanel, App, Mode, Screen};
+
+use super::{screens, theme};
+
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+fn spinner(app: &App) -> String {
+    let idx = (app.frame_count / 2) as usize % SPINNER_FRAMES.len();
+    SPINNER_FRAMES[idx].to_string()
+}
+
+fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
+    let is_editing = matches!(app.mode, Mode::Search);
+    let title = if is_editing {
+        " Centralized Search [EDITING - Press Enter/Esc to finish] "
+    } else {
+        " Centralized Search [Press / to search] "
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::border_style(is_editing));
+
+    let search_text = if app.search_query.is_empty() {
+        Span::styled(
+            "Type to filter catalogs, schemas, tables, and columns...",
+            theme::muted_style(),
+        )
+    } else {
+        Span::styled(&app.search_query, theme::bold_text_style())
+    };
+
+    let p = Paragraph::new(Line::from(vec![Span::raw(" / "), search_text]))
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: false });
+    frame.render_widget(p, area);
+
+    if is_editing {
+        let inner_width = area.width.saturating_sub(2).max(1) as usize;
+        let cursor_index = 3 + app.search_query.len();
+        let line_offset = cursor_index / inner_width;
+        let col_offset = cursor_index % inner_width;
+        let cursor_x = area.x + 1 + (col_offset as u16);
+        let cursor_y = area.y + 1 + (line_offset as u16);
+        if cursor_y < area.y + area.height - 1 && cursor_x < area.x + area.width - 1 {
+            frame.set_cursor_position((cursor_x, cursor_y));
+        }
+    }
+}
+
+fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
+    let is_editing = matches!(app.mode, Mode::QueryInput);
+    let is_table_view = matches!(
+        &app.screen,
+        Screen::Actions(state) if state.results.as_ref().is_some_and(|results| results.is_paginated)
+    );
+
+    let title = if is_editing {
+        " Table Query Bar [EDITING - Press Enter to run, Esc to cancel] "
+    } else if is_table_view {
+        " Table Query Bar [Press 'q' or ':' to write query] "
+    } else {
+        " Table Query Bar [Disabled - Active only in full data table view] "
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::style(theme::query_bar_border_color(
+            is_editing,
+            is_table_view,
+        )));
+
+    let (buf, cursor, sel_range) = match &app.screen {
+        Screen::Actions(state) => {
+            if let Some(ref res) = state.results {
+                (
+                    res.query_buffer.as_str(),
+                    res.query_cursor,
+                    res.selection_range(),
+                )
+            } else {
+                (state.query_buffer.as_str(), state.query_cursor, None)
+            }
+        }
+        _ => ("", 0, None),
+    };
+
+    let (spans, cursor_pos) = if buf.is_empty() {
+        (
+            vec![Span::styled(
+                "Write query (e.g. SELECT * FROM table)...",
+                theme::muted_style(),
+            )],
+            if is_editing { Some(0) } else { None },
+        )
+    } else if is_editing {
+        if let Some((sel_start, sel_end)) = sel_range {
+            let sel_start = sel_start.min(buf.len());
+            let sel_end = sel_end.min(buf.len());
+            let before = &buf[..sel_start];
+            let selected = &buf[sel_start..sel_end];
+            let after = &buf[sel_end..];
+            (
+                vec![
+                    Span::styled(before, theme::bold_text_style()),
+                    Span::styled(selected, theme::query_selection_style()),
+                    Span::styled(after, theme::bold_text_style()),
+                ],
+                Some(cursor),
+            )
+        } else {
+            (
+                vec![Span::styled(buf, theme::bold_text_style())],
+                Some(cursor),
+            )
+        }
+    } else {
+        (vec![Span::styled(buf, theme::bold_text_style())], None)
+    };
+
+    let inner_w = area.width.saturating_sub(2).max(1) as usize;
+    let visible_lines = area.height.saturating_sub(2).max(1) as usize;
+
+    let mut scroll_y: u16 = 0;
+    if is_editing
+        && let Some(pos) = cursor_pos {
+            let cursor_index = 7 + pos;
+            let line_offset = cursor_index / inner_w;
+            if line_offset >= visible_lines {
+                scroll_y = (line_offset - visible_lines + 1) as u16;
+            }
+        }
+
+    let mut line_spans = vec![Span::styled(" SQL > ", theme::warning_style())];
+    line_spans.extend(spans);
+
+    let p = Paragraph::new(Line::from(line_spans))
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .scroll((scroll_y, 0));
+    frame.render_widget(p, area);
+
+    if is_editing
+        && let Some(pos) = cursor_pos {
+            let cursor_index = 7 + pos;
+            let line_offset = cursor_index / inner_w;
+            let col_offset = cursor_index % inner_w;
+
+            let rel_line = line_offset.saturating_sub(scroll_y as usize);
+            let cursor_x = area.x + 1 + (col_offset as u16);
+            let cursor_y = area.y + 1 + (rel_line as u16);
+            if cursor_y < area.y + area.height - 1 && cursor_x < area.x + area.width - 1 {
+                frame.set_cursor_position((cursor_x, cursor_y));
+            }
+        }
+}
+
+pub(super) fn ui(frame: &mut Frame, app: &App) {
+    match app.screen {
+        Screen::Help => {
+            screens::help::render(frame, frame.area());
+        }
+        _ => {
+            let is_in_table = matches!(app.screen, Screen::Actions(_));
+
+            let outer_chunks =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).split(frame.area());
+
+            if !is_in_table {
+                // Phase 1: Default All Tables View (Connect, Catalog, Schema, Table) -> Default 60% list ratio
+                let list_pct = if app.main_panel_pct <= 30 {
+                    60
+                } else {
+                    app.main_panel_pct
+                };
+                let main_chunks = Layout::horizontal([
+                    Constraint::Percentage(list_pct),
+                    Constraint::Percentage(100 - list_pct),
+                ])
+                .split(outer_chunks[0]);
+
+                let search_active = matches!(app.mode, Mode::Search);
+                let inner_w = main_chunks[0].width.saturating_sub(2).max(1) as usize;
+                let search_height = if search_active {
+                    let total_chars = 3 + app.search_query.len();
+                    let lines = total_chars.div_ceil(inner_w);
+                    (lines as u16 + 2).clamp(3, 8)
+                } else {
+                    3
+                };
+
+                let left_chunks =
+                    Layout::vertical([Constraint::Length(search_height), Constraint::Min(0)])
+                        .split(main_chunks[0]);
+
+                render_search_bar(frame, left_chunks[0], app);
+                screens::help::render(frame, main_chunks[1]);
+
+                let main = left_chunks[1];
+                let main_is_active = true;
+
+                match &app.screen {
+                    Screen::Connect(state) => {
+                        screens::connect::render(frame, main, state, spinner(app));
+                    }
+                    Screen::Catalog(state) => {
+                        screens::catalog::render(
+                            frame,
+                            main,
+                            state,
+                            &app.search_query,
+                            main_is_active,
+                        );
+                    }
+                    Screen::Schema(state) => {
+                        screens::schema::render(
+                            frame,
+                            main,
+                            state,
+                            &app.search_query,
+                            main_is_active,
+                        );
+                    }
+                    Screen::Table(state) => {
+                        screens::table::render(
+                            frame,
+                            main,
+                            state,
+                            &app.search_query,
+                            main_is_active,
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                // Phase 2: Inside Table View -> Default 15% Menu : 85% Preview (Resizable)
+                let menu_pct = if app.main_panel_pct > 30 {
+                    15
+                } else {
+                    app.main_panel_pct.clamp(8, 30)
+                };
+                let main_chunks = Layout::horizontal([
+                    Constraint::Percentage(menu_pct),
+                    Constraint::Percentage(100 - menu_pct),
+                ])
+                .split(outer_chunks[0]);
+
+                let menu_area = main_chunks[0];
+                let preview_column = main_chunks[1];
+
+                let search_active = matches!(app.mode, Mode::Search);
+                let query_active = matches!(app.mode, Mode::QueryInput);
+                let inner_w = preview_column.width.saturating_sub(2).max(1) as usize;
+
+                let search_height = if search_active {
+                    let total_chars = 3 + app.search_query.len();
+                    let lines = total_chars.div_ceil(inner_w);
+                    (lines as u16 + 2).clamp(3, 8)
+                } else {
+                    3
+                };
+
+                let selected_idx = match &app.screen {
+                    Screen::Actions(a) => a.selected,
+                    _ => 0,
+                };
+
+                let query_height = if query_active {
+                    let total_chars = 7 + match &app.screen {
+                        Screen::Actions(a) => a
+                            .results
+                            .as_ref()
+                            .map(|r| r.query_buffer.len())
+                            .unwrap_or_else(|| a.query_buffer.len()),
+                        _ => 0,
+                    };
+                    let lines = total_chars.div_ceil(inner_w);
+                    (lines as u16 + 2).clamp(3, 4)
+                } else {
+                    3
+                };
+
+                let preview_chunks = Layout::vertical([
+                    Constraint::Length(search_height),
+                    Constraint::Length(query_height),
+                    Constraint::Min(0),
+                ])
+                .split(preview_column);
+
+                render_search_bar(frame, preview_chunks[0], app);
+                render_query_bar(frame, preview_chunks[1], app);
+                let preview_pane_area = preview_chunks[2];
+
+                let menu_is_active = app.active_panel == ActivePanel::MenuPane;
+                let preview_is_active = app.active_panel == ActivePanel::MainViewer;
+
+                if let Screen::Actions(state) = &app.screen {
+                    screens::actions::render(
+                        frame,
+                        menu_area,
+                        &state.catalog,
+                        &state.schema,
+                        &state.table,
+                        state.selected,
+                        menu_is_active,
+                    );
+                }
+
+                if selected_idx < crate::app::ACTIONS.len() {
+                    let action = &crate::app::ACTIONS[selected_idx].2;
+                    let table_name = match &app.screen {
+                        Screen::Actions(a) => a.table.as_str(),
+                        _ => "",
+                    };
+
+                    match action {
+                        crate::app::Action::Partitions => {
+                            if app.loading && selected_idx == 7 {
+                                let title = format!(" Preview — {table_name} (Partitions) ");
+                                let block = Block::default()
+                                    .title(title)
+                                    .borders(Borders::ALL)
+                                    .border_type(BorderType::Rounded)
+                                    .border_style(theme::border_style(preview_is_active));
+                                let inner = block.inner(preview_pane_area);
+                                frame.render_widget(block, preview_pane_area);
+                                let spin = spinner(app);
+                                let spin_text = Paragraph::new(Line::from(vec![
+                                    Span::styled(
+                                        format!(" [{spin}] "),
+                                        theme::warning_bold_style(),
+                                    ),
+                                    Span::styled(
+                                        "FETCHING PARTITION METADATA...",
+                                        theme::info_bold_style(),
+                                    ),
+                                ]))
+                                .alignment(Alignment::Center);
+                                frame.render_widget(spin_text, inner);
+                            } else if !app.partition_tree_lines.is_empty() {
+                                screens::partition_tree::render(
+                                    frame,
+                                    preview_pane_area,
+                                    &app.partition_tree_lines,
+                                    table_name,
+                                    app.partition_scroll,
+                                    preview_is_active,
+                                );
+                            } else {
+                                render_placeholder_preview(
+                                    frame,
+                                    preview_pane_area,
+                                    table_name,
+                                    selected_idx,
+                                    preview_is_active,
+                                );
+                            }
+                        }
+                        crate::app::Action::Schema => {
+                            if app.loading && selected_idx == 8 {
+                                let title = format!(" Preview — {table_name} (Schema) ");
+                                let block = Block::default()
+                                    .title(title)
+                                    .borders(Borders::ALL)
+                                    .border_type(BorderType::Rounded)
+                                    .border_style(theme::border_style(preview_is_active));
+                                let inner = block.inner(preview_pane_area);
+                                frame.render_widget(block, preview_pane_area);
+                                let spin = spinner(app);
+                                let spin_text = Paragraph::new(Line::from(vec![
+                                    Span::styled(
+                                        format!(" [{spin}] "),
+                                        theme::warning_bold_style(),
+                                    ),
+                                    Span::styled(
+                                        "FETCHING SCHEMA METADATA...",
+                                        theme::info_bold_style(),
+                                    ),
+                                ]))
+                                .alignment(Alignment::Center);
+                                frame.render_widget(spin_text, inner);
+                            } else if !app.vertical_schema_cols.is_empty() {
+                                screens::vertical_schema::render(
+                                    frame,
+                                    preview_pane_area,
+                                    &app.vertical_schema_cols,
+                                    table_name,
+                                    app.schema_scroll,
+                                    preview_is_active,
+                                );
+                            } else {
+                                render_placeholder_preview(
+                                    frame,
+                                    preview_pane_area,
+                                    table_name,
+                                    selected_idx,
+                                    preview_is_active,
+                                );
+                            }
+                        }
+                        _ => {
+                            if let Screen::Actions(state) = &app.screen {
+                                if let Some(ref res_state) = state.results {
+                                    screens::results::render(
+                                        frame,
+                                        preview_pane_area,
+                                        res_state,
+                                        spinner(app),
+                                        preview_is_active,
+                                    );
+                                } else if app.loading {
+                                    let title = format!(
+                                        " Preview — {} ({}) ",
+                                        table_name,
+                                        crate::app::ACTIONS[selected_idx].1
+                                    );
+                                    let block = Block::default()
+                                        .title(title)
+                                        .borders(Borders::ALL)
+                                        .border_type(BorderType::Rounded)
+                                        .border_style(theme::border_style(preview_is_active));
+                                    let inner = block.inner(preview_pane_area);
+                                    frame.render_widget(block, preview_pane_area);
+                                    let spin = spinner(app);
+                                    let spin_text = Paragraph::new(Line::from(vec![
+                                        Span::styled(
+                                            format!(" [{spin}] "),
+                                            theme::warning_bold_style(),
+                                        ),
+                                        Span::styled(
+                                            "EXECUTING TRINO QUERY...",
+                                            theme::info_bold_style(),
+                                        ),
+                                    ]))
+                                    .alignment(Alignment::Center);
+                                    frame.render_widget(spin_text, inner);
+                                } else {
+                                    render_placeholder_preview(
+                                        frame,
+                                        preview_pane_area,
+                                        table_name,
+                                        selected_idx,
+                                        preview_is_active,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            screens::query_inspector::render(frame, outer_chunks[1], app);
+        }
+    }
+}
+
+fn render_placeholder_preview(
+    frame: &mut Frame,
+    area: Rect,
+    table_name: &str,
+    selected_idx: usize,
+    preview_is_active: bool,
+) {
+    let action_name = if selected_idx < crate::app::ACTIONS.len() {
+        crate::app::ACTIONS[selected_idx].1
+    } else {
+        ""
+    };
+    let title = format!(" Preview — {table_name} ({action_name}) ");
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::border_style(preview_is_active));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let info_lines = vec![
+        Line::from(Span::styled(
+            " Table Preview Area",
+            theme::info_bold_style(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!(
+                " Active Selection: [{}] {action_name}",
+                crate::app::ACTIONS[selected_idx].0
+            ),
+            theme::warning_bold_style(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Press Enter (or hit hotkey) to load and display preview output.",
+            theme::text_style(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(" Menu Shortcuts:", theme::muted_style())),
+        Line::from("   [v] Table View Mode       [d] Describe Table       [c] Table DDL"),
+        Line::from("   [i] Info Schema           [s] Show Stats           [n] Row Count"),
+        Line::from("   [p] Sample (20 rows)      [P] Partition Tree       [S] Vertical Schema"),
+    ];
+    let info_p = Paragraph::new(info_lines).alignment(Alignment::Center);
+    frame.render_widget(info_p, inner);
+}
