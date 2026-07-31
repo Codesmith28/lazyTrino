@@ -81,6 +81,10 @@ pub fn secondary_style() -> Style {
     style(SECONDARY_FG)
 }
 
+pub fn footer_style() -> Style {
+    Style::default().fg(TEXT_FG).bg(INACTIVE_BORDER)
+}
+
 pub fn error_style() -> Style {
     style(ERROR_FG)
 }
