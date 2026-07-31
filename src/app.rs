@@ -314,3 +314,117 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ConnectionConfig;
+    use crate::trino::queries;
+
+    fn sample_config() -> ConnectionConfig {
+        ConnectionConfig {
+            url: "https://trino.example".to_string(),
+            user: "analyst".to_string(),
+            password: "secret".to_string(),
+        }
+    }
+
+    #[test]
+    fn app_new_initializes_connect_screen_and_defaults() {
+        let config = sample_config();
+        let app = App::new(config.clone(), true);
+
+        let Screen::Connect(state) = &app.screen else {
+            panic!("expected connect screen");
+        };
+        assert_eq!(state.url, config.url);
+        assert_eq!(state.user, config.user);
+        assert_eq!(state.password, config.password);
+        assert_eq!(state.focused, 0);
+        assert!(!state.loading);
+        assert!(state.error.is_none());
+
+        assert!(app.prev_screen.is_none());
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(!app.should_quit);
+        assert!(app.number_buffer.is_empty());
+        assert!(app.search_query.is_empty());
+        assert!(!app.loading);
+        assert!(app.trino_client.is_none());
+        assert_eq!(app.config, config);
+        assert!(app.catalogs.is_empty());
+        assert!(app.schemas.is_empty());
+        assert!(app.tables.is_empty());
+        assert_eq!(app.frame_count, 0);
+        assert!(app.query_logs.is_empty());
+        assert_eq!(app.active_panel, ActivePanel::MainViewer);
+        assert!(app.partition_tree_lines.is_empty());
+        assert_eq!(app.partition_scroll, 0);
+        assert!(app.vertical_schema_cols.is_empty());
+        assert_eq!(app.schema_scroll, 0);
+        assert!(app.auto_connect);
+        assert_eq!(app.main_panel_pct, 60);
+        assert_eq!(app.control_panel_split_pct, 40);
+        assert!(!app.is_dragging_resizer);
+        assert!(!app.is_dragging_query_select);
+        assert_eq!(app.query_inspector_scroll, 0);
+        assert!(app.mouse_selection_anchor.is_none());
+        assert!(app.mouse_selection_current.is_none());
+        assert!(!app.is_selecting_text);
+        assert!(app.copied_toast.is_none());
+    }
+
+    #[test]
+    fn query_log_lifecycle_tracks_success_and_error_entries() {
+        let mut app = App::new(sample_config(), false);
+
+        let first_id = app.add_query_log("SELECT 1".to_string());
+        let second_id = app.add_query_log("SELECT 2".to_string());
+
+        assert_eq!(first_id, 1);
+        assert_eq!(second_id, 2);
+
+        app.complete_query_log_success(first_id, 125, 7);
+        app.complete_query_log_error(second_id, "boom".to_string());
+
+        assert_eq!(app.query_logs.len(), 2);
+
+        let first = &app.query_logs[0];
+        assert_eq!(first.id, 1);
+        assert_eq!(first.sql, "SELECT 1");
+        assert_eq!(first.status, QueryStatus::Success);
+        assert_eq!(first.duration_ms, Some(125));
+        assert_eq!(first.row_count, Some(7));
+        assert!(first.error_msg.is_none());
+
+        let second = &app.query_logs[1];
+        assert_eq!(second.id, 2);
+        assert_eq!(second.sql, "SELECT 2");
+        assert_eq!(second.status, QueryStatus::Error);
+        assert_eq!(second.duration_ms, None);
+        assert_eq!(second.row_count, None);
+        assert_eq!(second.error_msg.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn action_build_query_matches_queries_module_for_all_variants() {
+        let catalog = "iceberg";
+        let schema = "sales";
+        let table = "orders";
+        let cases = vec![
+            (Action::TableView, queries::page_query(catalog, schema, table, 0, 100)),
+            (Action::Describe, queries::describe(catalog, schema, table)),
+            (Action::TableDDL, queries::show_create(catalog, schema, table)),
+            (Action::InfoSchema, queries::info_schema_columns(catalog, schema, table)),
+            (Action::ShowStats, queries::show_stats(catalog, schema, table)),
+            (Action::Count, queries::count(catalog, schema, table)),
+            (Action::Sample, queries::sample(catalog, schema, table)),
+            (Action::Partitions, queries::partitions(catalog, schema, table)),
+            (Action::Schema, queries::describe(catalog, schema, table)),
+        ];
+
+        for (action, expected) in cases {
+            assert_eq!(action.build_query(catalog, schema, table), expected);
+        }
+    }
+}

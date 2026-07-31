@@ -248,6 +248,150 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ConnectionConfig;
+    use crate::trino::client::TrinoClient;
+
+    fn sample_config() -> ConnectionConfig {
+        ConnectionConfig {
+            url: "https://trino.example".to_string(),
+            user: "analyst".to_string(),
+            password: "secret".to_string(),
+        }
+    }
+
+    fn sample_app(screen: Screen) -> App {
+        let mut app = App::new(sample_config(), false);
+        app.screen = screen;
+        app
+    }
+
+    #[test]
+    fn go_back_returns_to_connect_when_logged_out_on_catalog_screen() {
+        let config = sample_config();
+        let mut app = App::new(config.clone(), false);
+        app.main_panel_pct = 25;
+        app.screen = Screen::Catalog(CatalogState {
+            items: vec!["system".to_string(), "tpch".to_string()],
+            selected: 1,
+        });
+
+        go_back(&mut app);
+
+        let Screen::Connect(state) = &app.screen else {
+            panic!("expected connect screen");
+        };
+        assert_eq!(state.url, config.url);
+        assert_eq!(state.user, config.user);
+        assert_eq!(state.password, config.password);
+        assert_eq!(app.main_panel_pct, 60);
+    }
+
+    #[test]
+    fn go_back_is_noop_for_catalog_screen_when_logged_in() {
+        let mut app = sample_app(Screen::Catalog(CatalogState {
+            items: vec!["system".to_string(), "tpch".to_string()],
+            selected: 1,
+        }));
+        app.trino_client = Some(TrinoClient::new("https://trino.example", "analyst").unwrap());
+
+        go_back(&mut app);
+
+        let Screen::Catalog(state) = &app.screen else {
+            panic!("expected catalog screen");
+        };
+        assert_eq!(state.selected, 1);
+        assert_eq!(app.main_panel_pct, 60);
+    }
+
+    #[test]
+    fn go_back_restores_previous_list_selection() {
+        let mut app = sample_app(Screen::Schema(SchemaState {
+            catalog: "tpch".to_string(),
+            items: vec!["tiny".to_string(), "sf1".to_string()],
+            selected: 1,
+        }));
+        app.catalogs = vec!["system".to_string(), "tpch".to_string(), "hive".to_string()];
+
+        go_back(&mut app);
+
+        let Screen::Catalog(state) = &app.screen else {
+            panic!("expected catalog screen");
+        };
+        assert_eq!(state.items, app.catalogs);
+        assert_eq!(state.selected, 1);
+
+        app.screen = Screen::Table(TableState {
+            catalog: "tpch".to_string(),
+            schema: "sf1".to_string(),
+            items: vec!["customer".to_string(), "orders".to_string()],
+            selected: 1,
+        });
+        app.schemas.insert(
+            "tpch".to_string(),
+            vec!["tiny".to_string(), "sf1".to_string()],
+        );
+
+        go_back(&mut app);
+
+        let Screen::Schema(state) = &app.screen else {
+            panic!("expected schema screen");
+        };
+        assert_eq!(state.catalog, "tpch");
+        assert_eq!(state.items, vec!["tiny".to_string(), "sf1".to_string()]);
+        assert_eq!(state.selected, 1);
+
+        app.screen = Screen::Actions(ActionState {
+            catalog: "tpch".to_string(),
+            schema: "sf1".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            query_buffer: "SELECT * FROM orders".to_string(),
+            query_cursor: 20,
+            results: None,
+        });
+        app.tables.insert(
+            ("tpch".to_string(), "sf1".to_string()),
+            vec!["customer".to_string(), "orders".to_string()],
+        );
+
+        go_back(&mut app);
+
+        let Screen::Table(state) = &app.screen else {
+            panic!("expected table screen");
+        };
+        assert_eq!(state.catalog, "tpch");
+        assert_eq!(state.schema, "sf1");
+        assert_eq!(state.items, vec!["customer".to_string(), "orders".to_string()]);
+        assert_eq!(state.selected, 1);
+    }
+
+    #[test]
+    fn go_back_restores_prev_screen_from_help() {
+        let previous_screen = Screen::Table(TableState {
+            catalog: "tpch".to_string(),
+            schema: "sf1".to_string(),
+            items: vec!["customer".to_string(), "orders".to_string()],
+            selected: 0,
+        });
+        let mut app = sample_app(Screen::Help);
+        app.prev_screen = Some(Box::new(previous_screen));
+
+        go_back(&mut app);
+
+        let Screen::Table(state) = &app.screen else {
+            panic!("expected restored table screen");
+        };
+        assert_eq!(state.catalog, "tpch");
+        assert_eq!(state.schema, "sf1");
+        assert_eq!(state.items, vec!["customer".to_string(), "orders".to_string()]);
+        assert_eq!(state.selected, 0);
+        assert!(app.prev_screen.is_none());
+    }
+}
+
 fn select_current_item(app: &mut App) -> Option<Command> {
     match &app.screen {
         Screen::Catalog(s) => {
