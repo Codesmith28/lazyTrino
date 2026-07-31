@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::app::*;
+use crate::config_file;
 use crate::trino::client::TrinoClient;
 use crate::trino::queries;
 
@@ -307,6 +308,11 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     app.config.url = url;
                     app.config.user = user;
                     app.config.password = password;
+                    if let Err(error) =
+                        config_file::save_last_used(&app.config.url, &app.config.user)
+                    {
+                        warn!(error = %error, "Failed to persist last used connection");
+                    }
                     app.trino_client = Some(client);
                     app.catalogs = catalogs.iter().map(|c| c.trim().to_string()).collect();
                     app.screen = Screen::Catalog(CatalogState {

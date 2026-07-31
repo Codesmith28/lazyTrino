@@ -12,11 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod app;
-mod config;
-mod trino;
-mod tui;
-
 use std::{
     fs::OpenOptions,
     io,
@@ -25,6 +20,7 @@ use std::{
 
 use anyhow::Result;
 use clap::Parser;
+use lazy_trino::{app, config, config_file, tui};
 use tracing_subscriber::{EnvFilter, fmt::writer::MakeWriter};
 
 const FALLBACK_LOG_FILE: &str = "lazytrino.log";
@@ -93,15 +89,10 @@ async fn main() -> Result<()> {
         .with_env_filter(env_filter)
         .init();
 
-    let auto_connect = args.url.is_some() && args.user.is_some();
-    let default_config = config::ConnectionConfig::default();
-    let config = config::ConnectionConfig {
-        url: args.url.unwrap_or(default_config.url),
-        user: args.user.unwrap_or(default_config.user),
-        password: args.password.unwrap_or(default_config.password),
-    };
+    let loaded_config = config_file::load();
+    let resolved = config_file::resolve_profile(&args, loaded_config.as_ref());
 
-    let mut app = app::App::new(config, auto_connect);
+    let mut app = app::App::new(resolved.config, resolved.auto_connect);
 
     tui::run(&mut app).await
 }

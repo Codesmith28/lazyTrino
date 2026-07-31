@@ -36,7 +36,7 @@ impl LogLevel {
     }
 }
 
-#[derive(Debug, Clone, Parser)]
+#[derive(Debug, Clone, Default, Parser)]
 #[command(name = "lazyTrino", about = "TUI Trino table browser")]
 pub struct CliArgs {
     /// Trino coordinator REST server URL.
@@ -51,6 +51,10 @@ pub struct CliArgs {
     #[arg(long, alias = "pass")]
     pub password: Option<String>,
 
+    /// Named connection profile from the config file.
+    #[arg(long, value_name = "NAME")]
+    pub profile: Option<String>,
+
     /// Override the default log level when RUST_LOG is not set.
     #[arg(long, value_enum, value_name = "LEVEL")]
     pub log_level: Option<LogLevel>,
@@ -60,7 +64,7 @@ pub struct CliArgs {
     pub no_log: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionConfig {
     pub url: String,
     pub user: String,
