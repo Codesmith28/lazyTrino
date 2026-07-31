@@ -1,44 +1,73 @@
 use ratatui::{
+    Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
-    Frame,
 };
+
+use crate::tui::theme;
 
 pub fn render(frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .title(" Help & Keybindings ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(theme::border_style(true));
     frame.render_widget(&block, area);
 
     let inner = block.inner(area);
 
     let help_text = vec![
-        Line::from(Span::styled(" Active Pane Concept & Layout", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
-        Line::from("  All Tables View               Left: Catalogs/Schemas/Tables | Right: Help Pane"),
-        Line::from("  Inside Table View             Left: Menu Pane (10%) | Right: Search, Query & Main Preview (90%)"),
-        Line::from("  Shift+H/L / Tab / Click        Switch focus between Menu Pane (left) and Preview Pane (right)"),
-        Line::from("  Option Selection              Selecting a menu option shifts focus to Preview Pane while option stays highlighted"),
+        Line::from(Span::styled(
+            " Active Pane Concept & Layout",
+            theme::header_style(),
+        )),
+        Line::from(
+            "  All Tables View               Left: Catalogs/Schemas/Tables | Right: Help Pane",
+        ),
+        Line::from(
+            "  Inside Table View             Left: Menu Pane (10%) | Right: Search, Query & Main Preview (90%)",
+        ),
+        Line::from(
+            "  Shift+H/L / Tab / Click        Switch focus between Menu Pane (left) and Preview Pane (right)",
+        ),
+        Line::from(
+            "  Option Selection              Selecting a menu option shifts focus to Preview Pane while option stays highlighted",
+        ),
         Line::from(""),
-        Line::from(Span::styled(" Navigation & Scrolling", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
-        Line::from("  j / ↓ / Mouse Wheel Down       Move menu selection down / scroll active preview pane"),
-        Line::from("  k / ↑ / Mouse Wheel Up         Move menu selection up / scroll active preview pane"),
+        Line::from(Span::styled(
+            " Navigation & Scrolling",
+            theme::header_style(),
+        )),
+        Line::from(
+            "  j / ↓ / Mouse Wheel Down       Move menu selection down / scroll active preview pane",
+        ),
+        Line::from(
+            "  k / ↑ / Mouse Wheel Up         Move menu selection up / scroll active preview pane",
+        ),
         Line::from("  g / G                          Jump to top / bottom of active preview pane"),
-        Line::from("  h / ← / Esc                    Switch focus to Menu Pane / Go back to Tables list"),
+        Line::from(
+            "  h / ← / Esc                    Switch focus to Menu Pane / Go back to Tables list",
+        ),
         Line::from("  l / → / Enter                  Select menu option & focus Preview Pane"),
         Line::from(""),
-        Line::from(Span::styled(" Table View Options & Hotkeys", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            " Table View Options & Hotkeys",
+            theme::header_style(),
+        )),
         Line::from("  v                              Table View Mode (Infinite Scroll grid)"),
         Line::from("  d / c / i                      Describe / Table DDL / Info Schema"),
         Line::from("  s / n / p                      Show Stats / Row Count / Sample (20 rows)"),
         Line::from("  P / S                          Partitions Tree / Vertical Schema Inspector"),
         Line::from(""),
-        Line::from(Span::styled(" Search & Custom Query", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            " Search & Custom Query",
+            theme::header_style(),
+        )),
         Line::from("  /                              Focus Centralized Search Bar"),
-        Line::from("  q or :                         Write custom SQL in Query Bar (in Table View)"),
+        Line::from(
+            "  q or :                         Write custom SQL in Query Bar (in Table View)",
+        ),
         Line::from("  Ctrl+C                         Quit lazyTrino"),
     ];
 

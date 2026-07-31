@@ -1,10 +1,11 @@
 use ratatui::{
+    Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem, ListState},
-    Frame,
 };
+
+use crate::tui::theme;
 
 #[derive(Default)]
 struct TreeNode {
@@ -37,7 +38,13 @@ impl TreeNode {
     }
 }
 
-fn format_tree_node(node: &TreeNode, prefix: &str, is_last: bool, depth: usize, lines: &mut Vec<String>) {
+fn format_tree_node(
+    node: &TreeNode,
+    prefix: &str,
+    is_last: bool,
+    depth: usize,
+    lines: &mut Vec<String>,
+) {
     if depth > 0 {
         let branch = if is_last { "└── " } else { "├── " };
         let level_tag = format!("  (Level {})", depth);
@@ -53,8 +60,12 @@ fn format_tree_node(node: &TreeNode, prefix: &str, is_last: bool, depth: usize, 
     };
 
     if node.children.is_empty() && depth > 0 {
-        lines.push(format!("{child_prefix}├── .hoodie/                (Apache Hudi Metadata)"));
-        lines.push(format!("{child_prefix}└── data_files.parquet       (Apache Parquet Data Files)"));
+        lines.push(format!(
+            "{child_prefix}├── .hoodie/                (Apache Hudi Metadata)"
+        ));
+        lines.push(format!(
+            "{child_prefix}└── data_files.parquet       (Apache Parquet Data Files)"
+        ));
     } else {
         let total_children = node.children.len();
         for (i, child) in node.children.iter().enumerate() {
@@ -114,7 +125,9 @@ pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
                 _ => "<value>",
             };
             let level_tag = format!("  (Partition Level {})", depth + 1);
-            lines.push(format!("{prefix}{branch}{col}={val_placeholder}/{level_tag}"));
+            lines.push(format!(
+                "{prefix}{branch}{col}={val_placeholder}/{level_tag}"
+            ));
             if is_last {
                 prefix.push_str("    ");
             } else {
@@ -122,8 +135,12 @@ pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
             }
         }
 
-        lines.push(format!("{prefix}├── .hoodie/                (Apache Hudi Metadata)"));
-        lines.push(format!("{prefix}└── data_files.parquet       (Apache Parquet Data Files)"));
+        lines.push(format!(
+            "{prefix}├── .hoodie/                (Apache Hudi Metadata)"
+        ));
+        lines.push(format!(
+            "{prefix}└── data_files.parquet       (Apache Parquet Data Files)"
+        ));
     }
 
     lines
@@ -134,7 +151,9 @@ pub fn build_tree_lines(raw_partitions: &[String]) -> Vec<String> {
         return vec![" (No partitions found)".to_string()];
     }
 
-    if raw_partitions.len() == 1 && (raw_partitions[0].contains("CREATE TABLE") || raw_partitions[0].contains("WITH (")) {
+    if raw_partitions.len() == 1
+        && (raw_partitions[0].contains("CREATE TABLE") || raw_partitions[0].contains("WITH ("))
+    {
         return parse_show_create_to_tree_lines(&raw_partitions[0]);
     }
 
@@ -184,20 +203,25 @@ fn split_tree_line(line: &str) -> (String, String) {
     (branch_part, content_part)
 }
 
-pub fn render(frame: &mut Frame, area: Rect, raw_partitions: &[String], table_name: &str, scroll: usize, is_active: bool) {
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    raw_partitions: &[String],
+    table_name: &str,
+    scroll: usize,
+    is_active: bool,
+) {
     let title = if table_name.is_empty() {
         " Partitions (Tree View) ".to_string()
     } else {
         format!(" Partitions — {table_name} ")
     };
 
-    let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
-
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
+        .border_style(theme::border_style(is_active));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -211,20 +235,21 @@ pub fn render(frame: &mut Frame, area: Rect, raw_partitions: &[String], table_na
         .map(|line_str| {
             let (branch_part, content_part) = split_tree_line(line_str);
 
-            let content_style = if content_part.contains("s3://") || content_part.contains("hdfs://") || content_part.starts_with('/') {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            let content_style = if content_part.contains("s3://")
+                || content_part.contains("hdfs://")
+                || content_part.starts_with('/')
+            {
+                theme::warning_bold_style()
             } else if content_part.contains("Level") {
-                Style::default().fg(Color::Cyan)
+                theme::info_style()
             } else if content_part.contains(".hoodie") || content_part.contains(".parquet") {
-                Style::default().fg(Color::Green)
+                theme::success_style()
             } else {
-                Style::default().fg(Color::DarkGray)
+                theme::muted_style()
             };
 
-            let branch_style = Style::default().fg(Color::White);
-
             let line = Line::from(vec![
-                Span::styled(branch_part, branch_style),
+                Span::styled(branch_part, theme::text_style()),
                 Span::styled(content_part, content_style),
             ]);
 
