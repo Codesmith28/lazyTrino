@@ -1,16 +1,49 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    #[default]
+    Info,
+    Warn,
+    Error,
+}
+
+impl LogLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Trace => "trace",
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "lazyTrino", about = "TUI Trino table browser")]
 pub struct CliArgs {
+    /// Trino coordinator REST server URL.
     #[arg(long)]
     pub url: Option<String>,
 
+    /// Trino username.
     #[arg(long)]
     pub user: Option<String>,
 
+    /// Trino password.
     #[arg(long, alias = "pass")]
     pub password: Option<String>,
+
+    /// Override the default log level when RUST_LOG is not set.
+    #[arg(long, value_enum, value_name = "LEVEL")]
+    pub log_level: Option<LogLevel>,
+
+    /// Disable file logging.
+    #[arg(long)]
+    pub no_log: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -35,4 +68,3 @@ impl Default for ConnectionConfig {
         }
     }
 }
-
