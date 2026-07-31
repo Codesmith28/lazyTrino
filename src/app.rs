@@ -241,6 +241,7 @@ pub struct App {
     pub control_panel_split_pct: u16,
     pub is_dragging_resizer: bool,
     pub is_dragging_v_resizer: bool,
+    pub is_dragging_query_select: bool,
     pub query_inspector_scroll: usize,
 }
 
@@ -251,7 +252,9 @@ impl App {
                 url: config.url.clone(),
                 user: config.user.clone(),
                 password: config.password.clone(),
-                ..Default::default()
+                focused: 0,
+                loading: false,
+                error: None,
             }),
             prev_screen: None,
             mode: Mode::Normal,
@@ -273,10 +276,11 @@ impl App {
             schema_scroll: 0,
             active_table_name: None,
             auto_connect,
-            main_panel_pct: 65,
-            control_panel_split_pct: 50,
+            main_panel_pct: 60,
+            control_panel_split_pct: 40,
             is_dragging_resizer: false,
             is_dragging_v_resizer: false,
+            is_dragging_query_select: false,
             query_inspector_scroll: 0,
         }
     }

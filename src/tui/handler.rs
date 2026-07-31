@@ -402,6 +402,32 @@ fn paste_from_clipboard() -> Option<String> {
     }
 }
 
+fn query_text_index_from_mouse(
+    mouse_col: u16,
+    mouse_row: u16,
+    query_y_start: u16,
+    inner_w: usize,
+    buffer_len: usize,
+) -> usize {
+    if inner_w == 0 {
+        return 0;
+    }
+    let rel_y = mouse_row.saturating_sub(query_y_start + 1) as usize;
+    let rel_x = mouse_col.saturating_sub(1) as usize;
+
+    let char_idx = if rel_y == 0 {
+        let line0_x = rel_x.saturating_sub(7);
+        let max_line0 = inner_w.saturating_sub(7);
+        line0_x.min(max_line0)
+    } else {
+        let max_line0 = inner_w.saturating_sub(7);
+        let line_x = rel_x.min(inner_w);
+        max_line0 + (rel_y - 1) * inner_w + line_x
+    };
+
+    char_idx.min(buffer_len)
+}
+
 fn is_mac_option_code(code: KeyCode) -> bool {
     matches!(code, KeyCode::Char('∆') | KeyCode::Char('˚') | KeyCode::Char('˙') | KeyCode::Char('¬') | KeyCode::Char('©'))
 }
@@ -554,14 +580,22 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
 
                     if mouse.row < search_h {
                         app.mode = Mode::Search;
+                        app.is_dragging_query_select = false;
                     } else if is_table_view && mouse.row < search_h + query_h {
                         app.mode = Mode::QueryInput;
+                        app.is_dragging_query_select = true;
                         if let Screen::Results(ref mut state) = app.screen {
-                            state.query_cursor = state.query_buffer.len();
+                            let idx = query_text_index_from_mouse(mouse.column, mouse.row, search_h, inner_w, state.query_buffer.len());
+                            state.selection_anchor = Some(idx);
+                            state.query_cursor = idx;
                         }
                     } else {
                         app.mode = Mode::Normal;
                         app.active_panel = ActivePanel::MainViewer;
+                        app.is_dragging_query_select = false;
+                        if let Screen::Results(ref mut state) = app.screen {
+                            state.clear_selection();
+                        }
                     }
                 } else if mouse.column >= border_x && mouse.row < bottom_y && active_table {
                     if mouse.row < border_y {
@@ -582,11 +616,36 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     let pct = ((rel_y * 100) / height_right as u32) as u16;
                     app.control_panel_split_pct = pct.clamp(20, 80);
                 }
+            } else if app.is_dragging_query_select {
+                if let Screen::Results(ref mut state) = app.screen {
+                    let search_active = matches!(app.mode, Mode::Search);
+                    let inner_w = border_x.saturating_sub(2).max(1) as usize;
+                    let search_h: u16 = if search_active {
+                        let total = 3 + app.search_query.len();
+                        let lines = (total + inner_w - 1) / inner_w;
+                        (lines as u16 + 2).clamp(3, 8)
+                    } else {
+                        3
+                    };
+                    let idx = query_text_index_from_mouse(mouse.column, mouse.row, search_h, inner_w, state.query_buffer.len());
+                    if state.selection_anchor.is_none() {
+                        state.selection_anchor = Some(state.query_cursor);
+                    }
+                    state.query_cursor = idx;
+                }
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
             app.is_dragging_resizer = false;
             app.is_dragging_v_resizer = false;
+            if app.is_dragging_query_select {
+                app.is_dragging_query_select = false;
+                if let Screen::Results(ref mut state) = app.screen {
+                    if state.selection_anchor == Some(state.query_cursor) {
+                        state.clear_selection();
+                    }
+                }
+            }
         }
         MouseEventKind::ScrollDown => {
             let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
@@ -1762,6 +1821,13 @@ mod tests {
         assert_eq!(prev_word_pos(text, 14), 9);
         assert_eq!(next_word_pos(text, 0), 7);
         assert_eq!(next_word_pos(text, 7), 9);
+    }
+
+    #[test]
+    fn test_mouse_index_calculation() {
+        let len = 50;
+        assert_eq!(query_text_index_from_mouse(8, 3, 2, 40, len), 0);
+        assert_eq!(query_text_index_from_mouse(18, 3, 2, 40, len), 10);
     }
 
     #[test]
