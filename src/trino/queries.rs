@@ -54,47 +54,61 @@ pub fn partitions(catalog: &str, schema: &str, table: &str) -> String {
     format!("SELECT * FROM {}.{}.{}", q(catalog), q(schema), q(&format!("{table}$partitions")))
 }
 
-#[allow(dead_code)]
-pub fn show_partitions(catalog: &str, schema: &str, table: &str) -> String {
-    format!(
-        "SELECT * FROM {}.information_schema.partitions WHERE table_schema = '{}' AND table_name = '{}'",
-        q(catalog),
-        schema.trim().replace('\'', "''"),
-        table.trim().replace('\'', "''")
-    )
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[allow(dead_code)]
-pub fn files(catalog: &str, schema: &str, table: &str) -> String {
-    format!(
-        "SELECT * FROM {}.{}.{} LIMIT 50",
-        q(catalog), q(schema), q(&format!("{table}$files"))
-    )
-}
+    #[test]
+    fn metadata_queries_quote_identifiers() {
+        assert_eq!(show_catalogs(), "SHOW CATALOGS");
+        assert_eq!(show_schemas("ice berg"), "SHOW SCHEMAS FROM \"ice berg\"");
+        assert_eq!(
+            show_tables("ice\"berg", "sales data"),
+            "SHOW TABLES FROM \"ice\"\"berg\".\"sales data\""
+        );
+    }
 
-#[allow(dead_code)]
-pub fn properties(catalog: &str, schema: &str, table: &str) -> String {
-    format!("SELECT * FROM {}.{}.{}", q(catalog), q(schema), q(&format!("{table}$properties")))
-}
+    #[test]
+    fn table_inspection_queries_match_expected_sql() {
+        let catalog = "ice\"berg";
+        let schema = "sales data";
+        let table = "orders\"2024";
 
-#[allow(dead_code)]
-pub fn snapshots(catalog: &str, schema: &str, table: &str) -> String {
-    format!(
-        "SELECT * FROM {}.{}.{}",
-        q(catalog), q(schema), q(&format!("{table}$snapshots"))
-    )
-}
+        assert_eq!(
+            describe(catalog, schema, table),
+            "DESCRIBE \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\""
+        );
+        assert_eq!(
+            show_create(catalog, schema, table),
+            "SHOW CREATE TABLE \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\""
+        );
+        assert_eq!(
+            show_stats(catalog, schema, table),
+            "SHOW STATS FOR \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\""
+        );
+        assert_eq!(
+            count(catalog, schema, table),
+            "SELECT COUNT(*) AS total_records FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\""
+        );
+        assert_eq!(
+            sample(catalog, schema, table),
+            "SELECT * FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\" LIMIT 20"
+        );
+        assert_eq!(
+            page_query(catalog, schema, table, 25, 50),
+            "SELECT * FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\" OFFSET 25 LIMIT 50"
+        );
+        assert_eq!(
+            partitions(catalog, schema, table),
+            "SELECT * FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024$partitions\""
+        );
+    }
 
-#[allow(dead_code)]
-pub fn history(catalog: &str, schema: &str, table: &str) -> String {
-    format!(
-        "SELECT * FROM {}.{}.{}",
-        q(catalog), q(schema), q(&format!("{table}$history"))
-    )
+    #[test]
+    fn info_schema_query_escapes_single_quotes() {
+        assert_eq!(
+            info_schema_columns("ice\"berg", "o'hare", "customer's orders"),
+            "SELECT column_name, data_type, is_nullable, comment FROM \"ice\"\"berg\".information_schema.columns WHERE table_schema = 'o''hare' AND table_name = 'customer''s orders' ORDER BY ordinal_position"
+        );
+    }
 }
-
-#[allow(dead_code)]
-pub fn metadata_log(catalog: &str, schema: &str, table: &str) -> String {
-    format!("SELECT * FROM {}.{}.{}", q(catalog), q(schema), q(&format!("{table}$metadata_log")))
-}
-
