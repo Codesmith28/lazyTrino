@@ -13,28 +13,32 @@
 // limitations under the License.
 
 use ratatui::{
-    layout::{Constraint, Rect},
-    style::{Color, Modifier, Style},
-    widgets::{Block, BorderType, Borders, Cell, Row, Table},
     Frame,
+    layout::{Constraint, Rect},
+    widgets::{Block, BorderType, Borders, Cell, Row, Table},
 };
 
-use crate::app::VerticalColumn;
+use crate::{app::VerticalColumn, tui::theme};
 
-pub fn render(frame: &mut Frame, area: Rect, columns: &[VerticalColumn], table_name: &str, scroll: usize, is_active: bool) {
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    columns: &[VerticalColumn],
+    table_name: &str,
+    scroll: usize,
+    is_active: bool,
+) {
     let title = if table_name.is_empty() {
         " Schema (Vertical Table Format) ".to_string()
     } else {
         format!(" Schema — {table_name} ")
     };
 
-    let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
-
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
+        .border_style(theme::border_style(is_active));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -44,11 +48,11 @@ pub fn render(frame: &mut Frame, area: Rect, columns: &[VerticalColumn], table_n
     }
 
     let header_cells = vec![
-        Cell::from(" # ").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Cell::from("Column Name").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Cell::from("Data Type").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-        Cell::from("Key / Partition").style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-        Cell::from("Description").style(Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
+        Cell::from(" # ").style(theme::warning_bold_style()),
+        Cell::from("Column Name").style(theme::info_bold_style()),
+        Cell::from("Data Type").style(theme::header_style()),
+        Cell::from("Key / Partition").style(theme::bold_style(theme::DETAIL_FG)),
+        Cell::from("Description").style(theme::bold_style(theme::SECONDARY_FG)),
     ];
     let header = Row::new(header_cells).bottom_margin(1);
 
@@ -60,24 +64,51 @@ pub fn render(frame: &mut Frame, area: Rect, columns: &[VerticalColumn], table_n
     let rows: Vec<Row> = columns
         .iter()
         .skip(scroll)
-        .enumerate()
-        .map(|(idx, col)| {
-            let num = format!("{:>2}", scroll + idx + 1);
+        .map(|col| {
+            let num = format!("{:>2}", col.index);
             let name_lines = crate::tui::screens::results::wrap_text(&col.name, col_w1);
             let dtype_lines = crate::tui::screens::results::wrap_text(&col.data_type, col_w2);
-            let key_str = if col.key_meta.is_empty() { "-" } else { &col.key_meta };
+            let key_str = if col.key_meta.is_empty() {
+                "-"
+            } else {
+                &col.key_meta
+            };
             let key_lines = crate::tui::screens::results::wrap_text(key_str, col_w3);
-            let desc_str = if col.description.is_empty() { "-" } else { &col.description };
+            let desc_str = if col.description.is_empty() {
+                "-"
+            } else {
+                &col.description
+            };
             let desc_lines = crate::tui::screens::results::wrap_text(desc_str, col_w4);
 
-            let max_h = name_lines.len().max(dtype_lines.len()).max(key_lines.len()).max(desc_lines.len()) as u16;
+            let max_h = name_lines
+                .len()
+                .max(dtype_lines.len())
+                .max(key_lines.len())
+                .max(desc_lines.len()) as u16;
 
             let cells = vec![
-                Cell::from(num).style(Style::default().fg(Color::DarkGray)),
-                Cell::from(name_lines.join("\n")).style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Cell::from(dtype_lines.join("\n")).style(Style::default().fg(Color::Green)),
-                Cell::from(key_lines.join("\n")).style(Style::default().fg(Color::Magenta)),
-                Cell::from(desc_lines.join("\n")).style(Style::default().fg(Color::Gray)),
+                Cell::from(num).style(theme::muted_style()),
+                Cell::from(name_lines.join(
+                    "
+",
+                ))
+                .style(theme::bold_text_style()),
+                Cell::from(dtype_lines.join(
+                    "
+",
+                ))
+                .style(theme::success_style()),
+                Cell::from(key_lines.join(
+                    "
+",
+                ))
+                .style(theme::detail_style()),
+                Cell::from(desc_lines.join(
+                    "
+",
+                ))
+                .style(theme::secondary_style()),
             ];
             Row::new(cells).height(max_h)
         })
@@ -91,9 +122,7 @@ pub fn render(frame: &mut Frame, area: Rect, columns: &[VerticalColumn], table_n
         Constraint::Percentage(33),
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .column_spacing(1);
+    let table = Table::new(rows, widths).header(header).column_spacing(1);
 
     frame.render_widget(table, inner);
 

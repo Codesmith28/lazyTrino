@@ -36,7 +36,6 @@ pub struct QueryLogEntry {
 
 #[derive(Clone, Debug)]
 pub struct VerticalColumn {
-    #[allow(dead_code)]
     pub index: usize,
     pub name: String,
     pub data_type: String,
@@ -48,10 +47,6 @@ pub struct VerticalColumn {
 pub enum ActivePanel {
     MenuPane,
     MainViewer,
-    #[allow(dead_code)]
-    PartitionTree,
-    #[allow(dead_code)]
-    SchemaInspector,
 }
 
 #[derive(Clone)]
@@ -82,8 +77,6 @@ impl Default for ConnectState {
 pub struct CatalogState {
     pub items: Vec<String>,
     pub selected: usize,
-    #[allow(dead_code)]
-    pub scroll: usize,
 }
 
 #[derive(Clone)]
@@ -91,8 +84,6 @@ pub struct SchemaState {
     pub catalog: String,
     pub items: Vec<String>,
     pub selected: usize,
-    #[allow(dead_code)]
-    pub scroll: usize,
 }
 
 #[derive(Clone)]
@@ -101,8 +92,6 @@ pub struct TableState {
     pub schema: String,
     pub items: Vec<String>,
     pub selected: usize,
-    #[allow(dead_code)]
-    pub scroll: usize,
 }
 
 #[derive(Clone)]
@@ -118,8 +107,6 @@ pub struct ActionState {
 
 #[derive(Clone)]
 pub struct ResultsState {
-    #[allow(dead_code)]
-    pub query: String,
     pub query_buffer: String,
     pub query_cursor: usize,
     pub columns: Vec<String>,
@@ -127,7 +114,6 @@ pub struct ResultsState {
     pub scroll_v: usize,
     pub scroll_h: usize,
     pub loading: bool,
-    #[allow(dead_code)]
     pub error: Option<String>,
     pub is_paginated: bool,
     pub catalog: String,
@@ -143,17 +129,15 @@ pub struct ResultsState {
 
 impl ResultsState {
     pub fn selection_range(&self) -> Option<(usize, usize)> {
-        if let Some(anchor) = self.selection_anchor {
-            if anchor != self.query_cursor {
+        if let Some(anchor) = self.selection_anchor
+            && anchor != self.query_cursor {
                 let start = anchor.min(self.query_cursor);
                 let end = anchor.max(self.query_cursor);
                 return Some((start, end));
             }
-        }
         None
     }
 
-    #[allow(dead_code)]
     pub fn delete_selection(&mut self) -> bool {
         if let Some((start, end)) = self.selection_range() {
             let start = start.min(self.query_buffer.len());
@@ -168,18 +152,22 @@ impl ResultsState {
         false
     }
 
-    #[allow(dead_code)]
     pub fn clear_selection(&mut self) {
         self.selection_anchor = None;
     }
 
-    #[allow(dead_code)]
     pub fn select_all(&mut self) {
         self.selection_anchor = Some(0);
         self.query_cursor = self.query_buffer.len();
     }
 }
 
+// `ActionState` (which embeds the optional `ResultsState` with query text/rows) is
+// substantially larger than the other variants. `Screen` is only ever held as a single
+// top-level app field (never collected into large vectors or hot loops), so boxing the
+// large variant would add pattern-matching overhead across handler.rs/mod.rs for no
+// measurable benefit.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub enum Screen {
     Connect(ConnectState),
@@ -187,18 +175,11 @@ pub enum Screen {
     Schema(SchemaState),
     Table(TableState),
     Actions(ActionState),
-    #[allow(dead_code)]
-    Results(ResultsState),
     Help,
 }
 
 pub enum Mode {
     Normal,
-    #[allow(dead_code)]
-    Leader {
-        #[allow(dead_code)]
-        keys: String,
-    },
     Search,
     QueryInput,
 }
@@ -265,15 +246,10 @@ pub struct App {
     pub partition_scroll: usize,
     pub vertical_schema_cols: Vec<VerticalColumn>,
     pub schema_scroll: usize,
-    #[allow(dead_code)]
-    pub active_table_name: Option<String>,
     pub auto_connect: bool,
     pub main_panel_pct: u16,
     pub control_panel_split_pct: u16,
     pub is_dragging_resizer: bool,
-    #[allow(dead_code)]
-    pub is_dragging_v_resizer: bool,
-    #[allow(dead_code)]
     pub is_dragging_query_select: bool,
     pub query_inspector_scroll: usize,
     pub mouse_selection_anchor: Option<(u16, u16)>,
@@ -311,12 +287,10 @@ impl App {
             partition_scroll: 0,
             vertical_schema_cols: Vec::new(),
             schema_scroll: 0,
-            active_table_name: None,
             auto_connect,
             main_panel_pct: 60,
             control_panel_split_pct: 40,
             is_dragging_resizer: false,
-            is_dragging_v_resizer: false,
             is_dragging_query_select: false,
             query_inspector_scroll: 0,
             mouse_selection_anchor: None,
@@ -353,12 +327,118 @@ impl App {
             entry.error_msg = Some(err);
         }
     }
-
-    pub fn action_for(&self, key: char) -> Option<&'static Action> {
-        ACTIONS
-            .iter()
-            .find(|(k, _, _)| *k == key)
-            .map(|(_, _, a)| a)
-    }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ConnectionConfig;
+    use crate::trino::queries;
+
+    fn sample_config() -> ConnectionConfig {
+        ConnectionConfig {
+            url: "https://trino.example".to_string(),
+            user: "analyst".to_string(),
+            password: "secret".to_string(),
+        }
+    }
+
+    #[test]
+    fn app_new_initializes_connect_screen_and_defaults() {
+        let config = sample_config();
+        let app = App::new(config.clone(), true);
+
+        let Screen::Connect(state) = &app.screen else {
+            panic!("expected connect screen");
+        };
+        assert_eq!(state.url, config.url);
+        assert_eq!(state.user, config.user);
+        assert_eq!(state.password, config.password);
+        assert_eq!(state.focused, 0);
+        assert!(!state.loading);
+        assert!(state.error.is_none());
+
+        assert!(app.prev_screen.is_none());
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(!app.should_quit);
+        assert!(app.number_buffer.is_empty());
+        assert!(app.search_query.is_empty());
+        assert!(!app.loading);
+        assert!(app.trino_client.is_none());
+        assert_eq!(app.config, config);
+        assert!(app.catalogs.is_empty());
+        assert!(app.schemas.is_empty());
+        assert!(app.tables.is_empty());
+        assert_eq!(app.frame_count, 0);
+        assert!(app.query_logs.is_empty());
+        assert_eq!(app.active_panel, ActivePanel::MainViewer);
+        assert!(app.partition_tree_lines.is_empty());
+        assert_eq!(app.partition_scroll, 0);
+        assert!(app.vertical_schema_cols.is_empty());
+        assert_eq!(app.schema_scroll, 0);
+        assert!(app.auto_connect);
+        assert_eq!(app.main_panel_pct, 60);
+        assert_eq!(app.control_panel_split_pct, 40);
+        assert!(!app.is_dragging_resizer);
+        assert!(!app.is_dragging_query_select);
+        assert_eq!(app.query_inspector_scroll, 0);
+        assert!(app.mouse_selection_anchor.is_none());
+        assert!(app.mouse_selection_current.is_none());
+        assert!(!app.is_selecting_text);
+        assert!(app.copied_toast.is_none());
+    }
+
+    #[test]
+    fn query_log_lifecycle_tracks_success_and_error_entries() {
+        let mut app = App::new(sample_config(), false);
+
+        let first_id = app.add_query_log("SELECT 1".to_string());
+        let second_id = app.add_query_log("SELECT 2".to_string());
+
+        assert_eq!(first_id, 1);
+        assert_eq!(second_id, 2);
+
+        app.complete_query_log_success(first_id, 125, 7);
+        app.complete_query_log_error(second_id, "boom".to_string());
+
+        assert_eq!(app.query_logs.len(), 2);
+
+        let first = &app.query_logs[0];
+        assert_eq!(first.id, 1);
+        assert_eq!(first.sql, "SELECT 1");
+        assert_eq!(first.status, QueryStatus::Success);
+        assert_eq!(first.duration_ms, Some(125));
+        assert_eq!(first.row_count, Some(7));
+        assert!(first.error_msg.is_none());
+
+        let second = &app.query_logs[1];
+        assert_eq!(second.id, 2);
+        assert_eq!(second.sql, "SELECT 2");
+        assert_eq!(second.status, QueryStatus::Error);
+        assert_eq!(second.duration_ms, None);
+        assert_eq!(second.row_count, None);
+        assert_eq!(second.error_msg.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn action_build_query_matches_queries_module_for_all_variants() {
+        let catalog = "iceberg";
+        let schema = "sales";
+        let table = "orders";
+        let cases = vec![
+            (Action::TableView, queries::page_query(catalog, schema, table, 0, 100)),
+            (Action::Describe, queries::describe(catalog, schema, table)),
+            (Action::TableDDL, queries::show_create(catalog, schema, table)),
+            (Action::InfoSchema, queries::info_schema_columns(catalog, schema, table)),
+            (Action::ShowStats, queries::show_stats(catalog, schema, table)),
+            (Action::Count, queries::count(catalog, schema, table)),
+            (Action::Sample, queries::sample(catalog, schema, table)),
+            (Action::Partitions, queries::partitions(catalog, schema, table)),
+            (Action::Schema, queries::describe(catalog, schema, table)),
+        ];
+
+        for (action, expected) in cases {
+            assert_eq!(action.build_query(catalog, schema, table), expected);
+        }
+    }
+}

@@ -86,8 +86,49 @@ Launch `lazyTrino` using the generated binary or via `make run`:
 | `--url` | | `http://localhost:8080` | Trino coordinator REST server URL |
 | `--user` | | `$USER` (or `trino`) | Trino username |
 | `--password` | `--pass` | *(none)* | Trino password (optional) |
+| `--profile <NAME>` | | *(none)* | Load connection defaults from a named config profile |
+| `--log-level <LEVEL>` | | `info` | Override the default log level when `RUST_LOG` is not set (`trace`, `debug`, `info`, `warn`, `error`) |
+| `--no-log` | | `false` | Disable file logging |
 | `-h`, `--help` | | | Print CLI help information |
 | `-V`, `--version` | | | Print version information |
+
+Logs are written to an OS-specific cache directory by default (for example `~/.cache/lazytrino/lazytrino.log` on Linux or `~/Library/Caches/lazytrino/lazytrino.log` on macOS). Use `--no-log` to disable file logging entirely.
+
+### Configuration
+
+`lazyTrino` can read persistent connection defaults from an OS-specific config file resolved via `dirs::config_dir()`, for example:
+
+- macOS: `~/Library/Application Support/lazytrino/config.toml`
+- Linux: `~/.config/lazytrino/config.toml`
+- Windows: `%APPDATA%\lazytrino\config.toml`
+
+Example:
+
+```toml
+default_profile = "local"
+
+[profiles.local]
+url = "http://localhost:8080"
+user = "trino"
+
+[profiles.prod]
+url = "https://trino.example.com:8443"
+user = "admin"
+# Optional but insecure: prefer LAZYTRINO_PASSWORD, --password, or entering it interactively.
+password = "secret"
+
+[last_used]
+url = "http://localhost:8080"
+user = "trino"
+```
+
+- `--profile <NAME>` selects a profile from `[profiles.<NAME>]`.
+- If `--profile` is not provided, `default_profile` is used when present.
+- Environment variable overrides are supported with `LAZYTRINO_URL`, `LAZYTRINO_USER`, and `LAZYTRINO_PASSWORD`.
+- Passwords are **never** written to `[last_used]`. After a successful connection, `lazyTrino` persists only the last-used URL and user so the Connect screen can be prefilled next time.
+- Storing `password = "..."` in a profile is supported for convenience, but it is insecure because it keeps the password in plaintext. Prefer environment variables, `--password`, or interactive entry.
+
+Connection settings are resolved in this order: CLI flags → `LAZYTRINO_*` environment variables → selected config profile → `[last_used]` URL/user → built-in defaults.
 
 ---
 
@@ -104,9 +145,10 @@ Launch `lazyTrino` using the generated binary or via `make run`:
 | `g` / `G` | Jump to top / bottom of list |
 | `<number> + Enter` | Jump directly to item number |
 | `/` | Open Centralized Search bar |
-| `Tab` | Toggle focus between Menu panel and Main Preview pane |
+| `Shift+H` / `Shift+←` | Focus the Menu Pane from the Main Preview pane (Table Actions / Results views) |
+| `Shift+L` / `Shift+→` / `Tab` | Toggle focus between the Menu Pane and Main Preview pane (Table Actions / Results views) |
 | `?` | Toggle Help overlay |
-| `q` | Quit application (when not in Table View) |
+| `Ctrl+C` | Quit application |
 
 ### Table Actions Menu
 
@@ -131,25 +173,35 @@ When a table is selected, press the corresponding action key or select it from t
 | `j` / `k` or `↓` / `↑` | Scroll table vertically (triggers infinite scroll at list bottom) |
 | `h` / `l` or `←` / `→` | Scroll table horizontally across columns |
 | `g` / `G` | Jump to top / bottom of current result set |
+| `y` | Copy the current loaded result grid (header + rows) to the system clipboard as TSV |
+| `Y` | Export the current loaded result grid (header + rows) to a CSV file in the current working directory |
 | `q` or `:` | Focus Interactive SQL Query Bar to write custom queries |
-| `Esc` / `h` | Exit table view and return to table actions menu |
+| `Esc` | Focus the Menu Pane, or return to the table actions menu if the Menu Pane is already focused |
 
 ### SQL Query Bar (`q` / `:` in Table View)
 
 | Key | Action |
 | --- | --- |
 | `Enter` | Validate and execute custom SQL query |
-| `Esc` | Cancel query editing and return focus to results viewer |
+| `Esc` | Cancel query editing and return to normal navigation on the current table screen |
 | `←` / `→` | Move text cursor left / right |
 | `Home` / `End` | Jump cursor to start / end of query string |
 | `Shift + ← / →` | Select text within query buffer |
-| `Ctrl+C` / `Cmd+C` | Copy selected query text to system clipboard |
+| `Ctrl+A` / `Cmd+A` | Select the full query buffer |
+| `Ctrl+C` / `Cmd+C` | Copy selected query text to system clipboard (while the Query Bar is focused) |
+| `Ctrl+V` / `Cmd+V` | Paste clipboard text at the cursor / over the selection |
+| `Backspace` / `Delete` | Remove the current selection (or delete adjacent text) |
+| `Alt + ← / →` | Jump by word while editing |
+
+> **Note:** `Ctrl+C` is context-sensitive — it copies the selected query text while the Query Bar
+> is focused, and quits lazyTrino everywhere else (see the Navigation table above).
 
 ### Mouse & Resizer Controls
 
 | Input | Action |
 | --- | --- |
 | Left Click | Select catalog, schema, table, or action menu item |
+| Click / Drag Query Bar | Place the query cursor and select SQL text while editing |
 | Mouse Wheel Up / Down | Scroll lists, partition trees, and query result rows |
 | Mouse Wheel Left / Right | Scroll query result tables horizontally |
 | Click & Drag Vertical Border | Dynamically resize split ratio between Menu panel and Main Preview pane |
