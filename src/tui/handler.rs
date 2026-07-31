@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::app::*;
 use crate::trino::client::TrinoClient;
@@ -106,18 +106,20 @@ pub fn validate_and_build_query(
 }
 
 fn check_trigger_infinite_scroll(app: &mut App) -> Option<Command> {
-    if let Screen::Results(ref mut state) = app.screen {
-        if state.is_paginated && !state.is_fetching_next_page && state.has_more_rows {
-            if state.scroll_v + 15 >= state.rows.len() {
-                state.is_fetching_next_page = true;
-                let offset = state.rows.len();
-                return Some(Command::FetchNextPage {
-                    catalog: state.catalog.clone(),
-                    schema: state.schema.clone(),
-                    table: state.table.clone(),
-                    offset,
-                    limit: state.page_size,
-                });
+    if let Screen::Actions(ref mut action_state) = app.screen {
+        if let Some(state) = action_state.results.as_mut() {
+            if state.is_paginated && !state.is_fetching_next_page && state.has_more_rows {
+                if state.scroll_v + 15 >= state.rows.len() {
+                    state.is_fetching_next_page = true;
+                    let offset = state.rows.len();
+                    return Some(Command::FetchNextPage {
+                        catalog: state.catalog.clone(),
+                        schema: state.schema.clone(),
+                        table: state.table.clone(),
+                        offset,
+                        limit: state.page_size,
+                    });
+                }
             }
         }
     }
@@ -182,46 +184,6 @@ fn jump_to_number(app: &mut App) {
     app.number_buffer.clear();
 }
 
-#[allow(dead_code)]
-fn handle_leader_mode(app: &mut App, key: KeyEvent) -> Option<Command> {
-    match key.code {
-        KeyCode::Char(c) => {
-            let (cat, schema, table) = match &app.screen {
-                Screen::Table(t) => {
-                    if t.items.is_empty() {
-                        return None;
-                    }
-                    (t.catalog.clone(), t.schema.clone(), t.items[t.selected].clone())
-                }
-                Screen::Actions(a) => (a.catalog.clone(), a.schema.clone(), a.table.clone()),
-                _ => return None,
-            };
-            if let Some(action) = app.action_for(c) {
-                let is_paginated = matches!(action, Action::TableView);
-                let query = action.build_query(&cat, &schema, &table);
-                info!(%query, "Leader action triggered");
-                app.mode = Mode::Normal;
-                return Some(Command::ExecuteQuery {
-                    query,
-                    is_paginated,
-                    catalog: cat,
-                    schema,
-                    table,
-                });
-            }
-            warn!(char = %c, "Unknown leader key");
-            app.mode = Mode::Normal;
-            None
-        }
-        KeyCode::Esc => {
-            app.mode = Mode::Normal;
-            None
-        }
-        _ => None,
-    }
-}
-
-#[allow(dead_code)]
 fn handle_search_mode(app: &mut App, key: KeyEvent) -> Option<Command> {
     match key.code {
         KeyCode::Char(c) if !c.is_ascii_control() => {
@@ -270,7 +232,6 @@ fn go_back(app: &mut App) {
             Some(Screen::Catalog(CatalogState {
                 items: catalogs,
                 selected: idx,
-                scroll: idx.saturating_sub(5),
             }))
         }
         Screen::Table(s) => {
@@ -282,7 +243,6 @@ fn go_back(app: &mut App) {
                 catalog: cat,
                 items: schemas,
                 selected: idx,
-                scroll: idx.saturating_sub(5),
             }))
         }
         Screen::Actions(s) => {
@@ -299,44 +259,9 @@ fn go_back(app: &mut App) {
                 schema: schema_name,
                 items: tables,
                 selected: idx,
-                scroll: idx.saturating_sub(5),
             }))
         }
         Screen::Connect(_) => None,
-        Screen::Results(_) => {
-            let prev = app.prev_screen.take().map(|p| *p);
-            match prev {
-                Some(Screen::Connect(_)) if logged_in => {
-                    Some(Screen::Catalog(CatalogState {
-                        items: app.catalogs.clone(),
-                        selected: 0,
-                        scroll: 0,
-                    }))
-                }
-                Some(p) => Some(p),
-                None => {
-                    if !app.catalogs.is_empty() {
-                        Some(Screen::Catalog(CatalogState {
-                            items: app.catalogs.clone(),
-                            selected: 0,
-                            scroll: 0,
-                        }))
-                    } else if !logged_in {
-                        let c = app.config.clone();
-                        Some(Screen::Connect(ConnectState {
-                            url: c.url,
-                            user: c.user,
-                            password: c.password,
-                            focused: 0,
-                            loading: false,
-                            error: None,
-                        }))
-                    } else {
-                        None
-                    }
-                }
-            }
-        }
     };
 
     if let Some(s) = next {
@@ -361,7 +286,6 @@ fn is_enter_key(code: KeyCode) -> bool {
     matches!(code, KeyCode::Enter | KeyCode::Char('\r') | KeyCode::Char('\n'))
 }
 
-#[allow(dead_code)]
 fn prev_word_pos(s: &str, cursor: usize) -> usize {
     if cursor == 0 {
         return 0;
@@ -377,7 +301,6 @@ fn prev_word_pos(s: &str, cursor: usize) -> usize {
     i
 }
 
-#[allow(dead_code)]
 fn next_word_pos(s: &str, cursor: usize) -> usize {
     let chars: Vec<char> = s.chars().collect();
     let len = chars.len();
@@ -397,7 +320,6 @@ fn copy_to_clipboard(text: &str) {
     }
 }
 
-#[allow(dead_code)]
 fn paste_from_clipboard() -> Option<String> {
     if let Ok(mut board) = arboard::Clipboard::new() {
         board.get_text().ok()
@@ -406,10 +328,10 @@ fn paste_from_clipboard() -> Option<String> {
     }
 }
 
-#[allow(dead_code)]
 fn query_text_index_from_mouse(
     mouse_col: u16,
     mouse_row: u16,
+    query_x_start: u16,
     query_y_start: u16,
     inner_w: usize,
     buffer_len: usize,
@@ -418,7 +340,7 @@ fn query_text_index_from_mouse(
         return 0;
     }
     let rel_y = mouse_row.saturating_sub(query_y_start + 1) as usize;
-    let rel_x = mouse_col.saturating_sub(1) as usize;
+    let rel_x = mouse_col.saturating_sub(query_x_start + 1) as usize;
 
     let char_idx = if rel_y == 0 {
         let line0_x = rel_x.saturating_sub(7);
@@ -433,9 +355,216 @@ fn query_text_index_from_mouse(
     char_idx.min(buffer_len)
 }
 
-#[allow(dead_code)]
-fn is_mac_option_code(code: KeyCode) -> bool {
-    matches!(code, KeyCode::Char('∆') | KeyCode::Char('˚') | KeyCode::Char('˙') | KeyCode::Char('¬') | KeyCode::Char('©'))
+fn active_query_state_mut(app: &mut App) -> Option<&mut ResultsState> {
+    match &mut app.screen {
+        Screen::Actions(action_state)
+            if action_state.selected < ACTIONS.len()
+                && matches!(ACTIONS[action_state.selected].2, Action::TableView) =>
+        {
+            action_state.results.as_mut()
+        }
+        _ => None,
+    }
+}
+
+fn active_query_buffer_len(app: &App) -> Option<usize> {
+    match &app.screen {
+        Screen::Actions(action_state)
+            if action_state.selected < ACTIONS.len()
+                && matches!(ACTIONS[action_state.selected].2, Action::TableView) =>
+        {
+            action_state.results.as_ref().map(|state| state.query_buffer.len())
+        }
+        _ => None,
+    }
+}
+
+fn query_bar_layout(app: &App, term_width: u16, term_height: u16) -> Option<(u16, u16, u16, u16, usize)> {
+    let query_len = active_query_buffer_len(app)?;
+    let bottom_y = term_height.saturating_sub(7);
+    if bottom_y == 0 {
+        return None;
+    }
+
+    let menu_pct = if app.main_panel_pct > 30 {
+        15
+    } else {
+        app.main_panel_pct.clamp(8, 30)
+    };
+    let query_x = ((term_width as u32 * menu_pct as u32) / 100) as u16;
+    let query_width = term_width.saturating_sub(query_x);
+    let inner_w = query_width.saturating_sub(2).max(1) as usize;
+
+    let search_height = if matches!(app.mode, Mode::Search) {
+        let total_chars = 3 + app.search_query.len();
+        let lines = (total_chars + inner_w - 1) / inner_w;
+        (lines as u16 + 2).clamp(3, 8)
+    } else {
+        3
+    };
+
+    let query_height = if matches!(app.mode, Mode::QueryInput) {
+        let total_chars = 7 + query_len;
+        let lines = (total_chars + inner_w - 1) / inner_w;
+        (lines as u16 + 2).clamp(3, 4)
+    } else {
+        3
+    };
+
+    if search_height + query_height > bottom_y {
+        return None;
+    }
+
+    Some((query_x, search_height, query_width, query_height, inner_w))
+}
+
+fn set_query_cursor(state: &mut ResultsState, new_cursor: usize, selecting: bool) {
+    let new_cursor = new_cursor.min(state.query_buffer.len());
+    if selecting {
+        if state.selection_anchor.is_none() {
+            state.selection_anchor = Some(state.query_cursor);
+        }
+    } else {
+        state.clear_selection();
+    }
+    state.query_cursor = new_cursor;
+    if state.selection_anchor == Some(state.query_cursor) {
+        state.clear_selection();
+    }
+}
+
+fn insert_query_text(state: &mut ResultsState, text: &str) {
+    state.delete_selection();
+    state.query_buffer.insert_str(state.query_cursor, text);
+    state.query_cursor += text.len();
+    state.invalid_query_error = None;
+}
+
+fn query_selection_text(state: &ResultsState) -> Option<String> {
+    let (start, end) = state.selection_range()?;
+    Some(state.query_buffer[start..end].to_string())
+}
+
+fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Command> {
+    let mut copied_text = None;
+    let mut exit_mode = false;
+    let mut command = None;
+
+    {
+        let Some(state) = active_query_state_mut(app) else {
+            app.mode = Mode::Normal;
+            return None;
+        };
+
+        let code = key.code;
+        let selecting = key.modifiers.contains(KeyModifiers::SHIFT);
+        let word_jump = key.modifiers.contains(KeyModifiers::ALT);
+        let command_modifier = key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER);
+
+        if command_modifier {
+            match code {
+                KeyCode::Char('a') | KeyCode::Char('A') => {
+                    state.select_all();
+                    return None;
+                }
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    copied_text = query_selection_text(state);
+                    exit_mode = false;
+                }
+                KeyCode::Char('v') | KeyCode::Char('V') => {
+                    if let Some(text) = paste_from_clipboard() {
+                        insert_query_text(state, &text);
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
+        if copied_text.is_some() {
+            // defer clipboard write until after the mutable borrow ends
+        } else if is_enter_key(code) {
+            let input = state.query_buffer.clone();
+            let cat = state.catalog.clone();
+            let sch = state.schema.clone();
+            let tbl = state.table.clone();
+            let is_paginated = state.is_paginated;
+
+            match validate_and_build_query(&input, &cat, &sch, &tbl) {
+                Ok(full_sql) => {
+                    state.invalid_query_error = None;
+                    state.clear_selection();
+                    exit_mode = true;
+                    command = Some(Command::ExecuteQuery {
+                        query: full_sql,
+                        is_paginated,
+                        catalog: cat,
+                        schema: sch,
+                        table: tbl,
+                    });
+                }
+                Err(err_msg) => {
+                    state.invalid_query_error = Some(err_msg);
+                }
+            }
+        } else {
+            match code {
+                KeyCode::Esc => {
+                    state.clear_selection();
+                    exit_mode = true;
+                }
+                KeyCode::Left => {
+                    let new_cursor = if word_jump {
+                        prev_word_pos(&state.query_buffer, state.query_cursor)
+                    } else {
+                        state.query_cursor.saturating_sub(1)
+                    };
+                    set_query_cursor(state, new_cursor, selecting);
+                }
+                KeyCode::Right => {
+                    let new_cursor = if word_jump {
+                        next_word_pos(&state.query_buffer, state.query_cursor)
+                    } else {
+                        (state.query_cursor + 1).min(state.query_buffer.len())
+                    };
+                    set_query_cursor(state, new_cursor, selecting);
+                }
+                KeyCode::Home => set_query_cursor(state, 0, selecting),
+                KeyCode::End => set_query_cursor(state, state.query_buffer.len(), selecting),
+                KeyCode::Backspace => {
+                    if !state.delete_selection() && state.query_cursor > 0 {
+                        state.query_cursor -= 1;
+                        state.query_buffer.remove(state.query_cursor);
+                    }
+                    state.invalid_query_error = None;
+                }
+                KeyCode::Delete => {
+                    if !state.delete_selection() && state.query_cursor < state.query_buffer.len() {
+                        state.query_buffer.remove(state.query_cursor);
+                    }
+                    state.invalid_query_error = None;
+                }
+                KeyCode::Char(c) if !command_modifier && !key.modifiers.contains(KeyModifiers::ALT) => {
+                    insert_query_text(state, &c.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if let Some(text) = copied_text {
+        copy_to_clipboard(&text);
+        app.copied_toast = Some((text.chars().take(30).collect(), std::time::Instant::now()));
+        return None;
+    }
+
+    if exit_mode {
+        app.mode = Mode::Normal;
+    }
+
+    command
 }
 
 pub fn handle_pane_focus_keys(app: &mut App, key: KeyEvent) -> bool {
@@ -451,7 +580,7 @@ pub fn handle_pane_focus_keys(app: &mut App, key: KeyEvent) -> bool {
         return false;
     }
 
-    let is_in_table = matches!(app.screen, Screen::Actions(_) | Screen::Results(_));
+    let is_in_table = matches!(app.screen, Screen::Actions(_));
 
     if is_in_table {
         if is_h || is_left {
@@ -526,10 +655,42 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
 
     let bottom_y = term_height.saturating_sub(7);
     let border_x = ((term_width as u32 * app.main_panel_pct as u32) / 100) as u16;
-    let is_in_table = matches!(app.screen, Screen::Actions(_) | Screen::Results(_));
+    let is_in_table = matches!(app.screen, Screen::Actions(_));
 
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
+            if let Some((query_x, query_y, query_width, query_height, inner_w)) =
+                query_bar_layout(app, term_width, term_height)
+            {
+                let inside_query_bar = mouse.column >= query_x
+                    && mouse.column < query_x.saturating_add(query_width)
+                    && mouse.row >= query_y
+                    && mouse.row < query_y.saturating_add(query_height);
+
+                if inside_query_bar {
+                    let idx = query_text_index_from_mouse(
+                        mouse.column,
+                        mouse.row,
+                        query_x,
+                        query_y,
+                        inner_w,
+                        active_query_buffer_len(app).unwrap_or(0),
+                    );
+                    app.mode = Mode::QueryInput;
+                    app.active_panel = ActivePanel::MainViewer;
+                    app.is_dragging_query_select = true;
+                    app.is_selecting_text = false;
+                    app.mouse_selection_anchor = None;
+                    app.mouse_selection_current = None;
+                    if let Some(state) = active_query_state_mut(app) {
+                        state.selection_anchor = Some(idx);
+                        state.query_cursor = idx;
+                        state.invalid_query_error = None;
+                    }
+                    return None;
+                }
+            }
+
             app.mouse_selection_anchor = Some((mouse.column, mouse.row));
             app.mouse_selection_current = Some((mouse.column, mouse.row));
             app.is_selecting_text = true;
@@ -558,6 +719,27 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
+            if app.is_dragging_query_select {
+                if let Some((query_x, query_y, _, _, inner_w)) =
+                    query_bar_layout(app, term_width, term_height)
+                {
+                    let idx = query_text_index_from_mouse(
+                        mouse.column,
+                        mouse.row,
+                        query_x,
+                        query_y,
+                        inner_w,
+                        active_query_buffer_len(app).unwrap_or(0),
+                    );
+                    if let Some(state) = active_query_state_mut(app) {
+                        state.query_cursor = idx;
+                        if state.selection_anchor == Some(idx) {
+                            state.clear_selection();
+                        }
+                    }
+                }
+                return None;
+            }
             if app.is_selecting_text {
                 app.mouse_selection_current = Some((mouse.column, mouse.row));
             }
@@ -568,6 +750,15 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
         }
         MouseEventKind::Up(MouseButton::Left) => {
             app.is_dragging_resizer = false;
+            if app.is_dragging_query_select {
+                app.is_dragging_query_select = false;
+                if let Some(state) = active_query_state_mut(app) {
+                    if state.selection_anchor == Some(state.query_cursor) {
+                        state.clear_selection();
+                    }
+                }
+                return None;
+            }
             if app.is_selecting_text {
                 app.is_selecting_text = false;
                 if let (Some(anchor), Some(current)) = (app.mouse_selection_anchor, app.mouse_selection_current) {
@@ -642,6 +833,12 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
 }
 
 pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
+    match app.mode {
+        Mode::QueryInput => return handle_query_input_mode(app, key),
+        Mode::Search => return handle_search_mode(app, key),
+        Mode::Normal => {}
+    }
+
     let code = normalize_key_code(key.code);
 
     if code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -652,18 +849,6 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
 
     if handle_pane_focus_keys(app, key) {
         return None;
-    }
-
-    match app.mode {
-        Mode::Leader { .. } => return handle_leader_mode(app, key),
-        Mode::Search => return handle_search_mode(app, key),
-        Mode::QueryInput => {
-            if code == KeyCode::Esc {
-                app.mode = Mode::Normal;
-                return None;
-            }
-        }
-        Mode::Normal => {}
     }
 
     if code == KeyCode::Char('?') {
@@ -679,7 +864,7 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
 
     if code == KeyCode::Esc {
         app.number_buffer.clear();
-        let is_in_table = matches!(app.screen, Screen::Actions(_) | Screen::Results(_));
+        let is_in_table = matches!(app.screen, Screen::Actions(_));
         if is_in_table && app.active_panel == ActivePanel::MainViewer {
             app.active_panel = ActivePanel::MenuPane;
             return None;
@@ -707,7 +892,6 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         Screen::Schema(_) => schema_keys(app, key),
         Screen::Table(_) => table_keys(app, key),
         Screen::Actions(_) => actions_keys(app, key),
-        Screen::Results(_) => results_keys(app, key),
         Screen::Help => None,
     }
 }
@@ -725,7 +909,6 @@ fn select_current_item(app: &mut App) -> Option<Command> {
                     catalog,
                     items,
                     selected: 0,
-                    scroll: 0,
                 });
                 None
             } else {
@@ -748,7 +931,6 @@ fn select_current_item(app: &mut App) -> Option<Command> {
                     schema,
                     items,
                     selected: 0,
-                    scroll: 0,
                 });
                 None
             } else {
@@ -986,67 +1168,10 @@ fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                 }
                 _ => None,
             },
-            _ => None,
         }
     } else {
         None
     }
-}
-
-fn results_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    if let Screen::Results(state) = &mut app.screen {
-        let code = normalize_key_code(key.code);
-        if is_enter_key(code) {
-            let input = state.query_buffer.clone();
-            let cat = state.catalog.clone();
-            let sch = state.schema.clone();
-            let tbl = state.table.clone();
-            let is_paginated = state.is_paginated;
-
-            match validate_and_build_query(&input, &cat, &sch, &tbl) {
-                Ok(full_sql) => {
-                    state.invalid_query_error = None;
-                    return Some(Command::ExecuteQuery {
-                        query: full_sql,
-                        is_paginated,
-                        catalog: cat,
-                        schema: sch,
-                        table: tbl,
-                    });
-                }
-                Err(err_msg) => {
-                    state.invalid_query_error = Some(err_msg);
-                    return None;
-                }
-            }
-        }
-
-        match code {
-            KeyCode::Char('q') | KeyCode::Char(':') => {
-                app.mode = Mode::QueryInput;
-                state.query_cursor = state.query_buffer.len();
-                return None;
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                if !state.rows.is_empty() {
-                    state.scroll_v = (state.scroll_v + 1).min(state.rows.len().saturating_sub(1));
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                state.scroll_v = state.scroll_v.saturating_sub(1);
-            }
-            KeyCode::Char('g') => state.scroll_v = 0,
-            KeyCode::Char('G') => state.scroll_v = state.rows.len().saturating_sub(1),
-            KeyCode::Char('l') | KeyCode::Right => {
-                state.scroll_h = state.scroll_h.saturating_add(3);
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                state.scroll_h = state.scroll_h.saturating_sub(3);
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 #[derive(Debug)]
@@ -1078,7 +1203,6 @@ pub enum AsyncResult {
     },
     ExecuteQuery {
         log_id: usize,
-        query: String,
         query_buffer: String,
         query_cursor: usize,
         catalog: String,
@@ -1126,19 +1250,6 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
 
     if anchor.0 < border_x && current.0 < border_x {
         match &app.screen {
-            Screen::Results(state) => {
-                let mut lines = Vec::new();
-                let inner_y_start = 4;
-                for r in start_row..=end_row {
-                    if r >= inner_y_start {
-                        let row_idx = (r - inner_y_start) as usize + state.scroll_v;
-                        if row_idx < state.rows.len() {
-                            lines.push(state.rows[row_idx].join("\t"));
-                        }
-                    }
-                }
-                return lines.join("\n");
-            }
             Screen::Catalog(s) => {
                 let mut lines = Vec::new();
                 let inner_y = 4;
@@ -1355,12 +1466,10 @@ pub fn dispatch_command(
                         (a.query_buffer.clone(), a.query_cursor)
                     }
                 }
-                Screen::Results(s) => (s.query_buffer.clone(), s.query_cursor),
                 _ => (query.clone(), query.len()),
             };
 
             let res_state = ResultsState {
-                query: query.clone(),
                 query_buffer: query_buffer.clone(),
                 query_cursor,
                 columns: Vec::new(),
@@ -1402,7 +1511,6 @@ pub fn dispatch_command(
                     let res = client.execute(&query).await.map_err(|e| e.to_string());
                     let _ = tx.send(AsyncResult::ExecuteQuery {
                         log_id,
-                        query,
                         query_buffer,
                         query_cursor,
                         catalog,
@@ -1417,8 +1525,10 @@ pub fn dispatch_command(
         Command::FetchNextPage { catalog, schema, table, offset, limit } => {
             let query = queries::page_query(&catalog, &schema, &table, offset, limit);
             let log_id = app.add_query_log(query.clone());
-            if let Screen::Results(ref mut state) = app.screen {
-                state.is_fetching_next_page = true;
+            if let Screen::Actions(ref mut action_state) = app.screen {
+                if let Some(state) = action_state.results.as_mut() {
+                    state.is_fetching_next_page = true;
+                }
             }
 
             if let Some(client) = app.trino_client.clone() {
@@ -1452,7 +1562,6 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     app.screen = Screen::Catalog(CatalogState {
                         items: app.catalogs.clone(),
                         selected: 0,
-                        scroll: 0,
                     });
                 }
                 Err(e) => {
@@ -1476,7 +1585,6 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         catalog: catalog.clone(),
                         items: trimmed,
                         selected: 0,
-                        scroll: 0,
                     });
                 }
                 Err(e) => {
@@ -1497,7 +1605,6 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         schema: schema.clone(),
                         items: trimmed,
                         selected: 0,
-                        scroll: 0,
                     });
                 }
                 Err(e) => {
@@ -1513,7 +1620,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
             app.partition_tree_lines = partition_lines;
             app.vertical_schema_cols = columns;
         }
-        AsyncResult::ExecuteQuery { log_id, query, query_buffer, query_cursor, catalog, schema, table, is_paginated, result } => {
+        AsyncResult::ExecuteQuery { log_id, query_buffer, query_cursor, catalog, schema, table, is_paginated, result } => {
             app.loading = false;
             match result {
                 Ok(results) => {
@@ -1522,7 +1629,6 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     let rows = results.data;
                     let has_more = if is_paginated { rows.len() >= 100 } else { false };
                     let res_state = ResultsState {
-                        query,
                         query_buffer,
                         query_cursor,
                         columns: cols,
@@ -1564,7 +1670,6 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     error!(error = %e, "Execute query failed");
                     app.complete_query_log_error(log_id, e.clone());
                     let res_state = ResultsState {
-                        query,
                         query_buffer,
                         query_cursor,
                         columns: Vec::new(),
@@ -1610,21 +1715,25 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     app.complete_query_log_success(log_id, results.duration_ms, results.data.len());
                     let new_rows = results.data;
                     let fetched_count = new_rows.len();
-                    if let Screen::Results(ref mut state) = app.screen {
-                        state.rows.extend(new_rows);
-                        state.offset = offset;
-                        state.is_fetching_next_page = false;
-                        if fetched_count < limit {
-                            state.has_more_rows = false;
+                    if let Screen::Actions(ref mut action_state) = app.screen {
+                        if let Some(state) = action_state.results.as_mut() {
+                            state.rows.extend(new_rows);
+                            state.offset = offset;
+                            state.is_fetching_next_page = false;
+                            if fetched_count < limit {
+                                state.has_more_rows = false;
+                            }
                         }
                     }
                 }
                 Err(e) => {
                     error!(error = %e, "Fetch next page failed");
                     app.complete_query_log_error(log_id, e);
-                    if let Screen::Results(ref mut state) = app.screen {
-                        state.is_fetching_next_page = false;
-                        state.has_more_rows = false;
+                    if let Screen::Actions(ref mut action_state) = app.screen {
+                        if let Some(state) = action_state.results.as_mut() {
+                            state.is_fetching_next_page = false;
+                            state.has_more_rows = false;
+                        }
                     }
                 }
             }
@@ -1635,6 +1744,29 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_results_state(query_buffer: &str) -> ResultsState {
+        ResultsState {
+            query_buffer: query_buffer.to_string(),
+            query_cursor: query_buffer.len(),
+            columns: Vec::new(),
+            rows: Vec::new(),
+            scroll_v: 0,
+            scroll_h: 0,
+            loading: false,
+            error: None,
+            is_paginated: true,
+            catalog: "datalake".to_string(),
+            schema: "some_db".to_string(),
+            table: "orders".to_string(),
+            offset: 0,
+            page_size: 100,
+            is_fetching_next_page: false,
+            has_more_rows: true,
+            invalid_query_error: None,
+            selection_anchor: None,
+        }
+    }
 
     #[test]
     fn test_extract_from_tables() {
@@ -1748,8 +1880,25 @@ mod tests {
     #[test]
     fn test_mouse_index_calculation() {
         let len = 50;
-        assert_eq!(query_text_index_from_mouse(8, 3, 2, 40, len), 0);
-        assert_eq!(query_text_index_from_mouse(18, 3, 2, 40, len), 10);
+        assert_eq!(query_text_index_from_mouse(8, 3, 0, 2, 40, len), 0);
+        assert_eq!(query_text_index_from_mouse(18, 3, 0, 2, 40, len), 10);
+    }
+
+    #[test]
+    fn test_selection_helpers_and_insert_replace() {
+        let mut state = sample_results_state("SELECT * FROM orders");
+        state.select_all();
+        assert_eq!(query_selection_text(&state).as_deref(), Some("SELECT * FROM orders"));
+        assert!(state.delete_selection());
+        assert_eq!(state.query_buffer, "");
+        assert_eq!(state.query_cursor, 0);
+
+        let mut state = sample_results_state("SELECT * FROM orders");
+        state.selection_anchor = Some(0);
+        state.query_cursor = 6;
+        insert_query_text(&mut state, "WITH");
+        assert_eq!(state.query_buffer, "WITH * FROM orders");
+        assert_eq!(state.query_cursor, 4);
     }
 
     #[test]
@@ -1762,4 +1911,3 @@ mod tests {
         }
     }
 }
-

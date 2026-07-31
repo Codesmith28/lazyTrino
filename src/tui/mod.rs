@@ -86,7 +86,10 @@ fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
     let is_editing = matches!(app.mode, Mode::QueryInput);
-    let is_table_view = matches!(app.screen, Screen::Results(_));
+    let is_table_view = matches!(
+        &app.screen,
+        Screen::Actions(state) if state.results.as_ref().is_some_and(|results| results.is_paginated)
+    );
 
     let border_color = if is_editing {
         Color::Yellow
@@ -118,7 +121,6 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
                 (state.query_buffer.as_str(), state.query_cursor, None)
             }
         }
-        Screen::Results(state) => (state.query_buffer.as_str(), state.query_cursor, state.selection_range()),
         _ => ("", 0, None),
     };
 
@@ -210,7 +212,7 @@ fn ui(frame: &mut Frame, app: &App) {
             screens::help::render(frame, frame.area());
         }
         _ => {
-            let is_in_table = matches!(app.screen, Screen::Actions(_) | Screen::Results(_));
+            let is_in_table = matches!(app.screen, Screen::Actions(_));
 
             let outer_chunks = Layout::vertical([
                 Constraint::Min(0),
@@ -290,14 +292,12 @@ fn ui(frame: &mut Frame, app: &App) {
 
                 let selected_idx = match &app.screen {
                     Screen::Actions(a) => a.selected,
-                    Screen::Results(_) => 0,
                     _ => 0,
                 };
 
                 let query_height = if query_active {
                     let total_chars = 7 + match &app.screen {
                         Screen::Actions(a) => a.results.as_ref().map(|r| r.query_buffer.len()).unwrap_or_else(|| a.query_buffer.len()),
-                        Screen::Results(r) => r.query_buffer.len(),
                         _ => 0,
                     };
                     let lines = (total_chars + inner_w - 1) / inner_w;
@@ -332,17 +332,6 @@ fn ui(frame: &mut Frame, app: &App) {
                             menu_is_active,
                         );
                     }
-                    Screen::Results(state) => {
-                        screens::actions::render(
-                            frame,
-                            menu_area,
-                            &state.catalog,
-                            &state.schema,
-                            &state.table,
-                            selected_idx,
-                            menu_is_active,
-                        );
-                    }
                     _ => {}
                 }
 
@@ -350,7 +339,6 @@ fn ui(frame: &mut Frame, app: &App) {
                     let action = &crate::app::ACTIONS[selected_idx].2;
                     let table_name = match &app.screen {
                         Screen::Actions(a) => a.table.as_str(),
-                        Screen::Results(r) => r.table.as_str(),
                         _ => "",
                     };
 
@@ -442,9 +430,6 @@ fn ui(frame: &mut Frame, app: &App) {
                                     } else {
                                         render_placeholder_preview(frame, preview_pane_area, table_name, selected_idx, preview_is_active);
                                     }
-                                }
-                                Screen::Results(state) => {
-                                    screens::results::render(frame, preview_pane_area, state, spinner(app), preview_is_active);
                                 }
                                 _ => {}
                             }
@@ -565,4 +550,3 @@ async fn run_loop(
         }
     }
 }
-
