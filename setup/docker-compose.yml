@@ -1,0 +1,53 @@
+services:
+    iceberg-rest:
+        image: tabulario/iceberg-rest:latest
+        container_name: iceberg-rest
+        ports:
+            - "8181:8181"
+        environment:
+            - CATALOG_WAREHOUSE=/warehouse
+            - CATALOG_IO__IMPL=org.apache.iceberg.hadoop.HadoopFileIO
+        volumes:
+            - iceberg-warehouse:/warehouse
+        healthcheck:
+            test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8181 && echo -e 'GET /v1/config HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200 OK'"]
+            interval: 5s
+            timeout: 10s
+            retries: 10
+            start_period: 15s
+
+    trino:
+        image: trinodb/trino:latest
+        container_name: trino-server
+        ports:
+            - "8080:8080"
+        volumes:
+            - ./catalog:/etc/trino/catalog:ro
+            - iceberg-warehouse:/warehouse
+        environment:
+            - JAVA_TOOL_OPTIONS=-Xmx4G
+        depends_on:
+            iceberg-rest:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD-SHELL", "trino --execute 'SELECT 1'"]
+            interval: 5s
+            timeout: 10s
+            retries: 20
+            start_period: 30s
+
+    trino-seed:
+        image: python:3.12-slim
+        container_name: trino-seed
+        depends_on:
+            trino:
+                condition: service_healthy
+        volumes:
+            - ./seed:/seed:ro
+        working_dir: /seed
+        command: >
+            bash -c "pip install --quiet trino && python seed.py"
+        restart: "no"
+
+volumes:
+    iceberg-warehouse:
