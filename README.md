@@ -36,8 +36,52 @@ Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **Cr
 
 ### Prerequisites
 
-- [Rust](https://www.rust-lang.org/) (Rust 1.85+ / Edition 2024)
-- Access to a running Trino cluster (HTTP REST interface)
+#### Runtime
+- Access to a running **Trino** or **Presto** cluster (HTTP REST interface)
+
+#### Build toolchain (required for all targets)
+- **[rustup](https://rustup.rs/)** — the Rust toolchain manager
+  - **Do not install Rust via Homebrew** (`brew install rust`). Homebrew's Rust bottle only includes the native target's std library and will cause cross-compilation to fail with `can't find crate for std`.
+  - Install via the official script: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- **Rust stable** (1.85+ / Edition 2024) — installed automatically by rustup
+
+#### Cross-compilation targets (install with rustup)
+
+| Target | Install command | Required for |
+| --- | --- | --- |
+| `aarch64-apple-darwin` | `rustup target add aarch64-apple-darwin` | `make build-darwin-arm` (Apple Silicon) |
+| `x86_64-apple-darwin` | `rustup target add x86_64-apple-darwin` | `make build-darwin` (Intel Mac) |
+| `x86_64-unknown-linux-gnu` | `rustup target add x86_64-unknown-linux-gnu` | `make build-linux` |
+| `x86_64-pc-windows-gnu` | `rustup target add x86_64-pc-windows-gnu` | `make build-windows` |
+
+#### macOS cross-compilation linker (required for `build-darwin` and `build-darwin-arm`)
+
+The standard `cargo` linker cannot cross-compile between macOS architectures without an `osxcross` toolchain. Instead, this project uses **[cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild)**, which routes linking through [Zig](https://ziglang.org/)'s bundled cross-linker — no Docker or osxcross needed.
+
+```bash
+# 1. Install Zig (provides the cross-linker)
+brew install zig
+
+# 2. Install cargo-zigbuild
+cargo install cargo-zigbuild --locked
+```
+
+#### Linux cross-compilation linker (required for `build-linux` on macOS)
+
+```bash
+# Install the mingw-w64 / musl cross-toolchain via Homebrew
+brew install musl-cross        # for x86_64-unknown-linux-gnu
+brew install mingw-w64         # for x86_64-pc-windows-gnu (also needed for build-windows)
+```
+
+Alternatively, install **[cross](https://github.com/cross-rs/cross)** (requires Docker) for all non-native targets:
+
+```bash
+cargo install cross --locked
+# Then use: cross build --release --target <target>
+```
+
+> **Note on `.cargo/config.toml`:** The project ships with linker overrides for `x86_64-apple-darwin` and `aarch64-apple-darwin` commented out. These are only needed when cross-compiling from a Linux host using `osxcross`. On macOS, `cargo-zigbuild` and Xcode's native `clang` handle linking automatically — do not uncomment these entries.
 
 ### Building from Source
 
@@ -46,7 +90,13 @@ Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **Cr
 git clone https://github.com/Codesmith28/lazyTrino.git
 cd lazyTrino
 
-# Build release binary using Makefile (outputs executable directly to ./lazyTrino)
+# Install cross-compilation targets (one-time setup)
+rustup target add aarch64-apple-darwin   # Apple Silicon
+rustup target add x86_64-apple-darwin    # Intel Mac
+rustup target add x86_64-unknown-linux-gnu
+rustup target add x86_64-pc-windows-gnu
+
+# Native release build (auto-detects your host OS/arch)
 make build
 
 # Or build directly with Cargo
@@ -57,10 +107,16 @@ cargo build --release
 
 | Target | Description |
 | --- | --- |
-| `make` / `make build` | Compiles the release binary and copies it to `./lazyTrino` (default target) |
-| `make dev` | Compiles a debug build and copies it to `./lazyTrino` |
-| `make run` | Builds and executes the root `./lazyTrino` binary |
-| `make clean` | Cleans Cargo build artifacts and removes the root `./lazyTrino` executable |
+| `make` / `make build` | Native release binary (auto-detects host OS) → `dist/` |
+| `make build-darwin-arm` | Cross-compile → macOS ARM (`aarch64-apple-darwin`) — requires `cargo-zigbuild` + `zig` |
+| `make build-darwin` | Cross-compile → macOS Intel (`x86_64-apple-darwin`) — requires `cargo-zigbuild` + `zig` |
+| `make build-linux` | Cross-compile → Linux x86_64 — requires `musl-cross` or `cross` |
+| `make build-windows` | Cross-compile → Windows x86_64 — requires `mingw-w64` or `cross` |
+| `make build-all` | Build all four platform targets at once |
+| `make dev` | Debug build → `./lazyTrino` |
+| `make run` | Build (native) and run |
+| `make install` | Install native binary to `~/.local/bin` |
+| `make clean` | Remove all build artifacts and `dist/` |
 
 ---
 
