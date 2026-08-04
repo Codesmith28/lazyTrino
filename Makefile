@@ -14,6 +14,11 @@ else
   BUILD_CMD = cargo
 endif
 
+# ─── Use rustup-managed cargo for cross-compilation ──────────────────────────
+# Homebrew rust (if installed) may shadow cargo on PATH but lacks cross-std.
+# `rustup which cargo` always resolves to the active rustup toolchain's cargo.
+RUSTUP_CARGO := $(shell rustup which cargo 2>/dev/null || echo cargo)
+
 .PHONY: all build build-linux build-darwin build-windows build-all dev clean run install help
 
 # ─── Default ──────────────────────────────────────────────────────────────────
@@ -36,17 +41,21 @@ build-linux:
 	@echo "✅ Binary → $(DIST_DIR)/$(BINARY_NAME)-linux-x86_64"
 
 # ─── macOS (x86_64) ───────────────────────────────────────────────────────────
+# Uses cargo-zigbuild to cross-compile via Zig's bundled linker (no osxcross needed).
+# Uses RUSTUP_CARGO to avoid Homebrew rust shadowing (which lacks x86_64 cross-std).
+# Install deps: brew install zig && cargo install cargo-zigbuild --locked
 build-darwin:
 	@echo "🍎 Building for macOS ($(TARGET_DARWIN))..."
-	@$(BUILD_CMD) build --release --target $(TARGET_DARWIN)
+	@$(RUSTUP_CARGO) zigbuild --release --target $(TARGET_DARWIN)
 	@mkdir -p $(DIST_DIR)
 	@cp target/$(TARGET_DARWIN)/release/$(BINARY_NAME) $(DIST_DIR)/$(BINARY_NAME)-darwin-x86_64
 	@echo "✅ Binary → $(DIST_DIR)/$(BINARY_NAME)-darwin-x86_64"
 
 # ─── macOS ARM (Apple Silicon) ────────────────────────────────────────────────
+# Uses RUSTUP_CARGO to avoid Homebrew rust shadowing on Apple Silicon hosts.
 build-darwin-arm:
 	@echo "🍎 Building for macOS ARM (aarch64-apple-darwin)..."
-	@$(BUILD_CMD) build --release --target aarch64-apple-darwin
+	@$(RUSTUP_CARGO) build --release --target aarch64-apple-darwin
 	@mkdir -p $(DIST_DIR)
 	@cp target/aarch64-apple-darwin/release/$(BINARY_NAME) $(DIST_DIR)/$(BINARY_NAME)-darwin-aarch64
 	@echo "✅ Binary → $(DIST_DIR)/$(BINARY_NAME)-darwin-aarch64"
@@ -107,4 +116,10 @@ help:
 	@echo "  Cross-compilation uses 'cross' if installed, else 'cargo'."
 	@echo "  Install cross:  cargo install cross --locked"
 	@echo "  Requires Docker for non-native targets via cross."
+	@echo ""
+	@echo "  macOS x86_64 / ARM cross-compile (no Docker needed):"
+	@echo "    brew install zig"
+	@echo "    cargo install cargo-zigbuild --locked"
+	@echo "    rustup target add x86_64-apple-darwin   # for build-darwin"
+	@echo "    rustup target add aarch64-apple-darwin  # for build-darwin-arm"
 	@echo ""
