@@ -5,10 +5,13 @@
 [target.x86_64-pc-windows-gnu]
 linker = "x86_64-w64-mingw32-gcc"
 
-[target.x86_64-apple-darwin]
-linker = "x86_64-apple-darwin21.4-clang"
-ar     = "x86_64-apple-darwin21.4-ar"
+# x86_64-apple-darwin: only works when osxcross is installed and its bin/ is on PATH.
+# [target.x86_64-apple-darwin]
+# linker = "x86_64-apple-darwin21.4-clang"
+# ar     = "x86_64-apple-darwin21.4-ar"
 
-[target.aarch64-apple-darwin]
-linker = "aarch64-apple-darwin21.4-clang"
-ar     = "aarch64-apple-darwin21.4-ar"
+# aarch64-apple-darwin: native target on Apple Silicon — no custom linker needed.
+# Uncomment only if cross-compiling FROM a non-Apple host via osxcross.
+# [target.aarch64-apple-darwin]
+# linker = "aarch64-apple-darwin21.4-clang"
+# ar     = "aarch64-apple-darwin21.4-ar"
