@@ -84,19 +84,21 @@ pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
         let trimmed = line.trim();
         if (trimmed.contains("location =") || trimmed.contains("external_location ="))
             && let Some(start) = trimmed.find('\'')
-                && let Some(end) = trimmed[start + 1..].find('\'') {
-                    location = trimmed[start + 1..start + 1 + end].to_string();
-                }
+            && let Some(end) = trimmed[start + 1..].find('\'')
+        {
+            location = trimmed[start + 1..start + 1 + end].to_string();
+        }
         if (trimmed.contains("partitioned_by =") || trimmed.contains("partitioning ="))
             && let Some(start) = trimmed.find("ARRAY[")
-                && let Some(end) = trimmed[start..].find(']') {
-                    let arr_str = &trimmed[start + 6..start + end];
-                    partition_cols = arr_str
-                        .split(',')
-                        .map(|s| s.trim().trim_matches('\'').trim_matches('"').to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                }
+            && let Some(end) = trimmed[start..].find(']')
+        {
+            let arr_str = &trimmed[start + 6..start + end];
+            partition_cols = arr_str
+                .split(',')
+                .map(|s| s.trim().trim_matches('\'').trim_matches('"').to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
     }
 
     if !location.ends_with('/') {
@@ -157,12 +159,13 @@ pub fn build_tree_lines(raw_partitions: &[String]) -> Vec<String> {
     let mut base_prefix = "s3://warehouse/table_data/".to_string();
 
     if let Some(first) = raw_partitions.first()
-        && (first.starts_with("s3://") || first.starts_with("hdfs://") || first.starts_with('/')) {
-            let parts: Vec<&str> = first.split('/').collect();
-            if parts.len() > 3 {
-                base_prefix = parts[..parts.len().saturating_sub(2)].join("/") + "/";
-            }
+        && (first.starts_with("s3://") || first.starts_with("hdfs://") || first.starts_with('/'))
+    {
+        let parts: Vec<&str> = first.split('/').collect();
+        if parts.len() > 3 {
+            base_prefix = parts[..parts.len().saturating_sub(2)].join("/") + "/";
         }
+    }
 
     lines.push(format!(" {base_prefix}"));
 

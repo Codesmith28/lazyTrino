@@ -364,7 +364,10 @@ mod tests {
         };
         assert_eq!(state.catalog, "tpch");
         assert_eq!(state.schema, "sf1");
-        assert_eq!(state.items, vec!["customer".to_string(), "orders".to_string()]);
+        assert_eq!(
+            state.items,
+            vec!["customer".to_string(), "orders".to_string()]
+        );
         assert_eq!(state.selected, 1);
     }
 
@@ -386,7 +389,10 @@ mod tests {
         };
         assert_eq!(state.catalog, "tpch");
         assert_eq!(state.schema, "sf1");
-        assert_eq!(state.items, vec!["customer".to_string(), "orders".to_string()]);
+        assert_eq!(
+            state.items,
+            vec!["customer".to_string(), "orders".to_string()]
+        );
         assert_eq!(state.selected, 0);
         assert!(app.prev_screen.is_none());
     }

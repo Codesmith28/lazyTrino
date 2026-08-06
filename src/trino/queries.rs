@@ -19,7 +19,12 @@ pub fn describe(catalog: &str, schema: &str, table: &str) -> String {
 }
 
 pub fn show_create(catalog: &str, schema: &str, table: &str) -> String {
-    format!("SHOW CREATE TABLE {}.{}.{}", q(catalog), q(schema), q(table))
+    format!(
+        "SHOW CREATE TABLE {}.{}.{}",
+        q(catalog),
+        q(schema),
+        q(table)
+    )
 }
 
 pub fn info_schema_columns(catalog: &str, schema: &str, table: &str) -> String {
@@ -39,19 +44,39 @@ pub fn show_stats(catalog: &str, schema: &str, table: &str) -> String {
 }
 
 pub fn count(catalog: &str, schema: &str, table: &str) -> String {
-    format!("SELECT COUNT(*) AS total_records FROM {}.{}.{}", q(catalog), q(schema), q(table))
+    format!(
+        "SELECT COUNT(*) AS total_records FROM {}.{}.{}",
+        q(catalog),
+        q(schema),
+        q(table)
+    )
 }
 
 pub fn sample(catalog: &str, schema: &str, table: &str) -> String {
-    format!("SELECT * FROM {}.{}.{} LIMIT 20", q(catalog), q(schema), q(table))
+    format!(
+        "SELECT * FROM {}.{}.{} LIMIT 20",
+        q(catalog),
+        q(schema),
+        q(table)
+    )
 }
 
 pub fn page_query(catalog: &str, schema: &str, table: &str, offset: usize, limit: usize) -> String {
-    format!("SELECT * FROM {}.{}.{} OFFSET {offset} LIMIT {limit}", q(catalog), q(schema), q(table))
+    format!(
+        "SELECT * FROM {}.{}.{} OFFSET {offset} LIMIT {limit}",
+        q(catalog),
+        q(schema),
+        q(table)
+    )
 }
 
 pub fn partitions(catalog: &str, schema: &str, table: &str) -> String {
-    format!("SELECT * FROM {}.{}.{}", q(catalog), q(schema), q(&format!("{table}$partitions")))
+    format!(
+        "SELECT * FROM {}.{}.{}",
+        q(catalog),
+        q(schema),
+        q(&format!("{table}$partitions"))
+    )
 }
 
 #[cfg(test)]

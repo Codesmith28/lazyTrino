@@ -116,11 +116,12 @@ pub struct ResultsState {
 impl ResultsState {
     pub fn selection_range(&self) -> Option<(usize, usize)> {
         if let Some(anchor) = self.selection_anchor
-            && anchor != self.query_cursor {
-                let start = anchor.min(self.query_cursor);
-                let end = anchor.max(self.query_cursor);
-                return Some((start, end));
-            }
+            && anchor != self.query_cursor
+        {
+            let start = anchor.min(self.query_cursor);
+            let end = anchor.max(self.query_cursor);
+            return Some((start, end));
+        }
         None
     }
 
@@ -170,7 +171,6 @@ pub enum Mode {
     QueryInput,
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
     TableView,
@@ -202,7 +202,9 @@ impl Action {
             Action::TableView => crate::trino::queries::page_query(catalog, schema, table, 0, 100),
             Action::Describe => crate::trino::queries::describe(catalog, schema, table),
             Action::TableDDL => crate::trino::queries::show_create(catalog, schema, table),
-            Action::InfoSchema => crate::trino::queries::info_schema_columns(catalog, schema, table),
+            Action::InfoSchema => {
+                crate::trino::queries::info_schema_columns(catalog, schema, table)
+            }
             Action::ShowStats => crate::trino::queries::show_stats(catalog, schema, table),
             Action::Count => crate::trino::queries::count(catalog, schema, table),
             Action::Sample => crate::trino::queries::sample(catalog, schema, table),
@@ -412,14 +414,29 @@ mod tests {
         let schema = "sales";
         let table = "orders";
         let cases = vec![
-            (Action::TableView, queries::page_query(catalog, schema, table, 0, 100)),
+            (
+                Action::TableView,
+                queries::page_query(catalog, schema, table, 0, 100),
+            ),
             (Action::Describe, queries::describe(catalog, schema, table)),
-            (Action::TableDDL, queries::show_create(catalog, schema, table)),
-            (Action::InfoSchema, queries::info_schema_columns(catalog, schema, table)),
-            (Action::ShowStats, queries::show_stats(catalog, schema, table)),
+            (
+                Action::TableDDL,
+                queries::show_create(catalog, schema, table),
+            ),
+            (
+                Action::InfoSchema,
+                queries::info_schema_columns(catalog, schema, table),
+            ),
+            (
+                Action::ShowStats,
+                queries::show_stats(catalog, schema, table),
+            ),
             (Action::Count, queries::count(catalog, schema, table)),
             (Action::Sample, queries::sample(catalog, schema, table)),
-            (Action::Partitions, queries::partitions(catalog, schema, table)),
+            (
+                Action::Partitions,
+                queries::partitions(catalog, schema, table),
+            ),
             (Action::Schema, queries::describe(catalog, schema, table)),
         ];
 

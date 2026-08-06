@@ -1,6 +1,6 @@
+mod draw;
 pub mod handler;
 pub mod theme;
-mod draw;
 
 use anyhow::Result;
 use crossterm::{
