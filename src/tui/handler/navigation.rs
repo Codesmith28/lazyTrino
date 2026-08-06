@@ -39,13 +39,84 @@ pub(super) fn check_trigger_infinite_scroll(app: &mut App) -> Option<Command> {
     None
 }
 
-pub(super) fn extract_list_labels(screen: &Screen) -> Option<Vec<String>> {
-    match screen {
-        Screen::Catalog(s) => Some(s.items.iter().map(|x| x.trim().to_string()).collect()),
-        Screen::Schema(s) => Some(s.items.iter().map(|x| x.trim().to_string()).collect()),
-        Screen::Table(s) => Some(s.items.iter().map(|x| x.trim().to_string()).collect()),
+pub(super) fn filter_items<'a>(items: &'a [String], search: &str) -> Vec<&'a String> {
+    items
+        .iter()
+        .filter(|name| {
+            search.is_empty() || name.to_lowercase().contains(&search.to_lowercase())
+        })
+        .collect()
+}
+
+pub(super) fn extract_list_labels(app: &App) -> Option<Vec<String>> {
+    match &app.screen {
+        Screen::Catalog(s) => Some(
+            filter_items(&s.items, &app.search_query)
+                .into_iter()
+                .map(|x| x.trim().to_string())
+                .collect(),
+        ),
+        Screen::Schema(s) => Some(
+            filter_items(&s.items, &app.search_query)
+                .into_iter()
+                .map(|x| x.trim().to_string())
+                .collect(),
+        ),
+        Screen::Table(s) => Some(
+            filter_items(&s.items, &app.search_query)
+                .into_iter()
+                .map(|x| x.trim().to_string())
+                .collect(),
+        ),
         Screen::Actions(_) => Some(ACTIONS.iter().map(|(_, l, _)| l.to_string()).collect()),
         _ => None,
+    }
+}
+
+pub(super) fn get_selected_item_label(app: &App) -> Option<String> {
+    match &app.screen {
+        Screen::Catalog(s) => {
+            let filtered = filter_items(&s.items, &app.search_query);
+            if filtered.is_empty() {
+                None
+            } else {
+                let idx = s.selected.min(filtered.len() - 1);
+                Some(filtered[idx].trim().to_string())
+            }
+        }
+        Screen::Schema(s) => {
+            let filtered = filter_items(&s.items, &app.search_query);
+            if filtered.is_empty() {
+                None
+            } else {
+                let idx = s.selected.min(filtered.len() - 1);
+                Some(filtered[idx].trim().to_string())
+            }
+        }
+        Screen::Table(s) => {
+            let filtered = filter_items(&s.items, &app.search_query);
+            if filtered.is_empty() {
+                None
+            } else {
+                let idx = s.selected.min(filtered.len() - 1);
+                Some(filtered[idx].trim().to_string())
+            }
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn reset_list_selected_for_search(app: &mut App) {
+    if let Some(items) = extract_list_labels(app) {
+        if !items.is_empty() {
+            if let Some(s) = get_selected(&app.screen) {
+                if s >= items.len() {
+                    mod_list_selected(&mut app.screen, items.len() - 1);
+                }
+            }
+        } else {
+            mod_list_selected(&mut app.screen, 0);
+        }
     }
 }
 
@@ -74,7 +145,7 @@ pub(super) fn update_number_buffer(app: &mut App, ch: char) {
         let mut buf = app.number_buffer.clone();
         buf.push(ch);
         let num: usize = buf.parse().unwrap_or(0);
-        if let Some(items) = extract_list_labels(&app.screen) {
+        if let Some(items) = extract_list_labels(app) {
             if num <= items.len() && num > 0 {
                 app.number_buffer = buf;
             } else {
@@ -89,7 +160,7 @@ pub(super) fn jump_to_number(app: &mut App) {
         return;
     }
     let num: usize = app.number_buffer.parse().unwrap_or(1);
-    if let Some(items) = extract_list_labels(&app.screen)
+    if let Some(items) = extract_list_labels(app)
         && num > 0
         && num <= items.len()
     {
@@ -410,15 +481,39 @@ mod tests {
         assert_eq!(state.selected, 0);
         assert!(app.prev_screen.is_none());
     }
+
+    #[test]
+    fn test_select_current_item_with_search_filter() {
+        let mut app = sample_app(Screen::Table(TableState {
+            catalog: "datalake".to_string(),
+            schema: "default".to_string(),
+            items: vec![
+                "activity".to_string(),
+                "policy".to_string(),
+                "events".to_string(),
+                "enableTenants".to_string(),
+            ],
+            selected: 0,
+        }));
+        app.search_query = "e".to_string();
+
+        // Selected index 0 in filtered list ["events", "enableTenants"] should yield "events"
+        let cmd = select_current_item(&mut app);
+        assert!(cmd.is_none());
+
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected Screen::Actions");
+        };
+        assert_eq!(state.table, "events");
+    }
 }
 
 fn select_current_item(app: &mut App) -> Option<Command> {
     match &app.screen {
-        Screen::Catalog(s) => {
-            if s.items.is_empty() {
+        Screen::Catalog(_) => {
+            let Some(catalog) = get_selected_item_label(app) else {
                 return None;
-            }
-            let catalog = s.items[s.selected].trim().to_string();
+            };
             if app.schemas.contains_key(&catalog) {
                 let items = app.schemas[&catalog]
                     .iter()
@@ -435,10 +530,9 @@ fn select_current_item(app: &mut App) -> Option<Command> {
             }
         }
         Screen::Schema(s) => {
-            if s.items.is_empty() {
+            let Some(schema) = get_selected_item_label(app) else {
                 return None;
-            }
-            let schema = s.items[s.selected].trim().to_string();
+            };
             let catalog = s.catalog.trim().to_string();
             if app.tables.contains_key(&(catalog.clone(), schema.clone())) {
                 let items = app.tables[&(catalog.clone(), schema.clone())]
@@ -457,12 +551,11 @@ fn select_current_item(app: &mut App) -> Option<Command> {
             }
         }
         Screen::Table(s) => {
-            if s.items.is_empty() {
+            let Some(table) = get_selected_item_label(app) else {
                 return None;
-            }
+            };
             let catalog = s.catalog.clone();
             let schema = s.schema.clone();
-            let table = s.items[s.selected].trim().to_string();
             app.main_panel_pct = 15;
             app.active_panel = ActivePanel::MenuPane;
             app.partition_tree_lines.clear();
@@ -550,13 +643,25 @@ pub(super) fn copy_active_pane_content(app: &mut App) {
     if text_to_copy.is_empty() {
         match &app.screen {
             Screen::Catalog(s) => {
-                text_to_copy = s.items.iter().map(|x| x.trim()).collect::<Vec<_>>().join("\n");
+                text_to_copy = filter_items(&s.items, &app.search_query)
+                    .iter()
+                    .map(|x| x.trim())
+                    .collect::<Vec<_>>()
+                    .join("\n");
             }
             Screen::Schema(s) => {
-                text_to_copy = s.items.iter().map(|x| x.trim()).collect::<Vec<_>>().join("\n");
+                text_to_copy = filter_items(&s.items, &app.search_query)
+                    .iter()
+                    .map(|x| x.trim())
+                    .collect::<Vec<_>>()
+                    .join("\n");
             }
             Screen::Table(s) => {
-                text_to_copy = s.items.iter().map(|x| x.trim()).collect::<Vec<_>>().join("\n");
+                text_to_copy = filter_items(&s.items, &app.search_query)
+                    .iter()
+                    .map(|x| x.trim())
+                    .collect::<Vec<_>>()
+                    .join("\n");
             }
             Screen::Actions(s) => {
                 if app.active_panel == ActivePanel::MenuPane {
@@ -603,7 +708,7 @@ pub(super) fn handle_list_navigation_keys(app: &mut App, key: KeyEvent) -> Optio
     let code = normalize_key_code(key.code);
     match code {
         KeyCode::Char('j') | KeyCode::Down => {
-            if let Some(items) = extract_list_labels(&app.screen)
+            if let Some(items) = extract_list_labels(app)
                 && !items.is_empty()
                 && let Some(s) = get_selected(&app.screen)
             {
@@ -628,7 +733,7 @@ pub(super) fn handle_list_navigation_keys(app: &mut App, key: KeyEvent) -> Optio
             None
         }
         KeyCode::Char('G') => {
-            if let Some(items) = extract_list_labels(&app.screen)
+            if let Some(items) = extract_list_labels(app)
                 && !items.is_empty()
             {
                 mod_list_selected(&mut app.screen, items.len() - 1);
