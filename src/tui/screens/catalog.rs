@@ -63,6 +63,8 @@ pub(crate) fn render_selectable_list(
         return;
     }
 
+    let clamped_selected = selected.min(filtered.len().saturating_sub(1));
+
     let items: Vec<ListItem> = filtered
         .iter()
         .enumerate()
@@ -71,7 +73,8 @@ pub(crate) fn render_selectable_list(
             let is_mouse_sel = app.is_area_mouse_selected(inner.x, inner.width, item_y);
 
             let prefix = format!("{:>3} ", orig_idx + 1);
-            let line = if is_mouse_sel || *orig_idx == selected {
+            let is_keyboard_sel = display_idx == clamped_selected;
+            let line = if is_mouse_sel || is_keyboard_sel {
                 Line::styled(format!("{prefix}{name}"), theme::selection_style())
             } else {
                 Line::styled(format!("{prefix}{name}"), theme::text_style())
@@ -80,7 +83,7 @@ pub(crate) fn render_selectable_list(
         })
         .collect();
 
-    let mut list_state = ListState::default().with_selected(Some(selected));
+    let mut list_state = ListState::default().with_selected(Some(clamped_selected));
     let list = List::new(items).highlight_style(theme::selection_style());
 
     frame.render_stateful_widget(list, inner, &mut list_state);

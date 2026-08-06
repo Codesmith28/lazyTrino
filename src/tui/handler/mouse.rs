@@ -166,7 +166,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                         return check_trigger_infinite_scroll(app);
                     }
                 }
-            } else if let Some(items) = extract_list_labels(&app.screen)
+            } else if let Some(items) = extract_list_labels(app)
                 && !items.is_empty()
                 && let Some(s) = get_selected(&app.screen)
             {
