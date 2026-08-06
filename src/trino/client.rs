@@ -286,8 +286,16 @@ mod tests {
         assert_eq!(
             results.data,
             vec![
-                vec!["1".to_string(), "[alpha, true]".to_string(), "{\"k\":\"v\"}".to_string()],
-                vec!["NULL".to_string(), "[beta]".to_string(), "{\"n\":2}".to_string()],
+                vec![
+                    "1".to_string(),
+                    "[alpha, true]".to_string(),
+                    "{\"k\":\"v\"}".to_string()
+                ],
+                vec![
+                    "NULL".to_string(),
+                    "[beta]".to_string(),
+                    "{\"n\":2}".to_string()
+                ],
             ]
         );
         assert!(results.duration_ms < 5_000);
