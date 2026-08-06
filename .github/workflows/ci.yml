@@ -6,8 +6,11 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# Environment optimizations for Rust CI builds
 env:
   CARGO_TERM_COLOR: always
+  # Disable incremental compilation in CI to reduce compiler overhead and prevent cache bloat
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   check-and-test:
@@ -22,11 +25,13 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-
+      # ⚡ Fail fast on code formatting errors in ~3 seconds BEFORE downloading/restoring dependency caches
       - name: Check code formatting
         run: cargo fmt --check
+
+      # 📦 Cache cargo registry, index, and compiled build artifacts for fast subsequent runs (~20-40s)
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
 
       - name: Run clippy
         run: cargo clippy -- -D warnings
