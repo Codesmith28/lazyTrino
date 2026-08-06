@@ -76,6 +76,7 @@ pub fn render(
     state: &ResultsState,
     _spinner: String,
     is_active: bool,
+    app: &crate::app::App,
 ) {
     let title_prefix = " Query Results : ";
     let main_title = if state.invalid_query_error.is_some() {
@@ -225,6 +226,7 @@ pub fn render(
         .collect();
     let header = Row::new(header_cells).bottom_margin(1);
 
+    let mut current_row_y = inner.y + 2; // header line + bottom margin 1
     let visible_rows: Vec<Row> = state
         .rows
         .iter()
@@ -232,6 +234,7 @@ pub fn render(
         .take((inner.height as usize).saturating_sub(2))
         .map(|row| {
             let mut max_row_height: u16 = 1;
+            let row_y = current_row_y;
             let cells: Vec<Cell> = visible_cols
                 .iter()
                 .enumerate()
@@ -240,13 +243,16 @@ pub fn render(
                     let col_w = col_width_sizes.get(v_idx).copied().unwrap_or(15);
                     let wrapped_lines = wrap_text(val, col_w);
                     max_row_height = max_row_height.max(wrapped_lines.len() as u16);
-                    Cell::from(wrapped_lines.join(
-                        "
-",
-                    ))
-                    .style(cell_style)
+                    let is_mouse_sel = app.is_area_mouse_selected(inner.x, inner.width, row_y);
+                    let style = if is_mouse_sel {
+                        theme::selection_style()
+                    } else {
+                        cell_style
+                    };
+                    Cell::from(wrapped_lines.join("\n")).style(style)
                 })
                 .collect();
+            current_row_y += max_row_height;
             Row::new(cells).height(max_row_height)
         })
         .collect();

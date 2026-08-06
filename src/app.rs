@@ -329,6 +329,23 @@ impl App {
             entry.error_msg = Some(err);
         }
     }
+
+    pub fn is_area_mouse_selected(&self, area_x: u16, area_w: u16, row_y: u16) -> bool {
+        if let (Some((a_x, a_y)), Some((c_x, c_y))) =
+            (self.mouse_selection_anchor, self.mouse_selection_current)
+        {
+            let start_y = a_y.min(c_y);
+            let end_y = a_y.max(c_y);
+            let start_x = a_x.min(c_x);
+            let end_x = a_x.max(c_x);
+
+            let y_match = row_y >= start_y && row_y <= end_y;
+            let x_match = area_x < end_x && area_x.saturating_add(area_w) > start_x;
+            y_match && x_match
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]

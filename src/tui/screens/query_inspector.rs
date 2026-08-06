@@ -59,7 +59,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .iter()
         .rev()
         .skip(app.query_inspector_scroll)
-        .map(|entry| {
+        .enumerate()
+        .map(|(idx, entry)| {
+            let item_y = inner.y + idx as u16;
+            let is_mouse_sel = app.is_area_mouse_selected(inner.x, inner.width, item_y);
+
             let (symbol, style) = match &entry.status {
                 QueryStatus::Success => ("✓", theme::success_bold_style()),
                 QueryStatus::Error => ("✗", theme::error_bold_style()),
@@ -86,17 +90,27 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
             let mut lines = Vec::new();
             if let Some(first_line) = wrapped_sql.first() {
+                let sql_style = if is_mouse_sel {
+                    theme::selection_style()
+                } else {
+                    theme::text_style()
+                };
                 lines.push(Line::from(vec![
                     Span::styled(format!(" {symbol}"), style),
                     Span::styled(meta, theme::muted_style()),
-                    Span::styled(first_line.clone(), theme::text_style()),
+                    Span::styled(first_line.clone(), sql_style),
                 ]));
             }
             let indent = " ".repeat(header_len);
             for remaining in wrapped_sql.iter().skip(1) {
+                let sql_style = if is_mouse_sel {
+                    theme::selection_style()
+                } else {
+                    theme::text_style()
+                };
                 lines.push(Line::from(vec![
                     Span::raw(indent.clone()),
-                    Span::styled(remaining.clone(), theme::text_style()),
+                    Span::styled(remaining.clone(), sql_style),
                 ]));
             }
 

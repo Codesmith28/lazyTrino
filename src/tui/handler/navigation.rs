@@ -538,6 +538,67 @@ pub(super) fn connect_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
     None
 }
 
+pub(super) fn copy_active_pane_content(app: &mut App) {
+    let mut text_to_copy = String::new();
+
+    if let (Some(anchor), Some(current)) =
+        (app.mouse_selection_anchor, app.mouse_selection_current)
+    {
+        text_to_copy = super::mouse::extract_selected_text(app, anchor, current);
+    }
+
+    if text_to_copy.is_empty() {
+        match &app.screen {
+            Screen::Catalog(s) => {
+                text_to_copy = s.items.iter().map(|x| x.trim()).collect::<Vec<_>>().join("\n");
+            }
+            Screen::Schema(s) => {
+                text_to_copy = s.items.iter().map(|x| x.trim()).collect::<Vec<_>>().join("\n");
+            }
+            Screen::Table(s) => {
+                text_to_copy = s.items.iter().map(|x| x.trim()).collect::<Vec<_>>().join("\n");
+            }
+            Screen::Actions(s) => {
+                if app.active_panel == ActivePanel::MenuPane {
+                    text_to_copy = ACTIONS
+                        .iter()
+                        .map(|(_, l, _)| l.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                } else if app.active_panel == ActivePanel::MainViewer {
+                    if s.selected == 7 {
+                        text_to_copy = app.partition_tree_lines.join("\n");
+                    } else if s.selected == 8 {
+                        text_to_copy = app
+                            .vertical_schema_cols
+                            .iter()
+                            .map(|col| {
+                                format!(
+                                    "{}\t{}\t{}\t{}",
+                                    col.name, col.data_type, col.key_meta, col.description
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                    } else {
+                        export::copy_results_to_clipboard(app);
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if !text_to_copy.is_empty() {
+        super::query::copy_to_clipboard(&text_to_copy);
+        app.copied_toast = Some((
+            text_to_copy.chars().take(30).collect(),
+            std::time::Instant::now(),
+        ));
+    }
+}
+
 pub(super) fn handle_list_navigation_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
     let code = normalize_key_code(key.code);
     match code {
@@ -572,6 +633,10 @@ pub(super) fn handle_list_navigation_keys(app: &mut App, key: KeyEvent) -> Optio
             {
                 mod_list_selected(&mut app.screen, items.len() - 1);
             }
+            None
+        }
+        KeyCode::Char('y') | KeyCode::Char('c') => {
+            copy_active_pane_content(app);
             None
         }
         _ => None,
@@ -620,6 +685,10 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                 }
                 KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
                     go_back(app);
+                    None
+                }
+                KeyCode::Char('y') | KeyCode::Char('c') => {
+                    copy_active_pane_content(app);
                     None
                 }
                 _ => None,
@@ -698,14 +767,8 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                     }
                     None
                 }
-                KeyCode::Char('y')
-                    if s.selected < ACTIONS.len()
-                        && !matches!(
-                            ACTIONS[s.selected].2,
-                            Action::Partitions | Action::Schema
-                        ) =>
-                {
-                    export::copy_results_to_clipboard(app);
+                KeyCode::Char('y') | KeyCode::Char('c') => {
+                    copy_active_pane_content(app);
                     None
                 }
                 KeyCode::Char('Y')

@@ -19,7 +19,10 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, List, ListItem, ListState},
 };
 
-use crate::{app::ACTIONS, tui::theme};
+use crate::{
+    app::{ACTIONS, App},
+    tui::theme,
+};
 
 pub fn render(
     frame: &mut Frame,
@@ -29,6 +32,7 @@ pub fn render(
     table: &str,
     selected: usize,
     is_active: bool,
+    app: &App,
 ) {
     let block = Block::default()
         .title(if area.width < 25 {
@@ -46,10 +50,13 @@ pub fn render(
         .iter()
         .enumerate()
         .map(|(i, (key, label, _))| {
+            let item_y = inner.y + i as u16;
+            let is_mouse_sel = app.is_area_mouse_selected(inner.x, inner.width, item_y);
+
             let is_selected = i == selected;
             let prefix = if is_selected { "▸ " } else { "  " };
             let text = format!("{prefix}[{key}] {label}");
-            let line = if is_selected {
+            let line = if is_mouse_sel || is_selected {
                 Line::styled(text, theme::selection_style())
             } else {
                 Line::styled(text, theme::text_style())

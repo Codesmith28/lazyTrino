@@ -222,6 +222,7 @@ pub fn render(
     table_name: &str,
     scroll: usize,
     is_active: bool,
+    app: &crate::app::App,
 ) {
     let title = if table_name.is_empty() {
         " Partitions (Tree View) ".to_string()
@@ -238,16 +239,22 @@ pub fn render(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let tree_lines = build_tree_lines(raw_partitions);
+    let tree_lines = raw_partitions;
 
     let items: Vec<ListItem> = tree_lines
         .iter()
         .skip(scroll)
         .take(inner.height as usize)
-        .map(|line_str| {
+        .enumerate()
+        .map(|(idx, line_str)| {
+            let line_y = inner.y + idx as u16;
+            let is_mouse_sel = app.is_area_mouse_selected(inner.x, inner.width, line_y);
+
             let (branch_part, content_part) = split_tree_line(line_str);
 
-            let content_style = if content_part.contains("s3://")
+            let content_style = if is_mouse_sel {
+                theme::selection_style()
+            } else if content_part.contains("s3://")
                 || content_part.contains("hdfs://")
                 || content_part.starts_with('/')
             {
