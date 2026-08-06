@@ -8,9 +8,19 @@ use ratatui::{
     },
 };
 
-use crate::{app::CatalogState, tui::theme};
+use crate::{
+    app::{App, CatalogState},
+    tui::theme,
+};
 
-pub fn render(frame: &mut Frame, area: Rect, state: &CatalogState, search: &str, is_active: bool) {
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    state: &CatalogState,
+    search: &str,
+    is_active: bool,
+    app: &App,
+) {
     render_selectable_list(
         frame,
         area,
@@ -19,6 +29,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &CatalogState, search: &str,
         state.selected,
         search,
         is_active,
+        app,
     );
 }
 
@@ -30,6 +41,7 @@ pub(crate) fn render_selectable_list(
     selected: usize,
     search: &str,
     is_active: bool,
+    app: &App,
 ) {
     let block = Block::default()
         .title(title)
@@ -53,9 +65,13 @@ pub(crate) fn render_selectable_list(
 
     let items: Vec<ListItem> = filtered
         .iter()
-        .map(|(orig_idx, name)| {
+        .enumerate()
+        .map(|(display_idx, (orig_idx, name))| {
+            let item_y = inner.y + display_idx as u16;
+            let is_mouse_sel = app.is_area_mouse_selected(inner.x, inner.width, item_y);
+
             let prefix = format!("{:>3} ", orig_idx + 1);
-            let line = if *orig_idx == selected {
+            let line = if is_mouse_sel || *orig_idx == selected {
                 Line::styled(format!("{prefix}{name}"), theme::selection_style())
             } else {
                 Line::styled(format!("{prefix}{name}"), theme::text_style())

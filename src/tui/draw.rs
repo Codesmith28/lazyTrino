@@ -228,6 +228,17 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
+    if let Some((ref msg, ref instant)) = app.copied_toast
+        && instant.elapsed().as_secs() < 3
+    {
+        let toast_text = format!(" ✔ Copied to clipboard: \"{}\" ", msg);
+        let footer = Paragraph::new(Line::from(truncate_hint(&toast_text, area.width as usize)))
+            .style(theme::success_bold_style().bg(theme::MUTED_FG))
+            .wrap(ratatui::widgets::Wrap { trim: true });
+        frame.render_widget(footer, area);
+        return;
+    }
+
     let Some(hint) = footer_hint(app) else {
         return;
     };
@@ -295,6 +306,7 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                             state,
                             &app.search_query,
                             main_is_active,
+                            app,
                         );
                     }
                     Screen::Schema(state) => {
@@ -304,6 +316,7 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                             state,
                             &app.search_query,
                             main_is_active,
+                            app,
                         );
                     }
                     Screen::Table(state) => {
@@ -313,6 +326,7 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                             state,
                             &app.search_query,
                             main_is_active,
+                            app,
                         );
                     }
                     _ => unreachable!(),
@@ -388,6 +402,7 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                         &state.table,
                         state.selected,
                         menu_is_active,
+                        app,
                     );
                 }
 
@@ -430,6 +445,7 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                                     table_name,
                                     app.partition_scroll,
                                     preview_is_active,
+                                    app,
                                 );
                             } else {
                                 render_placeholder_preview(
@@ -472,6 +488,7 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                                     table_name,
                                     app.schema_scroll,
                                     preview_is_active,
+                                    app,
                                 );
                             } else {
                                 render_placeholder_preview(
@@ -492,6 +509,7 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                                         res_state,
                                         spinner(app),
                                         preview_is_active,
+                                        app,
                                     );
                                 } else if app.loading {
                                     let title = format!(

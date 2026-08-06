@@ -13,6 +13,7 @@ pub fn render(
     table_name: &str,
     scroll: usize,
     is_active: bool,
+    app: &crate::app::App,
 ) {
     let title = if table_name.is_empty() {
         " Schema (Vertical Table Format) ".to_string()
@@ -47,6 +48,7 @@ pub fn render(
     let col_w3 = (inner.width * 18 / 100).max(8) as usize;
     let col_w4 = (inner.width * 33 / 100).max(12) as usize;
 
+    let mut current_row_y = inner.y + 2; // header line + bottom margin 1
     let rows: Vec<Row> = columns
         .iter()
         .skip(scroll)
@@ -73,28 +75,21 @@ pub fn render(
                 .max(key_lines.len())
                 .max(desc_lines.len()) as u16;
 
+            let is_mouse_sel = app.is_area_mouse_selected(inner.x, inner.width, current_row_y);
+            current_row_y += max_h;
+
+            let row_style = if is_mouse_sel {
+                theme::selection_style()
+            } else {
+                theme::text_style()
+            };
+
             let cells = vec![
-                Cell::from(num).style(theme::muted_style()),
-                Cell::from(name_lines.join(
-                    "
-",
-                ))
-                .style(theme::bold_text_style()),
-                Cell::from(dtype_lines.join(
-                    "
-",
-                ))
-                .style(theme::success_style()),
-                Cell::from(key_lines.join(
-                    "
-",
-                ))
-                .style(theme::detail_style()),
-                Cell::from(desc_lines.join(
-                    "
-",
-                ))
-                .style(theme::secondary_style()),
+                Cell::from(num).style(if is_mouse_sel { row_style } else { theme::muted_style() }),
+                Cell::from(name_lines.join("\n")).style(if is_mouse_sel { row_style } else { theme::bold_text_style() }),
+                Cell::from(dtype_lines.join("\n")).style(if is_mouse_sel { row_style } else { theme::success_style() }),
+                Cell::from(key_lines.join("\n")).style(if is_mouse_sel { row_style } else { theme::detail_style() }),
+                Cell::from(desc_lines.join("\n")).style(if is_mouse_sel { row_style } else { theme::secondary_style() }),
             ];
             Row::new(cells).height(max_h)
         })

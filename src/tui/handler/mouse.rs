@@ -209,13 +209,13 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
     }
 
     let bottom_y = term_height.saturating_sub(7);
-    let border_x = ((term_width as u32 * app.main_panel_pct as u32) / 100) as u16;
-    let height_right = bottom_y;
-    let border_y = ((height_right as u32 * app.control_panel_split_pct as u32) / 100) as u16;
 
     let start_row = anchor.1.min(current.1);
     let end_row = anchor.1.max(current.1);
+    let min_col = anchor.0.min(current.0);
+    let max_col = anchor.0.max(current.0);
 
+    // 1. Selection in Bottom Query Inspector Pane
     if anchor.1 >= bottom_y || current.1 >= bottom_y {
         let mut lines = Vec::new();
         let inner_y = bottom_y + 1;
@@ -231,86 +231,162 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
         return lines.join("\n");
     }
 
-    if anchor.0 < border_x && current.0 < border_x {
-        match &app.screen {
-            Screen::Catalog(s) => {
-                let mut lines = Vec::new();
-                let inner_y = 4;
-                for r in start_row..=end_row {
-                    if r >= inner_y {
-                        let idx = (r - inner_y) as usize;
-                        if idx < s.items.len() {
-                            lines.push(s.items[idx].clone());
-                        }
-                    }
-                }
-                return lines.join("\n");
-            }
-            Screen::Schema(s) => {
-                let mut lines = Vec::new();
-                let inner_y = 4;
-                for r in start_row..=end_row {
-                    if r >= inner_y {
-                        let idx = (r - inner_y) as usize;
-                        if idx < s.items.len() {
-                            lines.push(s.items[idx].clone());
-                        }
-                    }
-                }
-                return lines.join("\n");
-            }
-            Screen::Table(s) => {
-                let mut lines = Vec::new();
-                let inner_y = 4;
-                for r in start_row..=end_row {
-                    if r >= inner_y {
-                        let idx = (r - inner_y) as usize;
-                        if idx < s.items.len() {
-                            lines.push(s.items[idx].clone());
-                        }
-                    }
-                }
-                return lines.join("\n");
-            }
-            Screen::Actions(_) => {
-                let mut lines = Vec::new();
-                let inner_y = 4;
-                for r in start_row..=end_row {
-                    if r >= inner_y {
-                        let idx = (r - inner_y) as usize;
-                        if idx < ACTIONS.len() {
-                            lines.push(ACTIONS[idx].1.to_string());
-                        }
-                    }
-                }
-                return lines.join("\n");
-            }
-            _ => {}
-        }
-    }
+    let is_in_table = matches!(app.screen, Screen::Actions(_));
 
-    if anchor.0 >= border_x && current.0 >= border_x {
-        if start_row < border_y {
-            let mut lines = Vec::new();
+    if !is_in_table {
+        // Phase 1 screens: Catalog, Schema, Table
+        let list_pct = if app.main_panel_pct <= 30 {
+            60
+        } else {
+            app.main_panel_pct
+        };
+        let border_x = ((term_width as u32 * list_pct as u32) / 100) as u16;
+
+        let inner_w = border_x.saturating_sub(2).max(1) as usize;
+        let search_active = matches!(app.mode, Mode::Search);
+        let search_height = if search_active {
+            let total_chars = 3 + app.search_query.len();
+            let lines = total_chars.div_ceil(inner_w);
+            (lines as u16 + 2).clamp(3, 8)
+        } else {
+            3
+        };
+
+        if min_col < border_x {
+            let inner_y = search_height + 1;
+            match &app.screen {
+                Screen::Catalog(s) => {
+                    let mut lines = Vec::new();
+                    for r in start_row..=end_row {
+                        if r >= inner_y {
+                            let idx = (r - inner_y) as usize;
+                            if idx < s.items.len() {
+                                lines.push(s.items[idx].trim().to_string());
+                            }
+                        }
+                    }
+                    return lines.join("\n");
+                }
+                Screen::Schema(s) => {
+                    let mut lines = Vec::new();
+                    for r in start_row..=end_row {
+                        if r >= inner_y {
+                            let idx = (r - inner_y) as usize;
+                            if idx < s.items.len() {
+                                lines.push(s.items[idx].trim().to_string());
+                            }
+                        }
+                    }
+                    return lines.join("\n");
+                }
+                Screen::Table(s) => {
+                    let mut lines = Vec::new();
+                    for r in start_row..=end_row {
+                        if r >= inner_y {
+                            let idx = (r - inner_y) as usize;
+                            if idx < s.items.len() {
+                                lines.push(s.items[idx].trim().to_string());
+                            }
+                        }
+                    }
+                    return lines.join("\n");
+                }
+                _ => {}
+            }
+        }
+    } else if let Screen::Actions(state) = &app.screen {
+        // Phase 2 screen: Screen::Actions
+        let menu_pct = if app.main_panel_pct > 30 {
+            15
+        } else {
+            app.main_panel_pct.clamp(8, 30)
+        };
+        let border_x = ((term_width as u32 * menu_pct as u32) / 100) as u16;
+
+        let preview_w = term_width.saturating_sub(border_x);
+        let inner_w = preview_w.saturating_sub(2).max(1) as usize;
+
+        let search_active = matches!(app.mode, Mode::Search);
+        let search_height = if search_active {
+            let total_chars = 3 + app.search_query.len();
+            let lines = total_chars.div_ceil(inner_w);
+            (lines as u16 + 2).clamp(3, 8)
+        } else {
+            3
+        };
+
+        let query_active = matches!(app.mode, Mode::QueryInput);
+        let query_height = if query_active {
+            let total_chars = 7 + state
+                .results
+                .as_ref()
+                .map(|r| r.query_buffer.len())
+                .unwrap_or_else(|| state.query_buffer.len());
+            let lines = total_chars.div_ceil(inner_w);
+            (lines as u16 + 2).clamp(3, 4)
+        } else {
+            3
+        };
+
+        // Left Menu Pane (Actions list)
+        if max_col < border_x || (app.active_panel == ActivePanel::MenuPane && min_col < border_x) {
             let inner_y = 1;
+            let mut lines = Vec::new();
             for r in start_row..=end_row {
                 if r >= inner_y {
-                    let idx = (r - inner_y) as usize + app.partition_scroll;
+                    let idx = (r - inner_y) as usize;
+                    if idx < ACTIONS.len() {
+                        lines.push(ACTIONS[idx].1.to_string());
+                    }
+                }
+            }
+            if !lines.is_empty() {
+                return lines.join("\n");
+            }
+        }
+
+        // Right Main Viewer Pane
+        let preview_inner_y = search_height + query_height + 1;
+
+        if state.selected == 7 {
+            // Action::Partitions
+            let mut lines = Vec::new();
+            for r in start_row..=end_row {
+                if r >= preview_inner_y {
+                    let idx = (r - preview_inner_y) as usize + app.partition_scroll;
                     if idx < app.partition_tree_lines.len() {
                         lines.push(app.partition_tree_lines[idx].clone());
                     }
                 }
             }
             return lines.join("\n");
-        } else {
+        } else if state.selected == 8 {
+            // Action::Schema
             let mut lines = Vec::new();
-            let inner_y = border_y + 1;
             for r in start_row..=end_row {
-                if r >= inner_y {
-                    let idx = (r - inner_y) as usize + app.schema_scroll;
+                if r >= preview_inner_y {
+                    let idx = (r - preview_inner_y) as usize + app.schema_scroll;
                     if idx < app.vertical_schema_cols.len() {
                         let col = &app.vertical_schema_cols[idx];
-                        lines.push(format!("{} {}", col.name, col.data_type));
+                        lines.push(format!(
+                            "{}\t{}\t{}\t{}",
+                            col.name, col.data_type, col.key_meta, col.description
+                        ));
+                    }
+                }
+            }
+            return lines.join("\n");
+        } else if let Some(ref res) = state.results {
+            // Results table view
+            let mut lines = Vec::new();
+            for r in start_row..=end_row {
+                if r == preview_inner_y {
+                    // Header line
+                    lines.push(res.columns.join("\t"));
+                } else if r >= preview_inner_y + 2 {
+                    let idx = (r - (preview_inner_y + 2)) as usize + res.scroll_v;
+                    if idx < res.rows.len() {
+                        lines.push(res.rows[idx].join("\t"));
                     }
                 }
             }
@@ -319,4 +395,119 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
     }
 
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ConnectionConfig;
+
+    fn sample_app() -> App {
+        App::new(
+            ConnectionConfig {
+                url: "http://localhost:8080".to_string(),
+                user: "admin".to_string(),
+                password: "".to_string(),
+            },
+            false,
+        )
+    }
+
+    #[test]
+    fn test_extract_selected_text_catalog_screen() {
+        let mut app = sample_app();
+        app.screen = Screen::Catalog(CatalogState {
+            items: vec!["iceberg".to_string(), "tpch".to_string(), "system".to_string()],
+            selected: 0,
+        });
+
+        let text = extract_selected_text(&app, (5, 4), (5, 5));
+        assert_eq!(text, "iceberg\ntpch");
+    }
+
+    #[test]
+    fn test_extract_selected_text_query_inspector() {
+        let mut app = sample_app();
+        let term_height = crossterm::terminal::size().unwrap_or((80, 24)).1;
+        let bottom_y = term_height.saturating_sub(7);
+
+        app.add_query_log("SELECT 1".to_string());
+        app.add_query_log("SELECT 2".to_string());
+
+        let text = extract_selected_text(&app, (10, bottom_y + 1), (10, bottom_y + 1));
+        assert_eq!(text, "SELECT 2");
+    }
+
+    #[test]
+    fn test_extract_selected_text_actions_results() {
+        let mut app = sample_app();
+        let res_state = ResultsState {
+            query_buffer: "SELECT * FROM orders".to_string(),
+            query_cursor: 20,
+            columns: vec!["id".to_string(), "status".to_string()],
+            rows: vec![
+                vec!["1".to_string(), "OK".to_string()],
+                vec!["2".to_string(), "PENDING".to_string()],
+            ],
+            scroll_v: 0,
+            scroll_h: 0,
+            loading: false,
+            error: None,
+            is_paginated: true,
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            offset: 0,
+            page_size: 100,
+            is_fetching_next_page: false,
+            has_more_rows: false,
+            invalid_query_error: None,
+            selection_anchor: None,
+        };
+
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            query_buffer: "SELECT * FROM orders".to_string(),
+            query_cursor: 20,
+            results: Some(res_state),
+        });
+
+        let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0;
+        let menu_x = term_width / 2; // Right side
+
+        // Header line (preview_inner_y = 7) and first row (preview_inner_y + 2 = 9)
+        let text = extract_selected_text(&app, (menu_x, 7), (menu_x, 9));
+        assert_eq!(text, "id\tstatus\n1\tOK");
+    }
+
+    #[test]
+    fn test_extract_selected_text_partitions() {
+        let mut app = sample_app();
+        app.partition_tree_lines = vec![
+            " s3a://local-minio-bucket/lakehouse/".to_string(),
+            " ├── date=2024-01-01/".to_string(),
+            " └── date=2024-01-02/".to_string(),
+        ];
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 7, // Partitions action
+            query_buffer: "".to_string(),
+            query_cursor: 0,
+            results: None,
+        });
+
+        let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0;
+        let right_x = term_width / 2;
+
+        let text = extract_selected_text(&app, (right_x, 7), (right_x, 9));
+        assert_eq!(
+            text,
+            " s3a://local-minio-bucket/lakehouse/\n ├── date=2024-01-01/\n └── date=2024-01-02/"
+        );
+    }
 }
