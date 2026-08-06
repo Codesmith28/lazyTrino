@@ -2,6 +2,14 @@
 name = "lazyTrino"
 version = "0.1.0"
 edition = "2024"
+description = "Terminal UI (TUI) for browsing Trino and Presto catalogs, schemas, tables, metadata, and query results"
+license = "MIT"
+repository = "https://github.com/Codesmith28/lazyTrino"
+homepage = "https://github.com/Codesmith28/lazyTrino"
+readme = "README.md"
+keywords = ["trino", "presto", "tui", "ratatui", "sql"]
+categories = ["command-line-utilities", "database"]
+
 
 [lib]
 name = "lazy_trino"
