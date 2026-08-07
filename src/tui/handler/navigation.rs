@@ -861,6 +861,125 @@ mod tests {
             "moving the menu selection should reset the main view pane"
         );
     }
+
+    #[test]
+    fn actions_keys_less_than_greater_than_scroll_columns_in_generic_results() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 3, // ShowStats: a generic (non-drilldown) results view
+            results: Some(sample_leaf_results_state()),
+            ..Default::default()
+        }));
+        app.active_panel = ActivePanel::MainViewer;
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(
+            state.results.as_ref().unwrap().scroll_h,
+            0,
+            "single column can't scroll past 0"
+        );
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('<')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().scroll_h, 0);
+    }
+
+    #[test]
+    fn actions_keys_h_and_l_are_no_ops_in_generic_results() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 3, // ShowStats: a generic (non-drilldown) results view
+            results: Some(sample_leaf_results_state()),
+            ..Default::default()
+        }));
+        app.active_panel = ActivePanel::MainViewer;
+
+        let cmd = actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
+        assert!(cmd.is_none());
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().scroll_h, 0);
+        assert!(matches!(app.active_panel, ActivePanel::MainViewer));
+
+        let cmd = actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        assert!(cmd.is_none());
+        // `h` is not `at_leaf` here (not in a Table View drill-down), so it
+        // must not go up a partition level or scroll — just a no-op.
+        assert!(matches!(app.active_panel, ActivePanel::MainViewer));
+    }
+
+    #[test]
+    fn actions_keys_c_no_longer_triggers_copy_only_y_does() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 3,
+            results: Some(sample_leaf_results_state()),
+            ..Default::default()
+        }));
+        app.active_panel = ActivePanel::MainViewer;
+
+        // `c` must not trigger a copy toast anymore in MainViewer.
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('c')));
+        assert!(app.copied_toast.is_none(), "'c' should not copy anymore");
+
+        // `y` still does.
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('y')));
+        assert!(app.copied_toast.is_some(), "'y' should still copy");
+    }
+
+    #[test]
+    fn actions_keys_leaf_grid_h_goes_up_partition_l_is_no_op_and_lt_gt_scroll() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            selected: 0, // TableView
+            drilldown: Some(DrillDownState {
+                partition_cols: vec!["date".to_string()],
+                path: vec![("date".to_string(), "2026-08-06".to_string())],
+                levels_cache: vec![vec!["2026-08-06".to_string()]],
+                selected: 0,
+                loading: false,
+                error: None,
+                truncated: false,
+            }),
+            results: Some(sample_leaf_results_state()),
+            ..drilldown_action_state(vec!["date"])
+        }));
+        app.active_panel = ActivePanel::MainViewer;
+
+        // `l` at the leaf is a no-op (nothing to drill into further).
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert!(state.drilldown.as_ref().unwrap().is_leaf());
+
+        // `>` still scrolls columns at the leaf.
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let _ = state.results.as_ref().unwrap().scroll_h; // no panic; single column clamps to 0
+
+        // `h` at the leaf goes up a partition level (back to browsing, not a
+        // scroll).
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert!(state.drilldown.as_ref().unwrap().path.is_empty());
+        assert!(state.results.is_none());
+    }
 }
 
 fn select_current_item(app: &mut App) -> Option<Command> {
@@ -1240,7 +1359,7 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                     go_back(app);
                     None
                 }
-                KeyCode::Char('y') | KeyCode::Char('c') => {
+                KeyCode::Char('y') => {
                     copy_active_pane_content(app);
                     None
                 }
@@ -1297,7 +1416,7 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             drilldown_go_up(s);
                             None
                         }
-                        KeyCode::Char('y') | KeyCode::Char('c') => {
+                        KeyCode::Char('y') => {
                             copy_active_pane_content(app);
                             None
                         }
@@ -1332,6 +1451,18 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('l') | KeyCode::Right => {
+                            // `l` is purely hierarchical now — no-op in
+                            // result-viewing contexts (use `<`/`>` to
+                            // scroll columns instead).
+                            None
+                        }
+                        KeyCode::Char('<') => {
+                            if let Some(ref mut res) = s.results {
+                                res.scroll_h = res.scroll_h.saturating_sub(1);
+                            }
+                            None
+                        }
+                        KeyCode::Char('>') => {
                             if let Some(ref mut res) = s.results
                                 && !res.columns.is_empty()
                             {
@@ -1342,12 +1473,10 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         }
                         KeyCode::Char('h') | KeyCode::Left => {
                             // In a partitioned Table View's leaf record grid, `h`
-                            // goes back up one partition level instead of
-                            // scrolling columns.
+                            // goes back up one partition level. Elsewhere it's
+                            // a no-op — horizontal scrolling lives on `<`/`>`.
                             if at_leaf {
                                 drilldown_go_up(s);
-                            } else if let Some(ref mut res) = s.results {
-                                res.scroll_h = res.scroll_h.saturating_sub(1);
                             }
                             None
                         }
@@ -1387,7 +1516,7 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
-                        KeyCode::Char('y') | KeyCode::Char('c') => {
+                        KeyCode::Char('y') => {
                             copy_active_pane_content(app);
                             None
                         }

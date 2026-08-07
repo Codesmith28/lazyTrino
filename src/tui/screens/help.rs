@@ -47,7 +47,10 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ),
         Line::from("  g / G                          Jump to top / bottom of active preview pane"),
         Line::from(
-            "  y / Y                          Copy loaded result grid as TSV / export it as CSV",
+            "  < / >                          Scroll active result grid horizontally (left / right)",
+        ),
+        Line::from(
+            "  y                               Copy loaded result grid as TSV (Y exports it as CSV)",
         ),
         Line::from(
             "  h / ← / Esc                    Switch focus to Menu Pane / Go back to Tables list",
@@ -84,6 +87,12 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ),
         Line::from(
             "  h / ←                          Go up one partition level (no-op at the top level)",
+        ),
+        Line::from(
+            "                                 In the leaf record grid, h still goes up a level; l is a",
+        ),
+        Line::from(
+            "                                 no-op there — use < / > to scroll columns instead",
         ),
         Line::from(
             "  Esc                            Always returns to the Menu Pane, regardless of drill-down depth",
