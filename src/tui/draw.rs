@@ -193,25 +193,25 @@ fn footer_hint(app: &App) -> Option<&'static str> {
 
                 match app.active_panel {
                     ActivePanel::MenuPane => Some(
-                        " j/k:move  l/Enter:run  h/Esc:back  v/d/c/P/S:action  Tab:pane  ?:help  Ctrl+C:quit ",
+                        " j/k:move  l/Enter:run  h/Esc:back  v/c/i/s/n/p/P/S:action  Tab:pane  ?:help  Ctrl+C:quit ",
                     ),
                     ActivePanel::MainViewer => match selected_action {
                         Some(Action::TableView) if state.results.is_some() => Some(
-                            " j/k:rows  h/l:cols  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/d/c/P/S:action  ?:help  Ctrl+C:quit ",
+                            " j/k:rows  </>:cols  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
                         ),
                         Some(Action::Partitions) if !app.partition_tree_lines.is_empty() => Some(
-                            " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/d/c/P/S:action  ?:help  Ctrl+C:quit ",
+                            " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
                         ),
                         Some(Action::Schema) if !app.vertical_schema_cols.is_empty() => Some(
-                            " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/d/c/P/S:action  ?:help  Ctrl+C:quit ",
+                            " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
                         ),
                         _ if state.results.is_some() => Some(
-                            " j/k:rows  h/l:cols  g/G:top/btm  Esc:menu  Tab:pane  v/d/c/P/S:action  ?:help  Ctrl+C:quit ",
+                            " j/k:rows  </>:cols  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
                         ),
                         Some(Action::TableView) => Some(
-                            " q/:query  Esc:menu  Tab:pane  v/d/c/P/S:action  ?:help  Ctrl+C:quit ",
+                            " q/:query  Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
                         ),
-                        _ => Some(" Esc:menu  Tab:pane  v/d/c/P/S:action  ?:help  Ctrl+C:quit "),
+                        _ => Some(" Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit "),
                     },
                 }
             }
