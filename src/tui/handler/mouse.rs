@@ -477,6 +477,7 @@ mod tests {
             has_more_rows: false,
             invalid_query_error: None,
             selection_anchor: None,
+            filters: Vec::new(),
         };
 
         app.screen = Screen::Actions(ActionState {
@@ -487,6 +488,7 @@ mod tests {
             query_buffer: "SELECT * FROM orders".to_string(),
             query_cursor: 20,
             results: Some(res_state),
+            ..Default::default()
         });
 
         let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0;
@@ -513,6 +515,7 @@ mod tests {
             query_buffer: "".to_string(),
             query_cursor: 0,
             results: None,
+            ..Default::default()
         });
 
         let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0;

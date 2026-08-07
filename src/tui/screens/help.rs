@@ -78,6 +78,32 @@ pub fn render(frame: &mut Frame, area: Rect) {
         Line::from("  P / S                          Partitions Tree / Vertical Schema Inspector"),
         Line::from(""),
         Line::from(Span::styled(
+            " Partitioned Table Drill-Down (cd/ls style)",
+            theme::header_style(),
+        )),
+        Line::from(
+            "  (auto)                         Entering a table runs recon (SHOW CREATE TABLE, etc.) up front;",
+        ),
+        Line::from(
+            "                                 Partitions/Schema/Table View wait for it to finish",
+        ),
+        Line::from(
+            "  v on a partitioned table       Table View browses partition values one level at a time",
+        ),
+        Line::from(
+            "                                 instead of querying every row at once (avoids split errors)",
+        ),
+        Line::from(
+            "  l / → / Enter                  Drill into the highlighted partition value (go one level deeper)",
+        ),
+        Line::from(
+            "  h / ←                          Go up one partition level (no-op at the top level)",
+        ),
+        Line::from(
+            "  Esc                            Always returns to the Menu Pane, regardless of drill-down depth",
+        ),
+        Line::from(""),
+        Line::from(Span::styled(
             " Search & Custom Query",
             theme::header_style(),
         )),
