@@ -33,6 +33,7 @@ pub fn render(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_selectable_list(
     frame: &mut Frame,
     area: Rect,

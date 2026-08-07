@@ -85,11 +85,31 @@ pub fn render(
             };
 
             let cells = vec![
-                Cell::from(num).style(if is_mouse_sel { row_style } else { theme::muted_style() }),
-                Cell::from(name_lines.join("\n")).style(if is_mouse_sel { row_style } else { theme::bold_text_style() }),
-                Cell::from(dtype_lines.join("\n")).style(if is_mouse_sel { row_style } else { theme::success_style() }),
-                Cell::from(key_lines.join("\n")).style(if is_mouse_sel { row_style } else { theme::detail_style() }),
-                Cell::from(desc_lines.join("\n")).style(if is_mouse_sel { row_style } else { theme::secondary_style() }),
+                Cell::from(num).style(if is_mouse_sel {
+                    row_style
+                } else {
+                    theme::muted_style()
+                }),
+                Cell::from(name_lines.join("\n")).style(if is_mouse_sel {
+                    row_style
+                } else {
+                    theme::bold_text_style()
+                }),
+                Cell::from(dtype_lines.join("\n")).style(if is_mouse_sel {
+                    row_style
+                } else {
+                    theme::success_style()
+                }),
+                Cell::from(key_lines.join("\n")).style(if is_mouse_sel {
+                    row_style
+                } else {
+                    theme::detail_style()
+                }),
+                Cell::from(desc_lines.join("\n")).style(if is_mouse_sel {
+                    row_style
+                } else {
+                    theme::secondary_style()
+                }),
             ];
             Row::new(cells).height(max_h)
         })
