@@ -228,17 +228,6 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    if let Some((ref msg, ref instant)) = app.copied_toast
-        && instant.elapsed().as_secs() < 3
-    {
-        let toast_text = format!(" ✔ Copied to clipboard: \"{}\" ", msg);
-        let footer = Paragraph::new(Line::from(truncate_hint(&toast_text, area.width as usize)))
-            .style(theme::success_bold_style().bg(theme::MUTED_FG))
-            .wrap(ratatui::widgets::Wrap { trim: true });
-        frame.render_widget(footer, area);
-        return;
-    }
-
     let Some(hint) = footer_hint(app) else {
         return;
     };
@@ -247,6 +236,64 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         .style(theme::footer_style())
         .wrap(ratatui::widgets::Wrap { trim: true });
     frame.render_widget(footer, area);
+}
+
+/// Renders the "Copied to clipboard" notification as a small floating
+/// popup overlay (top-right corner) instead of taking over the one-line
+/// footer — the footer must always stay a single line of key hints.
+/// Fixed geometry for the copy-toast popup. Using a stable rect (rather than
+/// sizing it to the copied message's length) guarantees the exact same cells
+/// get `Clear`d every single frame, regardless of whether a toast is
+/// currently showing or how long the last copied message was. If the rect
+/// instead shrank/grew per-message, a frame that draws a narrower toast right
+/// after a wider one (or draws nothing at all) would leave stray styled
+/// cells outside the new/absent rect that never get overwritten, since
+/// nothing else in the UI necessarily redraws that exact screen region.
+const TOAST_W: u16 = 44;
+const TOAST_H: u16 = 3;
+
+fn toast_rect(area: Rect) -> Option<Rect> {
+    if area.width < TOAST_W + 2 || area.height < TOAST_H + 1 {
+        return None;
+    }
+    Some(Rect {
+        x: area.x + area.width - TOAST_W - 1,
+        y: area.y + 1,
+        width: TOAST_W,
+        height: TOAST_H,
+    })
+}
+
+fn render_copied_toast(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(toast_area) = toast_rect(area) else {
+        return;
+    };
+
+    // Always clear the toast's fixed rect first, every frame, whether or not
+    // a toast is currently active. This is what actually prevents leftover
+    // artifacts: it unconditionally removes any stale content instead of
+    // relying on the conditional draw below happening to cover the exact
+    // same cells a previous frame drew into.
+    frame.render_widget(ratatui::widgets::Clear, toast_area);
+
+    let Some((ref msg, ref instant)) = app.copied_toast else {
+        return;
+    };
+    if instant.elapsed().as_secs() >= 3 {
+        return;
+    }
+
+    let text = format!(" Copied: \"{}\" ", msg);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::success_bold_style());
+    let inner = block.inner(toast_area);
+    frame.render_widget(block, toast_area);
+    let toast_text = Paragraph::new(Line::from(truncate_hint(&text, inner.width as usize)))
+        .style(theme::success_bold_style())
+        .alignment(Alignment::Center);
+    frame.render_widget(toast_text, inner);
 }
 
 pub(super) fn ui(frame: &mut Frame, app: &App) {
@@ -500,53 +547,111 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                                 );
                             }
                         }
-                        _ => {
-                            if let Screen::Actions(state) = &app.screen {
-                                if let Some(ref res_state) = state.results {
-                                    screens::results::render(
-                                        frame,
-                                        preview_pane_area,
-                                        res_state,
-                                        spinner(app),
-                                        preview_is_active,
-                                        app,
-                                    );
-                                } else if app.loading {
-                                    let title = format!(
-                                        " Preview — {} ({}) ",
-                                        table_name,
-                                        crate::app::ACTIONS[selected_idx].1
-                                    );
-                                    let block = Block::default()
-                                        .title(title)
-                                        .borders(Borders::ALL)
-                                        .border_type(BorderType::Rounded)
-                                        .border_style(theme::border_style(preview_is_active));
-                                    let inner = block.inner(preview_pane_area);
-                                    frame.render_widget(block, preview_pane_area);
-                                    let spin = spinner(app);
-                                    let spin_text = Paragraph::new(Line::from(vec![
-                                        Span::styled(
-                                            format!(" [{spin}] "),
-                                            theme::warning_bold_style(),
-                                        ),
-                                        Span::styled(
-                                            "EXECUTING TRINO QUERY...",
-                                            theme::info_bold_style(),
-                                        ),
-                                    ]))
-                                    .alignment(Alignment::Center);
-                                    frame.render_widget(spin_text, inner);
-                                } else {
-                                    render_placeholder_preview(
-                                        frame,
-                                        preview_pane_area,
-                                        table_name,
-                                        selected_idx,
-                                        preview_is_active,
-                                    );
-                                }
+                        crate::app::Action::TableView => {
+                            let drilldown_browsing = match &app.screen {
+                                Screen::Actions(state) => state
+                                    .drilldown
+                                    .as_ref()
+                                    .filter(|d| !d.is_leaf())
+                                    .cloned(),
+                                _ => None,
+                            };
+                            if let Some(dd) = drilldown_browsing {
+                                screens::drilldown::render(
+                                    frame,
+                                    preview_pane_area,
+                                    table_name,
+                                    &dd,
+                                    preview_is_active,
+                                    app,
+                                );
+                            } else {
+                                render_default_results_preview(
+                                    frame,
+                                    preview_pane_area,
+                                    app,
+                                    app.loading,
+                                    spinner(app),
+                                    table_name,
+                                    selected_idx,
+                                    preview_is_active,
+                                );
                             }
+                        }
+                        crate::app::Action::TableDDL => {
+                            // Mirror Partitions/Schema: DDL text is already
+                            // cached from recon (`SHOW CREATE TABLE` fetched
+                            // on table entry), so render it directly the
+                            // moment this menu item is highlighted — no
+                            // Enter/hotkey needed, and no dependency on
+                            // `state.results` (which previously only got
+                            // populated once `trigger_action` ran via
+                            // Enter/hotkey, unlike Partitions/Schema which
+                            // read straight from `app`-level caches).
+                            let ddl_text = match &app.screen {
+                                Screen::Actions(a) => {
+                                    a.metadata.as_ref().map(|m| m.ddl_text.clone())
+                                }
+                                _ => None,
+                            };
+                            if app.loading && selected_idx == 2 {
+                                let title = format!(" Preview — {table_name} (Table DDL) ");
+                                let block = Block::default()
+                                    .title(title)
+                                    .borders(Borders::ALL)
+                                    .border_type(BorderType::Rounded)
+                                    .border_style(theme::border_style(preview_is_active));
+                                let inner = block.inner(preview_pane_area);
+                                frame.render_widget(block, preview_pane_area);
+                                let spin = spinner(app);
+                                let spin_text = Paragraph::new(Line::from(vec![
+                                    Span::styled(
+                                        format!(" [{spin}] "),
+                                        theme::warning_bold_style(),
+                                    ),
+                                    Span::styled(
+                                        "FETCHING TABLE DDL...",
+                                        theme::info_bold_style(),
+                                    ),
+                                ]))
+                                .alignment(Alignment::Center);
+                                frame.render_widget(spin_text, inner);
+                            } else if let Some(ddl_text) = ddl_text {
+                                let title = format!(" Preview — {table_name} (Table DDL) ");
+                                let block = Block::default()
+                                    .title(title)
+                                    .borders(Borders::ALL)
+                                    .border_type(BorderType::Rounded)
+                                    .border_style(theme::border_style(preview_is_active));
+                                let inner = block.inner(preview_pane_area);
+                                frame.render_widget(block, preview_pane_area);
+                                let paragraph =
+                                    Paragraph::new(ddl_text).style(theme::detail_style());
+                                frame.render_widget(paragraph, inner);
+                            } else {
+                                render_default_results_preview(
+                                    frame,
+                                    preview_pane_area,
+                                    app,
+                                    app.loading,
+                                    spinner(app),
+                                    table_name,
+                                    selected_idx,
+                                    preview_is_active,
+                                );
+                            }
+                        }
+                        _ => {
+                            render_default_results_preview(
+                                frame,
+                                preview_pane_area,
+                                app,
+                                app.loading,
+                                spinner(app),
+                                table_name,
+                                selected_idx,
+                                preview_is_active,
+                            );
                         }
                     }
                 }
@@ -556,6 +661,64 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                 screens::query_inspector::render(frame, bottom_chunks[0], app);
             }
             render_footer(frame, bottom_chunks[1], app);
+        }
+    }
+    // Rendered unconditionally, after every screen variant (including Help),
+    // so the toast's fixed rect is always cleared on every frame regardless
+    // of which branch drew the rest of the UI. This is what prevents stray
+    // leftover styled cells: the clear no longer depends on a particular
+    // screen branch being taken.
+    render_copied_toast(frame, frame.area(), app);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_default_results_preview(
+    frame: &mut Frame,
+    preview_pane_area: Rect,
+    app: &App,
+    is_loading: bool,
+    spin: String,
+    table_name: &str,
+    selected_idx: usize,
+    preview_is_active: bool,
+) {
+    if let Screen::Actions(state) = &app.screen {
+        if let Some(ref res_state) = state.results {
+            screens::results::render(
+                frame,
+                preview_pane_area,
+                res_state,
+                spin,
+                preview_is_active,
+                app,
+            );
+        } else if is_loading {
+            let title = format!(
+                " Preview — {} ({}) ",
+                table_name,
+                crate::app::ACTIONS[selected_idx].1
+            );
+            let block = Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(theme::border_style(preview_is_active));
+            let inner = block.inner(preview_pane_area);
+            frame.render_widget(block, preview_pane_area);
+            let spin_text = Paragraph::new(Line::from(vec![
+                Span::styled(format!(" [{spin}] "), theme::warning_bold_style()),
+                Span::styled("EXECUTING TRINO QUERY...", theme::info_bold_style()),
+            ]))
+            .alignment(Alignment::Center);
+            frame.render_widget(spin_text, inner);
+        } else {
+            render_placeholder_preview(
+                frame,
+                preview_pane_area,
+                table_name,
+                selected_idx,
+                preview_is_active,
+            );
         }
     }
 }

@@ -80,7 +80,58 @@ pub struct TableState {
     pub selected: usize,
 }
 
-#[derive(Clone)]
+/// Ordered partition-column layout + storage location for a table, parsed
+/// once (per table) from a live `SHOW CREATE TABLE` response during table
+/// entry recon. `partitioned_by` is empty for unpartitioned tables. This is
+/// always derived dynamically from that table's own DDL — never hardcoded
+/// by table/schema name.
+#[derive(Clone, Debug, Default)]
+pub struct TableRecon {
+    pub partitioned_by: Vec<String>,
+    pub location: String,
+    /// Raw `SHOW CREATE TABLE` DDL text fetched during recon. Cached here so
+    /// `Action::TableDDL` can render it instantly without re-querying Trino.
+    pub ddl_text: String,
+}
+
+/// Tracks cd/ls-style drill-down progress through a partitioned table's
+/// hierarchy: which partition columns exist (from `TableRecon`), which
+/// values have been fixed so far (`path`), and the distinct values shown
+/// at each previously-visited depth (`levels_cache`, so navigating back up
+/// with `h` doesn't need to re-query Trino).
+#[derive(Clone, Debug, Default)]
+pub struct DrillDownState {
+    pub partition_cols: Vec<String>,
+    pub path: Vec<(String, String)>,
+    pub levels_cache: Vec<Vec<String>>,
+    pub selected: usize,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub truncated: bool,
+}
+
+impl DrillDownState {
+    /// Depth (0-based) of the level currently being displayed, i.e. how
+    /// many partition columns have already been fixed.
+    pub fn depth(&self) -> usize {
+        self.path.len()
+    }
+
+    /// True once every partition column has a fixed value and the caller
+    /// should switch to the leaf record view instead of another distinct
+    /// value list.
+    pub fn is_leaf(&self) -> bool {
+        self.path.len() >= self.partition_cols.len()
+    }
+
+    /// The next partition column to fetch distinct values for, if any
+    /// levels remain.
+    pub fn next_column(&self) -> Option<&str> {
+        self.partition_cols.get(self.path.len()).map(|s| s.as_str())
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct ActionState {
     pub catalog: String,
     pub schema: String,
@@ -89,6 +140,15 @@ pub struct ActionState {
     pub query_buffer: String,
     pub query_cursor: usize,
     pub results: Option<ResultsState>,
+    pub metadata: Option<TableRecon>,
+    /// True until `SHOW CREATE TABLE` (the DDL/partition-layout part of
+    /// recon) resolves. Only gates `Table DDL` and `Table View`, which only
+    /// need `metadata`, not the slower `$partitions`/info-schema queries.
+    pub ddl_loading: bool,
+    /// True until the `$partitions` and `information_schema.columns` recon
+    /// queries resolve. Gates `Partitions` and `Schema`.
+    pub metadata_loading: bool,
+    pub drilldown: Option<DrillDownState>,
 }
 
 #[derive(Clone)]
@@ -111,6 +171,12 @@ pub struct ResultsState {
     pub has_more_rows: bool,
     pub invalid_query_error: Option<String>,
     pub selection_anchor: Option<usize>,
+    /// Partition predicates (`col`, `value`) baked into this view's query,
+    /// e.g. when viewing leaf-level records reached via partition
+    /// drill-down. Empty for ordinary (non-drill-down) queries. Threaded
+    /// through to `FetchNextPage` so infinite scroll keeps the same
+    /// predicate on subsequent pages.
+    pub filters: Vec<(String, String)>,
 }
 
 impl ResultsState {

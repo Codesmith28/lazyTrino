@@ -70,6 +70,74 @@ pub fn page_query(catalog: &str, schema: &str, table: &str, offset: usize, limit
     )
 }
 
+/// Builds a `WHERE` clause fragment (without the leading `WHERE`) from an
+/// ordered list of `(column, value)` partition predicates, quoting/escaping
+/// each value as a string literal. Returns `None` when there are no filters.
+fn build_where_clause(filters: &[(String, String)]) -> Option<String> {
+    if filters.is_empty() {
+        return None;
+    }
+    Some(
+        filters
+            .iter()
+            .map(|(col, val)| format!("{} = '{}'", col.trim(), val.trim().replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(" AND "),
+    )
+}
+
+/// `SELECT DISTINCT <column> FROM t [WHERE k1='v1' AND k2='v2'] ORDER BY <column> LIMIT <limit>`
+///
+/// Used to list the next level of values in a partition hierarchy (the
+/// `ls` step of the cd/ls-style drill-down), scoped by the partition
+/// predicates already fixed by the levels above it so Trino can prune
+/// partitions instead of scanning the whole table.
+pub fn distinct_partition_values(
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    filters: &[(String, String)],
+    column: &str,
+    limit: usize,
+) -> String {
+    let where_clause = build_where_clause(filters)
+        .map(|c| format!(" WHERE {c}"))
+        .unwrap_or_default();
+    format!(
+        "SELECT DISTINCT {} FROM {}.{}.{}{where_clause} ORDER BY {} LIMIT {limit}",
+        column.trim(),
+        q(catalog),
+        q(schema),
+        q(table),
+        column.trim(),
+    )
+}
+
+/// `SELECT * FROM t [WHERE k1='v1' AND k2='v2'] OFFSET <offset> LIMIT <limit>`
+///
+/// The leaf-level query in a partition drill-down: only run once every
+/// partition column has been fixed by the levels above it, so Trino never
+/// has to plan splits across the whole (potentially huge/broken) partition
+/// tree at once.
+pub fn filtered_page_query(
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    filters: &[(String, String)],
+    offset: usize,
+    limit: usize,
+) -> String {
+    let where_clause = build_where_clause(filters)
+        .map(|c| format!(" WHERE {c}"))
+        .unwrap_or_default();
+    format!(
+        "SELECT * FROM {}.{}.{}{where_clause} OFFSET {offset} LIMIT {limit}",
+        q(catalog),
+        q(schema),
+        q(table),
+    )
+}
+
 pub fn partitions(catalog: &str, schema: &str, table: &str) -> String {
     format!(
         "SELECT * FROM {}.{}.{}",
@@ -126,6 +194,50 @@ mod tests {
         assert_eq!(
             partitions(catalog, schema, table),
             "SELECT * FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024$partitions\""
+        );
+    }
+
+    #[test]
+    fn distinct_partition_values_builds_query_without_filters() {
+        assert_eq!(
+            distinct_partition_values("ice berg", "sales", "orders", &[], "date", 200),
+            "SELECT DISTINCT date FROM \"ice berg\".\"sales\".\"orders\" ORDER BY date LIMIT 200"
+        );
+    }
+
+    #[test]
+    fn distinct_partition_values_builds_query_with_filters_and_escapes_values() {
+        let filters = vec![
+            ("date".to_string(), "2026-08-06".to_string()),
+            ("service".to_string(), "o'brien".to_string()),
+        ];
+        assert_eq!(
+            distinct_partition_values("datalake", "tenant", "events", &filters, "account_id", 200),
+            "SELECT DISTINCT account_id FROM \"datalake\".\"tenant\".\"events\" \
+             WHERE date = '2026-08-06' AND service = 'o''brien' ORDER BY account_id LIMIT 200"
+        );
+    }
+
+    #[test]
+    fn filtered_page_query_builds_query_without_filters() {
+        assert_eq!(
+            filtered_page_query("ice berg", "sales", "orders", &[], 0, 100),
+            "SELECT * FROM \"ice berg\".\"sales\".\"orders\" OFFSET 0 LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn filtered_page_query_builds_query_with_filters() {
+        let filters = vec![
+            ("date".to_string(), "2026-08-06".to_string()),
+            ("service".to_string(), "smb3".to_string()),
+            ("account_id".to_string(), "58bfaed0".to_string()),
+        ];
+        assert_eq!(
+            filtered_page_query("datalake", "tenant", "events", &filters, 0, 100),
+            "SELECT * FROM \"datalake\".\"tenant\".\"events\" \
+             WHERE date = '2026-08-06' AND service = 'smb3' AND account_id = '58bfaed0' \
+             OFFSET 0 LIMIT 100"
         );
     }
 

@@ -324,6 +324,7 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
                         catalog: cat,
                         schema: sch,
                         table: tbl,
+                        filters: Vec::new(),
                     });
                 }
                 Err(err_msg) => {
@@ -414,6 +415,7 @@ mod tests {
             has_more_rows: true,
             invalid_query_error: None,
             selection_anchor: None,
+            filters: Vec::new(),
         }
     }
 
