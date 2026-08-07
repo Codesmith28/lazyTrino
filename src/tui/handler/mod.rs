@@ -211,6 +211,7 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
 
     if code == KeyCode::Char('?') {
         app.prev_screen = Some(Box::new(app.screen.clone()));
+        app.clear_mouse_selection();
         app.screen = Screen::Help;
         return None;
     }
@@ -224,7 +225,7 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         app.number_buffer.clear();
         let is_in_table = matches!(app.screen, Screen::Actions(_));
         if is_in_table && app.active_panel == ActivePanel::MainViewer {
-            app.active_panel = ActivePanel::MenuPane;
+            app.set_active_panel(ActivePanel::MenuPane);
             return None;
         } else {
             navigation::go_back(app);

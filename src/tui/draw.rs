@@ -222,6 +222,18 @@ fn footer_hint(app: &App) -> Option<&'static str> {
     }
 }
 
+/// Replaces control characters (tabs, newlines, carriage returns, etc.)
+/// with a plain space before a string is embedded in a single-line UI
+/// element such as the "Copied" toast or a block title. Copied cell/row
+/// text can contain raw tab/newline bytes (e.g. TSV-joined columns); if
+/// those are written into the terminal buffer as-is, the terminal itself
+/// interprets them (a tab jumps the cursor to the next tab stop instead of
+/// advancing one cell), which breaks the surrounding box border/background
+/// and spills the text out of its intended bounds.
+pub(crate) fn sanitize_toast_text(s: &str) -> String {
+    s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
+}
+
 fn truncate_hint(hint: &str, width: usize) -> String {
     if hint.chars().count() <= width {
         return hint.to_string();
@@ -257,40 +269,37 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
 /// Renders the "Copied to clipboard" notification as a small floating
 /// popup overlay (top-right corner) instead of taking over the one-line
 /// footer — the footer must always stay a single line of key hints.
-/// Fixed geometry for the copy-toast popup. Using a stable rect (rather than
-/// sizing it to the copied message's length) guarantees the exact same cells
-/// get `Clear`d every single frame, regardless of whether a toast is
-/// currently showing or how long the last copied message was. If the rect
-/// instead shrank/grew per-message, a frame that draws a narrower toast right
-/// after a wider one (or draws nothing at all) would leave stray styled
-/// cells outside the new/absent rect that never get overwritten, since
-/// nothing else in the UI necessarily redraws that exact screen region.
-const TOAST_W: u16 = 44;
+///
+/// Hybrid sizing: the visible box scales with the message length (within
+/// `TOAST_MIN_W..=TOAST_MAX_W`) so short messages don't waste space and the
+/// box doesn't look awkwardly empty, while messages longer than
+/// `TOAST_MAX_W` are truncated with `truncate_hint` rather than growing the
+/// box further. `toast_envelope` defines the max region the box is ever
+/// allowed to occupy (right-anchored); the box itself is only drawn (and
+/// only `Clear`ed) within that envelope while a toast is actually active —
+/// see the comment in `render_copied_toast` for why an unconditional clear
+/// every frame is both unnecessary and actively harmful.
+const TOAST_MIN_W: u16 = 24;
+const TOAST_MAX_W: u16 = 60;
 const TOAST_H: u16 = 3;
 
-fn toast_rect(area: Rect) -> Option<Rect> {
-    if area.width < TOAST_W + 2 || area.height < TOAST_H + 1 {
+fn toast_envelope(area: Rect) -> Option<Rect> {
+    if area.width < TOAST_MAX_W + 2 || area.height < TOAST_H + 1 {
         return None;
     }
     Some(Rect {
-        x: area.x + area.width - TOAST_W - 1,
+        x: area.x + area.width - TOAST_MAX_W - 1,
         y: area.y + 1,
-        width: TOAST_W,
+        width: TOAST_MAX_W,
         height: TOAST_H,
     })
 }
 
+
 fn render_copied_toast(frame: &mut Frame, area: Rect, app: &App) {
-    let Some(toast_area) = toast_rect(area) else {
+    let Some(envelope) = toast_envelope(area) else {
         return;
     };
-
-    // Always clear the toast's fixed rect first, every frame, whether or not
-    // a toast is currently active. This is what actually prevents leftover
-    // artifacts: it unconditionally removes any stale content instead of
-    // relying on the conditional draw below happening to cover the exact
-    // same cells a previous frame drew into.
-    frame.render_widget(ratatui::widgets::Clear, toast_area);
 
     let Some((ref msg, ref instant)) = app.copied_toast else {
         return;
@@ -299,18 +308,50 @@ fn render_copied_toast(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let text = format!(" Copied: \"{}\" ", msg);
+    let text = format!(" Copied: \"{}\" ", sanitize_toast_text(msg));
+    // Scale the box width to the content (plus 2 for borders), clamped to
+    // the envelope so it never exceeds the region it's allowed to occupy.
+    let content_w = text.chars().count() as u16 + 2;
+    let toast_w = content_w.clamp(TOAST_MIN_W, TOAST_MAX_W);
+    let toast_area = Rect {
+        x: envelope.x + envelope.width - toast_w,
+        y: envelope.y,
+        width: toast_w,
+        height: envelope.height,
+    };
+
+    // `ratatui::Terminal::draw` builds a brand-new buffer from scratch on
+    // every call, so there is no need to pre-`Clear` this rect defensively
+    // "just in case" a toast was drawn here on a previous frame — nothing
+    // can leak across frames. Doing so unconditionally actually caused a
+    // real bug: this envelope sits in the top-right corner, overlapping the
+    // search/query bar borders underneath it, so clearing it on every frame
+    // (even when no toast was active) blanked out chunks of those borders'
+    // dash characters after they'd already been drawn earlier in the same
+    // frame. `Clear` here is now only needed (and only used) to blank the
+    // exact toast box before drawing over it, and only while a toast is
+    // actually active.
+    frame.render_widget(ratatui::widgets::Clear, toast_area);
+
+    // Use a style with an explicit background so the box is fully opaque:
+    // applying it via `Block::style` (not just `border_style`) paints the
+    // background over the *entire* toast_area, including the interior, so
+    // nothing underneath can show through the borders or padding.
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(theme::success_bold_style());
+        .style(theme::toast_style());
     let inner = block.inner(toast_area);
     frame.render_widget(block, toast_area);
+    // Render the paragraph over the full inner rect (not just a single
+    // line) so every cell in the interior gets the solid background style,
+    // even the padding cells the text doesn't reach.
     let toast_text = Paragraph::new(Line::from(truncate_hint(&text, inner.width as usize)))
-        .style(theme::success_bold_style())
+        .style(theme::toast_style())
         .alignment(Alignment::Center);
     frame.render_widget(toast_text, inner);
 }
+
 
 pub(super) fn ui(frame: &mut Frame, app: &App) {
     match app.screen {
@@ -437,7 +478,7 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                         _ => 0,
                     };
                     let lines = total_chars.div_ceil(inner_w);
-                    (lines as u16 + 2).clamp(3, 4)
+                    (lines as u16 + 2).clamp(3, 7)
                 } else {
                     3
                 };
@@ -781,4 +822,234 @@ fn render_placeholder_preview(
     ];
     let info_p = Paragraph::new(info_lines).alignment(Alignment::Center);
     frame.render_widget(info_p, inner);
+}
+
+
+#[cfg(test)]
+mod toast_border_regression {
+    use super::*;
+    use crate::app::{ActionState, App};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    /// Regression test for a bug where the copy-toast overlay's `Clear`
+    /// widget ran unconditionally on every frame (even with no toast
+    /// active), blanking out chunks of the search bar / query bar borders
+    /// that happen to sit under its fixed top-right rectangle. The toast
+    /// must never touch cells outside its own active rendering, so with no
+    /// toast pending the search/query bar borders must be fully intact
+    /// dashes all the way across, not broken by unrelated blank gaps.
+    #[test]
+    fn search_and_query_bar_borders_stay_intact_without_active_toast() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.mode = Mode::QueryInput;
+        app.screen = Screen::Actions(ActionState {
+            catalog: "datalake".into(),
+            schema: "s".into(),
+            table: "t".into(),
+            selected: 4,
+            query_buffer: "SELECT 1".into(),
+            query_cursor: 8,
+            ..Default::default()
+        });
+        app.main_panel_pct = 15;
+        assert!(app.copied_toast.is_none());
+
+        let backend = TestBackend::new(200, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        // Rows 0 (search bar top border) and 3 (query bar top border) each
+        // contain a titled border line ending in a rounded corner. The
+        // corner must be immediately preceded by a border dash — if the
+        // toast overlay's `Clear` punches a blank gap right before the
+        // corner (as it did when it ran unconditionally every frame), the
+        // cell just left of the corner is a stray blank space instead.
+        for y in [0u16, 3u16] {
+            let mut corner_x = None;
+            for x in (0..200u16).rev() {
+                let sym = buf.cell((x, y)).unwrap().symbol().to_string();
+                if sym != " " {
+                    corner_x = Some(x);
+                    break;
+                }
+            }
+            let corner_x = corner_x.expect("row should have a border corner");
+            assert!(corner_x > 0, "row {y} corner at unexpected x=0");
+            let prev_sym = buf.cell((corner_x - 1, y)).unwrap().symbol().to_string();
+            assert_eq!(
+                prev_sym, "─",
+                "row {y}: cell just before the border corner (x={}) is {:?}, expected a \
+                 dash — the toast overlay is punching a blank gap into the border",
+                corner_x - 1,
+                prev_sym
+            );
+        }
+    }
+
+    /// Regression test for a bug where the copy-toast had no explicit
+    /// background color, so its interior (padding cells not covered by the
+    /// text itself) let whatever was drawn underneath show through instead
+    /// of a solid box. Every cell inside the toast's border must carry the
+    /// toast's background color once a toast is active.
+    #[test]
+    fn active_toast_has_solid_background_with_no_spillover() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.mode = Mode::QueryInput;
+        app.screen = Screen::Actions(ActionState {
+            catalog: "datalake".into(),
+            schema: "s".into(),
+            table: "t".into(),
+            selected: 4,
+            query_buffer: "SELECT 1".into(),
+            query_cursor: 8,
+            ..Default::default()
+        });
+        app.main_panel_pct = 15;
+        app.copied_toast = Some(("hello".into(), std::time::Instant::now()));
+
+        let width = 200u16;
+        let height = 40u16;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let area = Rect::new(0, 0, width, height);
+        let envelope = toast_envelope(area).expect("envelope should exist at this size");
+
+        // Locate the toast box: it is right-anchored within `envelope` and
+        // spans `envelope.height` rows. Scan row `envelope.y` for the
+        // left/right rounded corners to find its exact bounds.
+        let y = envelope.y;
+        let mut left_x = None;
+        let mut right_x = None;
+        for x in envelope.x..envelope.x + envelope.width {
+            let sym = buf.cell((x, y)).unwrap().symbol().to_string();
+            if sym == "╭" {
+                left_x = Some(x);
+            }
+            if sym == "╮" {
+                right_x = Some(x);
+                break;
+            }
+        }
+        let left_x = left_x.expect("toast top-left corner not found");
+        let right_x = right_x.expect("toast top-right corner not found");
+        assert!(right_x > left_x);
+
+        let expected_bg = theme::toast_style().bg.expect("toast_style must set a bg");
+        for row in y..y + envelope.height {
+            for col in left_x..=right_x {
+                let cell = buf.cell((col, row)).unwrap();
+                assert_eq!(
+                    cell.bg, expected_bg,
+                    "cell ({col},{row}) inside toast box lacks the solid toast background"
+                );
+            }
+        }
+
+        // No spillover: cells immediately outside the toast box's right
+        // edge (if any remain within the terminal) must NOT carry the
+        // toast's background color.
+        if right_x + 1 < width {
+            let cell = buf.cell((right_x + 1, y)).unwrap();
+            assert_ne!(
+                cell.bg, expected_bg,
+                "toast background spilled over its right border"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod query_bar_height_regression {
+    use super::*;
+    use crate::app::{ActionState, App};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    /// The query bar should grow beyond its default 3-row height (1 line of
+    /// text + 2 border rows) up to a max of 5 rows (3 wrapped text lines)
+    /// once the in-progress query is long enough to wrap past one line.
+    #[test]
+    fn long_query_expands_bar_up_to_five_rows() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.mode = Mode::QueryInput;
+        // Long enough to wrap across several lines at typical widths.
+        let long_query = "SELECT * FROM datalake.sales.orders WHERE ".to_string()
+            + &"customer_id = 'abc123' AND ".repeat(14)
+            + "1=1";
+        let cursor = long_query.len();
+        app.screen = Screen::Actions(ActionState {
+            catalog: "datalake".into(),
+            schema: "sales".into(),
+            table: "orders".into(),
+            selected: 4,
+            query_buffer: long_query,
+            query_cursor: cursor,
+            ..Default::default()
+        });
+        app.main_panel_pct = 15;
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        // Query bar starts right after the search bar (default height 3,
+        // since Mode::QueryInput doesn't affect search_height) at y=3.
+        // Scan downward from there for the query bar's own bottom border
+        // (rounded corner "╰") to measure its actual rendered height.
+        let query_bar_top = 3u16;
+        let mut bottom_y = query_bar_top;
+        for y in query_bar_top..40u16 {
+            let has_corner = (0..120u16).any(|x| buf.cell((x, y)).unwrap().symbol() == "╰");
+            if has_corner {
+                bottom_y = y;
+                break;
+            }
+        }
+        let height = bottom_y - query_bar_top + 1;
+        assert_eq!(
+            height, 7,
+            "expected the query bar to expand to its max of 5 text rows + 2 border rows (7 total) for a long wrapped query, got {height}"
+        );
+    }
+
+    /// A short query must not force the bar to expand — it should stay at
+    /// the default single-line height of 3 rows.
+    #[test]
+    fn short_query_keeps_default_three_row_height() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.mode = Mode::QueryInput;
+        let short_query = "SELECT 1".to_string();
+        let cursor = short_query.len();
+        app.screen = Screen::Actions(ActionState {
+            catalog: "datalake".into(),
+            schema: "sales".into(),
+            table: "orders".into(),
+            selected: 4,
+            query_buffer: short_query,
+            query_cursor: cursor,
+            ..Default::default()
+        });
+        app.main_panel_pct = 15;
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let query_bar_top = 3u16;
+        let mut bottom_y = query_bar_top;
+        for y in query_bar_top..40u16 {
+            let has_corner = (0..120u16).any(|x| buf.cell((x, y)).unwrap().symbol() == "╰");
+            if has_corner {
+                bottom_y = y;
+                break;
+            }
+        }
+        let height = bottom_y - query_bar_top + 1;
+        assert_eq!(height, 3, "short query should keep the default 3-row height, got {height}");
+    }
 }

@@ -235,6 +235,7 @@ pub(super) fn go_back(app: &mut App) {
     };
 
     if let Some(s) = next {
+        app.clear_mouse_selection();
         app.screen = s;
     }
 }
@@ -269,14 +270,14 @@ pub fn handle_pane_focus_keys(app: &mut App, key: KeyEvent) -> bool {
 
     if is_in_table {
         if is_h || is_left {
-            app.active_panel = ActivePanel::MenuPane;
+            app.set_active_panel(ActivePanel::MenuPane);
             return true;
         }
         if is_l || is_right || code == KeyCode::Tab {
             if app.active_panel == ActivePanel::MenuPane {
-                app.active_panel = ActivePanel::MainViewer;
+                app.set_active_panel(ActivePanel::MainViewer);
             } else {
-                app.active_panel = ActivePanel::MenuPane;
+                app.set_active_panel(ActivePanel::MenuPane);
             }
             return true;
         }
@@ -336,16 +337,28 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
         // `FetchTableMetadata` handlers).
         if s.metadata_loading && matches!(action, Action::Partitions | Action::Schema) {
             s.selected = action_idx;
+            if app.active_panel != ActivePanel::MainViewer {
+                app.mouse_selection_anchor = None;
+                app.mouse_selection_current = None;
+            }
             app.active_panel = ActivePanel::MainViewer;
             return None;
         }
         if s.ddl_loading && matches!(action, Action::TableView | Action::TableDDL) {
             s.selected = action_idx;
+            if app.active_panel != ActivePanel::MainViewer {
+                app.mouse_selection_anchor = None;
+                app.mouse_selection_current = None;
+            }
             app.active_panel = ActivePanel::MainViewer;
             return None;
         }
 
         s.selected = action_idx;
+        if app.active_panel != ActivePanel::MainViewer {
+            app.mouse_selection_anchor = None;
+            app.mouse_selection_current = None;
+        }
         app.active_panel = ActivePanel::MainViewer;
         match action {
             Action::Partitions | Action::Schema => {
@@ -466,6 +479,7 @@ mod tests {
 
     fn sample_app(screen: Screen) -> App {
         let mut app = App::new(sample_config(), false);
+        app.clear_mouse_selection();
         app.screen = screen;
         app
     }
@@ -475,6 +489,7 @@ mod tests {
         let config = sample_config();
         let mut app = App::new(config.clone(), false);
         app.main_panel_pct = 25;
+        app.clear_mouse_selection();
         app.screen = Screen::Catalog(CatalogState {
             items: vec!["system".to_string(), "tpch".to_string()],
             selected: 1,
@@ -525,6 +540,7 @@ mod tests {
         assert_eq!(state.items, app.catalogs);
         assert_eq!(state.selected, 1);
 
+        app.clear_mouse_selection();
         app.screen = Screen::Table(TableState {
             catalog: "tpch".to_string(),
             schema: "sf1".to_string(),
@@ -545,6 +561,7 @@ mod tests {
         assert_eq!(state.items, vec!["tiny".to_string(), "sf1".to_string()]);
         assert_eq!(state.selected, 1);
 
+        app.clear_mouse_selection();
         app.screen = Screen::Actions(ActionState {
             catalog: "tpch".to_string(),
             schema: "sf1".to_string(),
@@ -889,7 +906,7 @@ mod tests {
             results: Some(sample_leaf_results_state()),
             ..Default::default()
         }));
-        app.active_panel = ActivePanel::MenuPane;
+        app.set_active_panel(ActivePanel::MenuPane);
 
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
 
@@ -913,7 +930,7 @@ mod tests {
             results: Some(sample_leaf_results_state()),
             ..Default::default()
         }));
-        app.active_panel = ActivePanel::MainViewer;
+        app.set_active_panel(ActivePanel::MainViewer);
 
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
         let Screen::Actions(state) = &app.screen else {
@@ -942,7 +959,7 @@ mod tests {
             results: Some(sample_leaf_results_state()),
             ..Default::default()
         }));
-        app.active_panel = ActivePanel::MainViewer;
+        app.set_active_panel(ActivePanel::MainViewer);
 
         let cmd = actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
         assert!(cmd.is_none());
@@ -969,7 +986,7 @@ mod tests {
             results: Some(sample_leaf_results_state()),
             ..Default::default()
         }));
-        app.active_panel = ActivePanel::MainViewer;
+        app.set_active_panel(ActivePanel::MainViewer);
 
         // `c` must not trigger a copy toast anymore in MainViewer.
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('c')));
@@ -996,7 +1013,7 @@ mod tests {
             results: Some(sample_leaf_results_state()),
             ..drilldown_action_state(vec!["date"])
         }));
-        app.active_panel = ActivePanel::MainViewer;
+        app.set_active_panel(ActivePanel::MainViewer);
 
         // `l` at the leaf is a no-op (nothing to drill into further).
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
@@ -1032,6 +1049,7 @@ fn select_current_item(app: &mut App) -> Option<Command> {
                     .iter()
                     .map(|x| x.trim().to_string())
                     .collect();
+                app.clear_mouse_selection();
                 app.screen = Screen::Schema(SchemaState {
                     catalog,
                     items,
@@ -1050,6 +1068,7 @@ fn select_current_item(app: &mut App) -> Option<Command> {
                     .iter()
                     .map(|x| x.trim().to_string())
                     .collect();
+                app.clear_mouse_selection();
                 app.screen = Screen::Table(TableState {
                     catalog,
                     schema,
@@ -1066,11 +1085,12 @@ fn select_current_item(app: &mut App) -> Option<Command> {
             let catalog = s.catalog.clone();
             let schema = s.schema.clone();
             app.main_panel_pct = 15;
-            app.active_panel = ActivePanel::MenuPane;
+            app.set_active_panel(ActivePanel::MenuPane);
             app.partition_tree_lines.clear();
             app.vertical_schema_cols.clear();
             let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
             let query_len = default_query.len();
+            app.clear_mouse_selection();
             app.screen = Screen::Actions(ActionState {
                 catalog: catalog.clone(),
                 schema: schema.clone(),
@@ -1521,7 +1541,7 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Esc => {
-                            app.active_panel = ActivePanel::MenuPane;
+                            app.set_active_panel(ActivePanel::MenuPane);
                             None
                         }
                         KeyCode::Char('g') => {
