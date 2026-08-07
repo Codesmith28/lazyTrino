@@ -206,16 +206,17 @@ pub fn dispatch_command(
         } => {
             let log_id = app.add_query_log(query.clone());
             app.loading = true;
-            let (query_buffer, query_cursor) = match &app.screen {
-                Screen::Actions(a) => {
-                    if let Some(ref r) = a.results {
-                        (r.query_buffer.clone(), r.query_cursor)
-                    } else {
-                        (a.query_buffer.clone(), a.query_cursor)
-                    }
-                }
-                _ => (query.clone(), query.len()),
-            };
+            // The query bar must always mirror exactly what's being
+            // executed — whether the user typed it manually or a menu
+            // action (Count, Partitions, Table View drill-down, etc.)
+            // built it programmatically via `build_query`/
+            // `filtered_page_query`. Previously this reused whatever text
+            // happened to already be in the bar (e.g. the very first
+            // default query from table entry), so selecting a different
+            // action or drilling into a partition value fired a new query
+            // without the bar ever updating to show it.
+            let query_buffer = query.clone();
+            let query_cursor = query_buffer.len();
 
             let res_state = ResultsState {
                 query_buffer: query_buffer.clone(),
@@ -243,6 +244,7 @@ pub fn dispatch_command(
                 a.results = Some(res_state);
             } else {
                 app.prev_screen = Some(Box::new(app.screen.clone()));
+                app.clear_mouse_selection();
                 app.screen = Screen::Actions(ActionState {
                     catalog: catalog.clone(),
                     schema: schema.clone(),
@@ -373,6 +375,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     }
                     app.trino_client = Some(client);
                     app.catalogs = catalogs.iter().map(|c| c.trim().to_string()).collect();
+                    app.clear_mouse_selection();
                     app.screen = Screen::Catalog(CatalogState {
                         items: app.catalogs.clone(),
                         selected: 0,
@@ -401,6 +404,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         schemas.iter().map(|s| s.trim().to_string()).collect();
                     app.complete_query_log_success(log_id, 25, trimmed.len());
                     app.schemas.insert(catalog.clone(), trimmed.clone());
+                    app.clear_mouse_selection();
                     app.screen = Screen::Schema(SchemaState {
                         catalog: catalog.clone(),
                         items: trimmed,
@@ -427,6 +431,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     app.complete_query_log_success(log_id, 35, trimmed.len());
                     app.tables
                         .insert((catalog.clone(), schema.clone()), trimmed.clone());
+                    app.clear_mouse_selection();
                     app.screen = Screen::Table(TableState {
                         catalog: catalog.clone(),
                         schema: schema.clone(),
@@ -557,6 +562,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     } else {
                         let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
                         let query_len = default_query.len();
+                        app.clear_mouse_selection();
                         app.screen = Screen::Actions(ActionState {
                             catalog,
                             schema,
@@ -605,6 +611,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     } else {
                         let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
                         let query_len = default_query.len();
+                        app.clear_mouse_selection();
                         app.screen = Screen::Actions(ActionState {
                             catalog,
                             schema,
@@ -729,6 +736,7 @@ mod tests {
         // recon was still in flight: `trigger_action` selects the action
         // and switches focus but leaves `results` empty since `metadata`
         // isn't populated yet.
+        app.clear_mouse_selection();
         app.screen = Screen::Actions(ActionState {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
@@ -761,5 +769,47 @@ mod tests {
             results.rows,
             vec![vec!["CREATE TABLE orders (...)".to_string()]]
         );
+    }
+
+    #[test]
+    fn execute_query_bar_always_mirrors_the_actual_query_being_run() {
+        // Regression test: the query bar must show exactly the query that
+        // was fired — whether typed manually or built programmatically by
+        // a menu action (Count/Partitions/Table View/etc.) — never stale
+        // text left over from a previous query_buffer.
+        let mut app = App::new(sample_config(), false);
+        app.clear_mouse_selection();
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            // Stale text that must NOT leak into the new query bar.
+            query_buffer: "SELECT * FROM orders LIMIT 10".to_string(),
+            query_cursor: 30,
+            ..Default::default()
+        });
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let programmatic_query = "SELECT count(*) FROM iceberg.sales.orders".to_string();
+        dispatch_command(
+            &mut app,
+            Command::ExecuteQuery {
+                query: programmatic_query.clone(),
+                is_paginated: false,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                filters: Vec::new(),
+            },
+            &tx,
+        );
+
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let results = state.results.as_ref().expect("results should be set");
+        assert_eq!(results.query_buffer, programmatic_query);
+        assert_eq!(results.query_cursor, programmatic_query.len());
     }
 }
