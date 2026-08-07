@@ -247,7 +247,8 @@ pub fn render(
         .enumerate()
         .map(|(idx, line_str)| {
             let line_y = inner.y + idx as u16;
-            let is_mouse_sel = app.is_area_mouse_selected(inner.x, inner.width, line_y);
+            // See actions.rs for why this must be gated by pane focus.
+            let is_mouse_sel = is_active && app.is_area_mouse_selected(inner.x, inner.width, line_y);
 
             let (branch_part, content_part) = split_tree_line(line_str);
 

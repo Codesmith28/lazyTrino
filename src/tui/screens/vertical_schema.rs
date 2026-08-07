@@ -75,7 +75,8 @@ pub fn render(
                 .max(key_lines.len())
                 .max(desc_lines.len()) as u16;
 
-            let is_mouse_sel = app.is_area_mouse_selected(inner.x, inner.width, current_row_y);
+            // See actions.rs for why this must be gated by pane focus.
+            let is_mouse_sel = is_active && app.is_area_mouse_selected(inner.x, inner.width, current_row_y);
             current_row_y += max_h;
 
             let row_style = if is_mouse_sel {

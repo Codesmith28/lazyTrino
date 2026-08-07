@@ -44,7 +44,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                         active_query_buffer_len(app).unwrap_or(0),
                     );
                     app.mode = Mode::QueryInput;
-                    app.active_panel = ActivePanel::MainViewer;
+                    app.set_active_panel(ActivePanel::MainViewer);
                     app.is_dragging_query_select = true;
                     app.is_selecting_text = false;
                     app.mouse_selection_anchor = None;
@@ -73,15 +73,15 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                         if clicked_row < ACTIONS.len() {
                             return trigger_action(app, clicked_row);
                         } else {
-                            app.active_panel = ActivePanel::MenuPane;
+                            app.set_active_panel(ActivePanel::MenuPane);
                         }
                     } else {
                         app.mode = Mode::Normal;
-                        app.active_panel = ActivePanel::MainViewer;
+                        app.set_active_panel(ActivePanel::MainViewer);
                     }
                 } else if mouse.column >= border_x && mouse.row < bottom_y {
                     app.mode = Mode::Normal;
-                    app.active_panel = ActivePanel::MainViewer;
+                    app.set_active_panel(ActivePanel::MainViewer);
                 }
             }
         }
@@ -416,6 +416,7 @@ mod tests {
     #[test]
     fn test_extract_selected_text_catalog_screen() {
         let mut app = sample_app();
+        app.clear_mouse_selection();
         app.screen = Screen::Catalog(CatalogState {
             items: vec![
                 "iceberg".to_string(),
@@ -470,6 +471,7 @@ mod tests {
             filters: Vec::new(),
         };
 
+        app.clear_mouse_selection();
         app.screen = Screen::Actions(ActionState {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
@@ -497,6 +499,7 @@ mod tests {
             " ├── date=2024-01-01/".to_string(),
             " └── date=2024-01-02/".to_string(),
         ];
+        app.clear_mouse_selection();
         app.screen = Screen::Actions(ActionState {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
