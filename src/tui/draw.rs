@@ -217,7 +217,9 @@ fn footer_hint(app: &App) -> Option<&'static str> {
 /// advancing one cell), which breaks the surrounding box border/background
 /// and spills the text out of its intended bounds.
 pub(crate) fn sanitize_toast_text(s: &str) -> String {
-    s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
+    s.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 fn truncate_hint(hint: &str, width: usize) -> String {
@@ -281,7 +283,6 @@ fn toast_envelope(area: Rect) -> Option<Rect> {
     })
 }
 
-
 fn render_copied_toast(frame: &mut Frame, area: Rect, app: &App) {
     let Some(envelope) = toast_envelope(area) else {
         return;
@@ -337,7 +338,6 @@ fn render_copied_toast(frame: &mut Frame, area: Rect, app: &App) {
         .alignment(Alignment::Center);
     frame.render_widget(toast_text, inner);
 }
-
 
 pub(super) fn ui(frame: &mut Frame, app: &App) {
     match app.screen {
@@ -810,7 +810,6 @@ fn render_placeholder_preview(
     frame.render_widget(info_p, inner);
 }
 
-
 #[cfg(test)]
 mod toast_border_regression {
     use super::*;
@@ -864,7 +863,8 @@ mod toast_border_regression {
             assert!(corner_x > 0, "row {y} corner at unexpected x=0");
             let prev_sym = buf.cell((corner_x - 1, y)).unwrap().symbol().to_string();
             assert_eq!(
-                prev_sym, "─",
+                prev_sym,
+                "─",
                 "row {y}: cell just before the border corner (x={}) is {:?}, expected a \
                  dash — the toast overlay is punching a blank gap into the border",
                 corner_x - 1,
@@ -1036,6 +1036,9 @@ mod query_bar_height_regression {
             }
         }
         let height = bottom_y - query_bar_top + 1;
-        assert_eq!(height, 3, "short query should keep the default 3-row height, got {height}");
+        assert_eq!(
+            height, 3,
+            "short query should keep the default 3-row height, got {height}"
+        );
     }
 }

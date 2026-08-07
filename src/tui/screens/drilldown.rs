@@ -100,7 +100,8 @@ pub fn render(
         .map(|(i, val)| {
             let item_y = items_area.y + i as u16;
             // See actions.rs for why this must be gated by pane focus.
-            let is_mouse_sel = is_active && app.is_area_mouse_selected(items_area.x, items_area.width, item_y);
+            let is_mouse_sel =
+                is_active && app.is_area_mouse_selected(items_area.x, items_area.width, item_y);
             let is_selected = i == dd.selected;
             let prefix = if is_selected { "▸ " } else { "  " };
             let text = format!("{prefix}{val}");
