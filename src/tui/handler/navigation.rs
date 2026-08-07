@@ -29,9 +29,7 @@ pub(super) fn check_trigger_infinite_scroll(app: &mut App) -> Option<Command> {
 pub(super) fn filter_items<'a>(items: &'a [String], search: &str) -> Vec<&'a String> {
     items
         .iter()
-        .filter(|name| {
-            search.is_empty() || name.to_lowercase().contains(&search.to_lowercase())
-        })
+        .filter(|name| search.is_empty() || name.to_lowercase().contains(&search.to_lowercase()))
         .collect()
 }
 
@@ -96,10 +94,10 @@ pub(super) fn get_selected_item_label(app: &App) -> Option<String> {
 pub(super) fn reset_list_selected_for_search(app: &mut App) {
     if let Some(items) = extract_list_labels(app) {
         if !items.is_empty() {
-            if let Some(s) = get_selected(&app.screen) {
-                if s >= items.len() {
-                    mod_list_selected(&mut app.screen, items.len() - 1);
-                }
+            if let Some(s) = get_selected(&app.screen)
+                && s >= items.len()
+            {
+                mod_list_selected(&mut app.screen, items.len() - 1);
             }
         } else {
             mod_list_selected(&mut app.screen, 0);
@@ -638,7 +636,10 @@ mod tests {
 
         for idx in [7, 8] {
             let cmd = trigger_action(&mut app, idx);
-            assert!(cmd.is_none(), "action {idx} should be blocked while loading");
+            assert!(
+                cmd.is_none(),
+                "action {idx} should be blocked while loading"
+            );
         }
     }
 
@@ -651,7 +652,10 @@ mod tests {
 
         for idx in [0usize, 1] {
             let cmd = trigger_action(&mut app, idx);
-            assert!(cmd.is_none(), "action {idx} should be blocked while ddl loading");
+            assert!(
+                cmd.is_none(),
+                "action {idx} should be blocked while ddl loading"
+            );
         }
     }
 
@@ -670,7 +674,10 @@ mod tests {
             panic!("expected actions screen");
         };
         let results = state.results.as_ref().expect("results should be populated");
-        assert_eq!(results.rows, vec![vec!["CREATE TABLE events (...)".to_string()]]);
+        assert_eq!(
+            results.rows,
+            vec![vec!["CREATE TABLE events (...)".to_string()]]
+        );
     }
 
     #[test]
@@ -698,11 +705,16 @@ mod tests {
     #[test]
     fn trigger_action_table_view_starts_drilldown_for_partitioned_table() {
         let mut app = sample_app(Screen::Actions(drilldown_action_state(vec![
-            "date", "service", "account_id",
+            "date",
+            "service",
+            "account_id",
         ])));
 
         let cmd = trigger_action(&mut app, 0);
-        let Some(Command::FetchPartitionLevel { column, filters, .. }) = cmd else {
+        let Some(Command::FetchPartitionLevel {
+            column, filters, ..
+        }) = cmd
+        else {
             panic!("expected FetchPartitionLevel to start drilldown");
         };
         assert_eq!(column, "date");
@@ -711,7 +723,10 @@ mod tests {
         let Screen::Actions(state) = &app.screen else {
             panic!("expected actions screen");
         };
-        let dd = state.drilldown.as_ref().expect("drilldown should be initialized");
+        let dd = state
+            .drilldown
+            .as_ref()
+            .expect("drilldown should be initialized");
         assert_eq!(dd.partition_cols, vec!["date", "service", "account_id"]);
         assert!(dd.path.is_empty());
         assert!(dd.loading);
@@ -731,14 +746,23 @@ mod tests {
         });
 
         let cmd = drilldown_drill_into_selected(&mut s, &[]);
-        let Some(Command::FetchPartitionLevel { column, filters, .. }) = cmd else {
+        let Some(Command::FetchPartitionLevel {
+            column, filters, ..
+        }) = cmd
+        else {
             panic!("expected FetchPartitionLevel for next level");
         };
         assert_eq!(column, "service");
-        assert_eq!(filters, vec![("date".to_string(), "2026-08-06".to_string())]);
+        assert_eq!(
+            filters,
+            vec![("date".to_string(), "2026-08-06".to_string())]
+        );
 
         let dd = s.drilldown.as_ref().unwrap();
-        assert_eq!(dd.path, vec![("date".to_string(), "2026-08-06".to_string())]);
+        assert_eq!(
+            dd.path,
+            vec![("date".to_string(), "2026-08-06".to_string())]
+        );
         assert!(dd.loading);
         assert_eq!(dd.selected, 0);
     }
@@ -767,7 +791,10 @@ mod tests {
             panic!("expected leaf ExecuteQuery");
         };
         assert!(is_paginated);
-        assert_eq!(filters, vec![("date".to_string(), "2026-08-06".to_string())]);
+        assert_eq!(
+            filters,
+            vec![("date".to_string(), "2026-08-06".to_string())]
+        );
         assert!(query.contains("WHERE date = '2026-08-06'"));
         assert!(s.results.is_none());
     }
@@ -985,9 +1012,7 @@ mod tests {
 fn select_current_item(app: &mut App) -> Option<Command> {
     match &app.screen {
         Screen::Catalog(_) => {
-            let Some(catalog) = get_selected_item_label(app) else {
-                return None;
-            };
+            let catalog = get_selected_item_label(app)?;
             if app.schemas.contains_key(&catalog) {
                 let items = app.schemas[&catalog]
                     .iter()
@@ -1004,9 +1029,7 @@ fn select_current_item(app: &mut App) -> Option<Command> {
             }
         }
         Screen::Schema(s) => {
-            let Some(schema) = get_selected_item_label(app) else {
-                return None;
-            };
+            let schema = get_selected_item_label(app)?;
             let catalog = s.catalog.trim().to_string();
             if app.tables.contains_key(&(catalog.clone(), schema.clone())) {
                 let items = app.tables[&(catalog.clone(), schema.clone())]
@@ -1025,9 +1048,7 @@ fn select_current_item(app: &mut App) -> Option<Command> {
             }
         }
         Screen::Table(s) => {
-            let Some(table) = get_selected_item_label(app) else {
-                return None;
-            };
+            let table = get_selected_item_label(app)?;
             let catalog = s.catalog.clone();
             let schema = s.schema.clone();
             app.main_panel_pct = 15;
@@ -1120,8 +1141,7 @@ pub(super) fn connect_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
 pub(super) fn copy_active_pane_content(app: &mut App) {
     let mut text_to_copy = String::new();
 
-    if let (Some(anchor), Some(current)) =
-        (app.mouse_selection_anchor, app.mouse_selection_current)
+    if let (Some(anchor), Some(current)) = (app.mouse_selection_anchor, app.mouse_selection_current)
     {
         text_to_copy = super::mouse::extract_selected_text(app, anchor, current);
     }
@@ -1283,7 +1303,13 @@ fn drilldown_drill_into_selected(s: &mut ActionState, safe_columns: &[String]) -
         s.results = None;
         Some(Command::ExecuteQuery {
             query: crate::trino::queries::filtered_page_query(
-                &catalog, &schema, &table, &filters, 0, 100, safe_columns,
+                &catalog,
+                &schema,
+                &table,
+                &filters,
+                0,
+                100,
+                safe_columns,
             ),
             is_paginated: true,
             catalog,
@@ -1369,8 +1395,8 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                 let in_drilldown = s.drilldown.is_some()
                     && s.selected < ACTIONS.len()
                     && matches!(ACTIONS[s.selected].2, Action::TableView);
-                let at_leaf = in_drilldown
-                    && s.drilldown.as_ref().map(|d| d.is_leaf()).unwrap_or(false);
+                let at_leaf =
+                    in_drilldown && s.drilldown.as_ref().map(|d| d.is_leaf()).unwrap_or(false);
 
                 if in_drilldown && !at_leaf {
                     // Browsing a level of distinct partition values (the
