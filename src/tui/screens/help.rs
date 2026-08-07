@@ -59,7 +59,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
             theme::header_style(),
         )),
         Line::from("  v                              Table View Mode (Infinite Scroll grid)"),
-        Line::from("  d / c / i                      Describe / Table DDL / Info Schema"),
+        Line::from("  c / i                          Table DDL / Info Schema"),
         Line::from("  s / n / p                      Show Stats / Row Count / Sample (20 rows)"),
         Line::from("  P / S                          Partitions Tree / Vertical Schema Inspector"),
         Line::from(""),

@@ -281,7 +281,16 @@ pub fn dispatch_command(
             limit,
             filters,
         } => {
-            let query = queries::filtered_page_query(&catalog, &schema, &table, &filters, offset, limit);
+            let safe_columns = crate::app::safe_select_columns(&app.vertical_schema_cols);
+            let query = queries::filtered_page_query(
+                &catalog,
+                &schema,
+                &table,
+                &filters,
+                offset,
+                limit,
+                &safe_columns,
+            );
             let log_id = app.add_query_log(query.clone());
             if let Screen::Actions(ref mut action_state) = app.screen
                 && let Some(state) = action_state.results.as_mut()
@@ -710,7 +719,7 @@ mod tests {
     #[test]
     fn fetch_table_ddl_auto_populates_results_when_ddl_view_was_pending() {
         let mut app = App::new(sample_config(), false);
-        // Simulate the user pressing Table DDL ('c', action idx 2) while
+        // Simulate the user pressing Table DDL ('c', action idx 1) while
         // recon was still in flight: `trigger_action` selects the action
         // and switches focus but leaves `results` empty since `metadata`
         // isn't populated yet.
@@ -718,7 +727,7 @@ mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 2,
+            selected: 1,
             ddl_loading: true,
             ..Default::default()
         });

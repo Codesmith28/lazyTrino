@@ -649,7 +649,7 @@ mod tests {
             ..drilldown_action_state(vec!["date"])
         }));
 
-        for idx in [0usize, 2] {
+        for idx in [0usize, 1] {
             let cmd = trigger_action(&mut app, idx);
             assert!(cmd.is_none(), "action {idx} should be blocked while ddl loading");
         }
@@ -659,8 +659,8 @@ mod tests {
     fn trigger_action_table_ddl_uses_cached_recon_ddl_without_query() {
         let mut app = sample_app(Screen::Actions(drilldown_action_state(vec!["date"])));
 
-        // Action index 2 is Table DDL ('c').
-        let cmd = trigger_action(&mut app, 2);
+        // Action index 1 is Table DDL ('c').
+        let cmd = trigger_action(&mut app, 1);
         assert!(
             cmd.is_none(),
             "Table DDL should render from cached recon, not fire a query"
@@ -730,7 +730,7 @@ mod tests {
             truncated: false,
         });
 
-        let cmd = drilldown_drill_into_selected(&mut s);
+        let cmd = drilldown_drill_into_selected(&mut s, &[]);
         let Some(Command::FetchPartitionLevel { column, filters, .. }) = cmd else {
             panic!("expected FetchPartitionLevel for next level");
         };
@@ -756,7 +756,7 @@ mod tests {
             truncated: false,
         });
 
-        let cmd = drilldown_drill_into_selected(&mut s);
+        let cmd = drilldown_drill_into_selected(&mut s, &[]);
         let Some(Command::ExecuteQuery {
             is_paginated,
             filters,
@@ -836,6 +836,30 @@ mod tests {
             selection_anchor: None,
             filters: vec![("date".to_string(), "2026-08-06".to_string())],
         }
+    }
+
+    #[test]
+    fn actions_keys_menu_navigation_resets_results_pane() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(sample_leaf_results_state()),
+            ..Default::default()
+        }));
+        app.active_panel = ActivePanel::MenuPane;
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.selected, 1);
+        assert!(
+            state.results.is_none(),
+            "moving the menu selection should reset the main view pane"
+        );
     }
 }
 
@@ -1014,9 +1038,9 @@ pub(super) fn copy_active_pane_content(app: &mut App) {
                         .collect::<Vec<_>>()
                         .join("\n");
                 } else if app.active_panel == ActivePanel::MainViewer {
-                    if s.selected == 7 {
+                    if s.selected == 6 {
                         text_to_copy = app.partition_tree_lines.join("\n");
-                    } else if s.selected == 8 {
+                    } else if s.selected == 7 {
                         text_to_copy = app
                             .vertical_schema_cols
                             .iter()
@@ -1121,7 +1145,7 @@ pub(super) fn table_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
 /// dispatching a filtered, paginated query instead of ever firing an
 /// unfiltered `SELECT *` against the (potentially huge/broken) partition
 /// tree.
-fn drilldown_drill_into_selected(s: &mut ActionState) -> Option<Command> {
+fn drilldown_drill_into_selected(s: &mut ActionState, safe_columns: &[String]) -> Option<Command> {
     let catalog = s.catalog.clone();
     let schema = s.schema.clone();
     let table = s.table.clone();
@@ -1140,7 +1164,7 @@ fn drilldown_drill_into_selected(s: &mut ActionState) -> Option<Command> {
         s.results = None;
         Some(Command::ExecuteQuery {
             query: crate::trino::queries::filtered_page_query(
-                &catalog, &schema, &table, &filters, 0, 100,
+                &catalog, &schema, &table, &filters, 0, 100, safe_columns,
             ),
             is_paginated: true,
             catalog,
@@ -1190,11 +1214,13 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
         return trigger_action(app, pos);
     }
 
+    let safe_columns = crate::app::safe_select_columns(&app.vertical_schema_cols);
     if let Screen::Actions(ref mut s) = app.screen {
         match app.active_panel {
             ActivePanel::MenuPane => match code {
                 KeyCode::Char('j') | KeyCode::Down => {
                     s.selected = (s.selected + 1) % ACTIONS.len();
+                    s.results = None;
                     None
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
@@ -1203,6 +1229,7 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                     } else {
                         s.selected - 1
                     };
+                    s.results = None;
                     None
                 }
                 KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
@@ -1264,7 +1291,7 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
-                            drilldown_drill_into_selected(s)
+                            drilldown_drill_into_selected(s, &safe_columns)
                         }
                         KeyCode::Char('h') | KeyCode::Left => {
                             drilldown_go_up(s);
@@ -1279,10 +1306,10 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                 } else {
                     match code {
                         KeyCode::Char('j') | KeyCode::Down => {
-                            if s.selected == 7 {
+                            if s.selected == 6 {
                                 let max_lines = app.partition_tree_lines.len().saturating_sub(1);
                                 app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
-                            } else if s.selected == 8 {
+                            } else if s.selected == 7 {
                                 let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
                                 app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
                             } else if let Some(ref mut res) = s.results {
@@ -1295,9 +1322,9 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('k') | KeyCode::Up => {
-                            if s.selected == 7 {
+                            if s.selected == 6 {
                                 app.partition_scroll = app.partition_scroll.saturating_sub(1);
-                            } else if s.selected == 8 {
+                            } else if s.selected == 7 {
                                 app.schema_scroll = app.schema_scroll.saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {
                                 res.scroll_v = res.scroll_v.saturating_sub(1);
@@ -1329,9 +1356,9 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('g') => {
-                            if s.selected == 7 {
+                            if s.selected == 6 {
                                 app.partition_scroll = 0;
-                            } else if s.selected == 8 {
+                            } else if s.selected == 7 {
                                 app.schema_scroll = 0;
                             } else if let Some(ref mut res) = s.results {
                                 res.scroll_v = 0;
@@ -1340,10 +1367,10 @@ pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('G') => {
-                            if s.selected == 7 {
+                            if s.selected == 6 {
                                 app.partition_scroll =
                                     app.partition_tree_lines.len().saturating_sub(1);
-                            } else if s.selected == 8 {
+                            } else if s.selected == 7 {
                                 app.schema_scroll =
                                     app.vertical_schema_cols.len().saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {

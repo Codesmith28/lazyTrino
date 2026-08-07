@@ -462,7 +462,7 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
 
                     match action {
                         crate::app::Action::Partitions => {
-                            if app.loading && selected_idx == 7 {
+                            if app.loading && selected_idx == 6 {
                                 let title = format!(" Preview — {table_name} (Partitions) ");
                                 let block = Block::default()
                                     .title(title)
@@ -505,7 +505,7 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                             }
                         }
                         crate::app::Action::Schema => {
-                            if app.loading && selected_idx == 8 {
+                            if app.loading && selected_idx == 7 {
                                 let title = format!(" Preview — {table_name} (Schema) ");
                                 let block = Block::default()
                                     .title(title)
@@ -594,7 +594,7 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                                 }
                                 _ => None,
                             };
-                            if app.loading && selected_idx == 2 {
+                            if app.loading && selected_idx == 1 {
                                 let title = format!(" Preview — {table_name} (Table DDL) ");
                                 let block = Block::default()
                                     .title(title)
@@ -764,9 +764,9 @@ fn render_placeholder_preview(
         )),
         Line::from(""),
         Line::from(Span::styled(" Menu Shortcuts:", theme::muted_style())),
-        Line::from("   [v] Table View Mode       [d] Describe Table       [c] Table DDL"),
-        Line::from("   [i] Info Schema           [s] Show Stats           [n] Row Count"),
-        Line::from("   [p] Sample (20 rows)      [P] Partition Tree       [S] Vertical Schema"),
+        Line::from("   [v] Table View Mode       [c] Table DDL            [i] Info Schema"),
+        Line::from("   [s] Show Stats            [n] Row Count            [p] Sample (20 rows)"),
+        Line::from("   [P] Partition Tree        [S] Vertical Schema"),
     ];
     let info_p = Paragraph::new(info_lines).alignment(Alignment::Center);
     frame.render_widget(info_p, inner);
