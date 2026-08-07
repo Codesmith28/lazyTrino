@@ -100,7 +100,7 @@ pub(super) fn handle_search_mode(app: &mut App, key: KeyEvent) -> Option<Command
                 super::navigation::reset_list_selected_for_search(app);
             }
             app.mode = Mode::Normal;
-            app.active_panel = ActivePanel::MainViewer;
+            app.set_active_panel(ActivePanel::MainViewer);
         }
         _ => {}
     }

@@ -52,13 +52,22 @@ pub fn render(
         .enumerate()
         .map(|(i, (key, label, _))| {
             let item_y = inner.y + i as u16;
-            let is_mouse_sel = app.is_area_mouse_selected(inner.x, inner.width, item_y);
+            // Gate stale mouse hover/click highlighting by pane focus: once
+            // the user moves focus to another pane (via keyboard), a row
+            // clicked earlier in this pane must stop appearing selected —
+            // otherwise it stays highlighted forever since the underlying
+            // anchor/current coordinates are only cleared by the *next*
+            // mouse click, not by any keyboard-driven focus change.
+            let is_mouse_sel =
+                is_active && app.is_area_mouse_selected(inner.x, inner.width, item_y);
 
             let is_selected = i == selected;
             let prefix = if is_selected { "▸ " } else { "  " };
             let text = format!("{prefix}[{key}] {label}");
-            let line = if is_mouse_sel || is_selected {
+            let line = if is_mouse_sel {
                 Line::styled(text, theme::selection_style())
+            } else if is_selected {
+                Line::styled(text, theme::selection_style_for(is_active))
             } else {
                 Line::styled(text, theme::text_style())
             };
@@ -67,7 +76,7 @@ pub fn render(
         .collect();
 
     let mut list_state = ListState::default().with_selected(Some(selected));
-    let list = List::new(items).highlight_style(theme::selection_style());
+    let list = List::new(items).highlight_style(theme::selection_style_for(is_active));
 
     frame.render_stateful_widget(list, inner, &mut list_state);
 

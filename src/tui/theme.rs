@@ -68,6 +68,27 @@ pub fn selection_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// Muted stand-in for `selection_style` used to mark the *last* selected
+/// row in a list whose pane is no longer focused. Keeping some visual
+/// marker (instead of dropping the highlight entirely) preserves "where was
+/// I" context when tabbing back, but it must never be confused with the
+/// bright active-selection color — otherwise two panes can appear to have
+/// a "current" selection at once, which reads as the selection persisting/
+/// leaking across panes.
+pub fn inactive_selection_style() -> Style {
+    Style::default().fg(TEXT_FG).bg(MUTED_FG)
+}
+
+/// Picks the appropriate selection highlight for a row's keyboard-cursor
+/// state based on whether the row's own pane currently has focus.
+pub fn selection_style_for(is_active: bool) -> Style {
+    if is_active {
+        selection_style()
+    } else {
+        inactive_selection_style()
+    }
+}
+
 pub fn query_selection_style() -> Style {
     Style::default()
         .fg(SELECTION_FG)
@@ -129,6 +150,17 @@ pub fn success_style() -> Style {
 
 pub fn success_bold_style() -> Style {
     bold_style(HEADER_FG)
+}
+
+/// Solid-background style for toast/notification popups. Unlike
+/// `success_bold_style`, this sets an explicit background so the toast box
+/// fully opaquely overwrites whatever was rendered underneath it, with no
+/// gaps of terminal-default background showing through.
+pub fn toast_style() -> Style {
+    Style::default()
+        .fg(HEADER_FG)
+        .bg(Color::Black)
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn detail_style() -> Style {

@@ -418,6 +418,33 @@ impl App {
         }
     }
 
+    /// Clears any leftover mouse click/drag highlight. `mouse_selection_anchor`
+    /// / `mouse_selection_current` are otherwise only reset by the *next*
+    /// mouse click, so without calling this on every keyboard-driven change
+    /// of focus (active panel or screen), a row/cell clicked once would keep
+    /// rendering as "selected" forever, even after navigating elsewhere.
+    pub fn clear_mouse_selection(&mut self) {
+        self.mouse_selection_anchor = None;
+        self.mouse_selection_current = None;
+    }
+
+    /// Switches the focused pane, clearing any stale mouse-click highlight
+    /// left over from the pane being unfocused.
+    pub fn set_active_panel(&mut self, panel: ActivePanel) {
+        if self.active_panel != panel {
+            self.clear_mouse_selection();
+        }
+        self.active_panel = panel;
+    }
+
+    /// Replaces the current screen, clearing any stale mouse-click highlight
+    /// left over from the previous screen (e.g. a clicked catalog row must
+    /// not still appear "selected" once you've drilled into its schemas).
+    pub fn set_screen(&mut self, screen: Screen) {
+        self.clear_mouse_selection();
+        self.screen = screen;
+    }
+
     pub fn is_area_mouse_selected(&self, area_x: u16, area_w: u16, row_y: u16) -> bool {
         if let (Some((a_x, a_y)), Some((c_x, c_y))) =
             (self.mouse_selection_anchor, self.mouse_selection_current)

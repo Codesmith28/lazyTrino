@@ -85,12 +85,19 @@ pub(crate) fn render_selectable_list(
         .enumerate()
         .map(|(display_idx, (orig_idx, name))| {
             let item_y = inner.y + display_idx as u16;
-            let is_mouse_sel = app.is_area_mouse_selected(inner.x, inner.width, item_y);
+            // See actions.rs for why this must be gated by pane focus.
+            let is_mouse_sel =
+                is_active && app.is_area_mouse_selected(inner.x, inner.width, item_y);
 
             let prefix = format!("{:>3} ", orig_idx + 1);
             let is_keyboard_sel = display_idx == clamped_selected;
-            let line = if is_mouse_sel || is_keyboard_sel {
+            let line = if is_mouse_sel {
                 Line::styled(format!("{prefix}{name}"), theme::selection_style())
+            } else if is_keyboard_sel {
+                Line::styled(
+                    format!("{prefix}{name}"),
+                    theme::selection_style_for(is_active),
+                )
             } else {
                 Line::styled(format!("{prefix}{name}"), theme::text_style())
             };
@@ -99,7 +106,7 @@ pub(crate) fn render_selectable_list(
         .collect();
 
     let mut list_state = ListState::default().with_selected(Some(clamped_selected));
-    let list = List::new(items).highlight_style(theme::selection_style());
+    let list = List::new(items).highlight_style(theme::selection_style_for(is_active));
 
     frame.render_stateful_widget(list, inner, &mut list_state);
 
