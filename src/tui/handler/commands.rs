@@ -7,6 +7,10 @@ use crate::trino::queries;
 
 use super::{AsyncResult, Command};
 
+/// Cap on the number of distinct values fetched per drill-down level, to
+/// protect against extremely high-cardinality partition columns.
+const DRILLDOWN_LEVEL_LIMIT: usize = 200;
+
 pub fn dispatch_command(
     app: &mut App,
     cmd: Command,
@@ -82,6 +86,8 @@ pub fn dispatch_command(
             table,
         } => {
             if let Some(client) = app.trino_client.clone() {
+                let show_create_query = queries::show_create(&catalog, &schema, &table);
+                let show_create_log_id = app.add_query_log(show_create_query.clone());
                 let part_query = queries::partitions(&catalog, &schema, &table);
                 let part_log_id = app.add_query_log(part_query.clone());
                 let desc_query = queries::info_schema_columns(&catalog, &schema, &table);
@@ -90,6 +96,39 @@ pub fn dispatch_command(
 
                 let tx = tx.clone();
                 tokio::spawn(async move {
+                    // The table's own partition layout (if any) is always resolved
+                    // dynamically from this specific table's live `SHOW CREATE TABLE`
+                    // DDL — never hardcoded by table/schema name. An unpartitioned
+                    // table simply yields an empty `partitioned_by`.
+                    let (partitioned_by, location, ddl_text, show_create_error) =
+                        match client.execute(&show_create_query).await {
+                            Ok(res) => {
+                                let ddl = res
+                                    .data
+                                    .first()
+                                    .and_then(|r| r.first())
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let (cols, loc) =
+                                    crate::tui::screens::partition_tree::parse_partitioned_by(&ddl);
+                                (cols, loc, ddl, None)
+                            }
+                            Err(err) => (Vec::new(), String::new(), String::new(), Some(err)),
+                        };
+
+                    // Send the DDL result the moment it's ready — Table DDL
+                    // (and knowing whether the table is partitioned, for
+                    // Table View's drill-down decision) shouldn't have to
+                    // wait on the slower `$partitions` / info-schema queries
+                    // below.
+                    let _ = tx.send(AsyncResult::FetchTableDdl {
+                        show_create_log_id,
+                        partitioned_by: partitioned_by.clone(),
+                        location,
+                        ddl_text: ddl_text.clone(),
+                        show_create_error,
+                    });
+
                     let (partition_lines, partitions_error) = match client
                         .execute(&part_query)
                         .await
@@ -102,31 +141,12 @@ pub fn dispatch_command(
                                 None,
                             )
                         }
-                        Ok(_) | Err(_) => {
-                            let show_create_query = queries::show_create(&catalog, &schema, &table);
-                            match client.execute(&show_create_query).await {
-                                Ok(res2) => {
-                                    let ddl_str = res2
-                                        .data
-                                        .first()
-                                        .and_then(|r| r.first())
-                                        .cloned()
-                                        .unwrap_or_default();
-                                    (
-                                        crate::tui::screens::partition_tree::build_tree_lines(&[
-                                            ddl_str,
-                                        ]),
-                                        None,
-                                    )
-                                }
-                                Err(err) => (
-                                    crate::tui::screens::partition_tree::build_tree_lines(&[
-                                        String::new(),
-                                    ]),
-                                    Some(err),
-                                ),
-                            }
-                        }
+                        Ok(_) | Err(_) => (
+                            crate::tui::screens::partition_tree::build_tree_lines(
+                                std::slice::from_ref(&ddl_text),
+                            ),
+                            None,
+                        ),
                     };
 
                     let (columns, columns_error) = match client.execute(&desc_query).await {
@@ -144,6 +164,8 @@ pub fn dispatch_command(
                                         "Hudi Metadata".to_string()
                                     } else if name.starts_with("$") || name.contains("iceberg") {
                                         "Iceberg Meta".to_string()
+                                    } else if partitioned_by.iter().any(|p| p == &name) {
+                                        "Partition Key".to_string()
                                     } else if is_nullable == "NO" {
                                         "PK".to_string()
                                     } else {
@@ -180,6 +202,7 @@ pub fn dispatch_command(
             catalog,
             schema,
             table,
+            filters,
         } => {
             let log_id = app.add_query_log(query.clone());
             app.loading = true;
@@ -213,6 +236,7 @@ pub fn dispatch_command(
                 has_more_rows: true,
                 invalid_query_error: None,
                 selection_anchor: None,
+                filters: filters.clone(),
             };
 
             if let Screen::Actions(ref mut a) = app.screen {
@@ -227,6 +251,7 @@ pub fn dispatch_command(
                     query_buffer: query_buffer.clone(),
                     query_cursor,
                     results: Some(res_state),
+                    ..Default::default()
                 });
             }
 
@@ -242,6 +267,7 @@ pub fn dispatch_command(
                         schema,
                         table,
                         is_paginated,
+                        filters,
                         result: res,
                     });
                 });
@@ -253,8 +279,18 @@ pub fn dispatch_command(
             table,
             offset,
             limit,
+            filters,
         } => {
-            let query = queries::page_query(&catalog, &schema, &table, offset, limit);
+            let safe_columns = crate::app::safe_select_columns(&app.vertical_schema_cols);
+            let query = queries::filtered_page_query(
+                &catalog,
+                &schema,
+                &table,
+                &filters,
+                offset,
+                limit,
+                &safe_columns,
+            );
             let log_id = app.add_query_log(query.clone());
             if let Screen::Actions(ref mut action_state) = app.screen
                 && let Some(state) = action_state.results.as_mut()
@@ -270,6 +306,42 @@ pub fn dispatch_command(
                         log_id,
                         offset,
                         limit,
+                        result: res,
+                    });
+                });
+            }
+        }
+        Command::FetchPartitionLevel {
+            catalog,
+            schema,
+            table,
+            filters,
+            column,
+        } => {
+            let query = queries::distinct_partition_values(
+                &catalog,
+                &schema,
+                &table,
+                &filters,
+                &column,
+                DRILLDOWN_LEVEL_LIMIT,
+            );
+            let log_id = app.add_query_log(query.clone());
+            if let Screen::Actions(ref mut action_state) = app.screen
+                && let Some(drilldown) = action_state.drilldown.as_mut()
+            {
+                drilldown.loading = true;
+                drilldown.error = None;
+            }
+
+            if let Some(client) = app.trino_client.clone() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let res = client.execute(&query).await;
+                    let _ = tx.send(AsyncResult::FetchPartitionLevel {
+                        log_id,
+                        filters,
+                        column,
                         result: res,
                     });
                 });
@@ -368,6 +440,41 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 }
             }
         }
+        AsyncResult::FetchTableDdl {
+            show_create_log_id,
+            partitioned_by,
+            location,
+            ddl_text,
+            show_create_error,
+        } => {
+            if let Some(err) = show_create_error {
+                error!(error = %err, "Fetch table DDL (SHOW CREATE TABLE) failed");
+                app.complete_query_log_error(show_create_log_id, err.to_string());
+            } else {
+                app.complete_query_log_success(show_create_log_id, 20, 1);
+            }
+            if let Screen::Actions(ref mut action_state) = app.screen {
+                action_state.metadata = Some(TableRecon {
+                    partitioned_by,
+                    location,
+                    ddl_text,
+                });
+                action_state.ddl_loading = false;
+                // If the user already selected Table DDL while recon was
+                // still in flight (blocked, see `trigger_action`), the menu
+                // switched to it but nothing was ever populated since the
+                // cached DDL wasn't ready yet. Now that it just landed,
+                // render it immediately instead of leaving the pane stuck
+                // on the loading spinner until the user re-presses `c`.
+                if matches!(
+                    ACTIONS.get(action_state.selected).map(|(_, _, a)| a),
+                    Some(Action::TableDDL)
+                ) && action_state.results.is_none()
+                {
+                    super::navigation::populate_table_ddl_results(action_state);
+                }
+            }
+        }
         AsyncResult::FetchTableMetadata {
             partitions_log_id,
             cols_log_id,
@@ -391,6 +498,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
             }
             app.partition_tree_lines = partition_lines;
             app.vertical_schema_cols = columns;
+            if let Screen::Actions(ref mut action_state) = app.screen {
+                action_state.metadata_loading = false;
+            }
         }
         AsyncResult::ExecuteQuery {
             log_id,
@@ -400,6 +510,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
             schema,
             table,
             is_paginated,
+            filters,
             result,
         } => {
             app.loading = false;
@@ -433,6 +544,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         has_more_rows: has_more,
                         invalid_query_error: None,
                         selection_anchor: None,
+                        filters: filters.clone(),
                     };
 
                     let cur_selected = if let Screen::Actions(ref a) = app.screen {
@@ -453,6 +565,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                             query_buffer: default_query,
                             query_cursor: query_len,
                             results: Some(res_state),
+                            ..Default::default()
                         });
                     }
                 }
@@ -479,6 +592,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         has_more_rows: false,
                         invalid_query_error: None,
                         selection_anchor: None,
+                        filters,
                     };
 
                     let cur_selected = if let Screen::Actions(ref a) = app.screen {
@@ -499,6 +613,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                             query_buffer: default_query,
                             query_cursor: query_len,
                             results: Some(res_state),
+                            ..Default::default()
                         });
                     }
                 }
@@ -536,5 +651,109 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 }
             }
         },
+        AsyncResult::FetchPartitionLevel {
+            log_id,
+            filters,
+            column,
+            result,
+        } => match result {
+            Ok(results) => {
+                app.complete_query_log_success(log_id, results.duration_ms, results.data.len());
+                let truncated = results.data.len() >= DRILLDOWN_LEVEL_LIMIT;
+                let values: Vec<String> = results
+                    .data
+                    .into_iter()
+                    .filter_map(|mut r| if r.is_empty() { None } else { Some(r.remove(0)) })
+                    .collect();
+                if let Screen::Actions(ref mut action_state) = app.screen
+                    && let Some(drilldown) = action_state.drilldown.as_mut()
+                    // Only apply if this result still matches where the user currently
+                    // is in the drill-down (guards against stale in-flight responses
+                    // after the user has already navigated elsewhere).
+                    && drilldown.path == filters
+                    && drilldown.next_column() == Some(column.as_str())
+                {
+                    let depth = drilldown.depth();
+                    if depth < drilldown.levels_cache.len() {
+                        drilldown.levels_cache[depth] = values;
+                    } else {
+                        drilldown.levels_cache.push(values);
+                    }
+                    drilldown.selected = 0;
+                    drilldown.loading = false;
+                    drilldown.truncated = truncated;
+                    drilldown.error = None;
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "Fetch partition level failed");
+                let err = e.to_string();
+                app.complete_query_log_error(log_id, err.clone());
+                if let Screen::Actions(ref mut action_state) = app.screen
+                    && let Some(drilldown) = action_state.drilldown.as_mut()
+                    && drilldown.path == filters
+                    && drilldown.next_column() == Some(column.as_str())
+                {
+                    drilldown.loading = false;
+                    drilldown.error = Some(err);
+                }
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::ActionState;
+    use crate::config::ConnectionConfig;
+
+    fn sample_config() -> ConnectionConfig {
+        ConnectionConfig {
+            url: "http://localhost:8080".to_string(),
+            user: "user".to_string(),
+            password: String::new(),
+        }
+    }
+
+    #[test]
+    fn fetch_table_ddl_auto_populates_results_when_ddl_view_was_pending() {
+        let mut app = App::new(sample_config(), false);
+        // Simulate the user pressing Table DDL ('c', action idx 1) while
+        // recon was still in flight: `trigger_action` selects the action
+        // and switches focus but leaves `results` empty since `metadata`
+        // isn't populated yet.
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 1,
+            ddl_loading: true,
+            ..Default::default()
+        });
+
+        handle_async_result(
+            &mut app,
+            AsyncResult::FetchTableDdl {
+                show_create_log_id: 1,
+                partitioned_by: vec!["date".to_string()],
+                location: "s3://bucket/orders".to_string(),
+                ddl_text: "CREATE TABLE orders (...)".to_string(),
+                show_create_error: None,
+            },
+        );
+
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert!(!state.ddl_loading);
+        let results = state
+            .results
+            .as_ref()
+            .expect("Table DDL results should be auto-populated once recon lands");
+        assert_eq!(
+            results.rows,
+            vec![vec!["CREATE TABLE orders (...)".to_string()]]
+        );
     }
 }

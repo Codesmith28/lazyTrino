@@ -47,7 +47,10 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ),
         Line::from("  g / G                          Jump to top / bottom of active preview pane"),
         Line::from(
-            "  y / Y                          Copy loaded result grid as TSV / export it as CSV",
+            "  < / >                          Scroll active result grid horizontally (left / right)",
+        ),
+        Line::from(
+            "  y                               Copy loaded result grid as TSV (Y exports it as CSV)",
         ),
         Line::from(
             "  h / ← / Esc                    Switch focus to Menu Pane / Go back to Tables list",
@@ -59,9 +62,41 @@ pub fn render(frame: &mut Frame, area: Rect) {
             theme::header_style(),
         )),
         Line::from("  v                              Table View Mode (Infinite Scroll grid)"),
-        Line::from("  d / c / i                      Describe / Table DDL / Info Schema"),
+        Line::from("  c / i                          Table DDL / Info Schema"),
         Line::from("  s / n / p                      Show Stats / Row Count / Sample (20 rows)"),
         Line::from("  P / S                          Partitions Tree / Vertical Schema Inspector"),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Partitioned Table Drill-Down (cd/ls style)",
+            theme::header_style(),
+        )),
+        Line::from(
+            "  (auto)                         Entering a table runs recon (SHOW CREATE TABLE, etc.) up front;",
+        ),
+        Line::from(
+            "                                 Partitions/Schema/Table View wait for it to finish",
+        ),
+        Line::from(
+            "  v on a partitioned table       Table View browses partition values one level at a time",
+        ),
+        Line::from(
+            "                                 instead of querying every row at once (avoids split errors)",
+        ),
+        Line::from(
+            "  l / → / Enter                  Drill into the highlighted partition value (go one level deeper)",
+        ),
+        Line::from(
+            "  h / ←                          Go up one partition level (no-op at the top level)",
+        ),
+        Line::from(
+            "                                 In the leaf record grid, h still goes up a level; l is a",
+        ),
+        Line::from(
+            "                                 no-op there — use < / > to scroll columns instead",
+        ),
+        Line::from(
+            "  Esc                            Always returns to the Menu Pane, regardless of drill-down depth",
+        ),
         Line::from(""),
         Line::from(Span::styled(
             " Search & Custom Query",

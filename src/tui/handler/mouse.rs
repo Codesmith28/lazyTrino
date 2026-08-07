@@ -147,10 +147,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     Screen::Actions(a) => a.selected,
                     _ => 0,
                 };
-                if selected_idx == 7 {
+                if selected_idx == 6 {
                     let max_lines = app.partition_tree_lines.len().saturating_sub(1);
                     app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
-                } else if selected_idx == 8 {
+                } else if selected_idx == 7 {
                     let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
                     app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
                 } else if let Screen::Actions(ref mut a) = app.screen
@@ -180,9 +180,9 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     Screen::Actions(a) => a.selected,
                     _ => 0,
                 };
-                if selected_idx == 7 {
+                if selected_idx == 6 {
                     app.partition_scroll = app.partition_scroll.saturating_sub(1);
-                } else if selected_idx == 8 {
+                } else if selected_idx == 7 {
                     app.schema_scroll = app.schema_scroll.saturating_sub(1);
                 } else if let Screen::Actions(ref mut a) = app.screen
                     && let Some(ref mut res) = a.results
@@ -348,7 +348,7 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
         // Right Main Viewer Pane
         let preview_inner_y = search_height + query_height + 1;
 
-        if state.selected == 7 {
+        if state.selected == 6 {
             // Action::Partitions
             let mut lines = Vec::new();
             for r in start_row..=end_row {
@@ -360,7 +360,7 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
                 }
             }
             return lines.join("\n");
-        } else if state.selected == 8 {
+        } else if state.selected == 7 {
             // Action::Schema
             let mut lines = Vec::new();
             for r in start_row..=end_row {
@@ -463,6 +463,7 @@ mod tests {
             has_more_rows: false,
             invalid_query_error: None,
             selection_anchor: None,
+            filters: Vec::new(),
         };
 
         app.screen = Screen::Actions(ActionState {
@@ -473,6 +474,7 @@ mod tests {
             query_buffer: "SELECT * FROM orders".to_string(),
             query_cursor: 20,
             results: Some(res_state),
+            ..Default::default()
         });
 
         let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0;
@@ -495,10 +497,11 @@ mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 7, // Partitions action
+            selected: 6, // Partitions action
             query_buffer: "".to_string(),
             query_cursor: 0,
             results: None,
+            ..Default::default()
         });
 
         let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0;

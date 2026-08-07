@@ -17,6 +17,7 @@ mod screens {
     pub mod actions;
     pub mod catalog;
     pub mod connect;
+    pub mod drilldown;
     pub mod help;
     pub mod partition_tree;
     pub mod query_inspector;

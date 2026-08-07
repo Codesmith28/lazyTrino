@@ -75,8 +75,14 @@ fn format_tree_node(
     }
 }
 
-pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
-    let mut lines = Vec::new();
+/// Parses a `SHOW CREATE TABLE` DDL string into the ordered list of
+/// partition column names (as declared in `partitioned_by`/`partitioning`)
+/// and the table's storage location. This is the single source of truth
+/// for whether/how a given table is partitioned — it is derived purely
+/// from the live DDL response for that specific table, never hardcoded by
+/// table/schema name. Returns an empty `Vec` for `partition_cols` when the
+/// table is unpartitioned (or the clause is absent).
+pub fn parse_partitioned_by(ddl: &str) -> (Vec<String>, String) {
     let mut location = "s3://warehouse/table_data/".to_string();
     let mut partition_cols: Vec<String> = Vec::new();
 
@@ -104,6 +110,13 @@ pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
     if !location.ends_with('/') {
         location.push('/');
     }
+
+    (partition_cols, location)
+}
+
+pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let (partition_cols, location) = parse_partitioned_by(ddl);
     lines.push(format!(" {location}"));
 
     if partition_cols.is_empty() {
@@ -276,4 +289,50 @@ pub fn render(
         inner,
         &mut scroll_state,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_partitioned_by_extracts_ordered_columns_and_location() {
+        let ddl = r#"
+CREATE TABLE datalake."tenant".events (
+   date varchar COMMENT '',
+   service varchar COMMENT '',
+   account_id varchar COMMENT ''
+)
+WITH (
+   location = 's3://bucket/lakehouse/data/events',
+   partitioned_by = ARRAY['date','service','account_id']
+)
+"#;
+        let (cols, location) = parse_partitioned_by(ddl);
+        assert_eq!(cols, vec!["date", "service", "account_id"]);
+        assert_eq!(location, "s3://bucket/lakehouse/data/events/");
+    }
+
+    #[test]
+    fn parse_partitioned_by_returns_empty_cols_for_unpartitioned_table() {
+        let ddl = r#"
+CREATE TABLE datalake."tenant".lookup (
+   id varchar COMMENT ''
+)
+WITH (
+   location = 's3://bucket/lakehouse/data/lookup'
+)
+"#;
+        let (cols, location) = parse_partitioned_by(ddl);
+        assert!(cols.is_empty());
+        assert_eq!(location, "s3://bucket/lakehouse/data/lookup/");
+    }
+
+    #[test]
+    fn parse_partitioned_by_defaults_location_when_absent() {
+        let ddl = "CREATE TABLE t (id varchar)";
+        let (cols, location) = parse_partitioned_by(ddl);
+        assert!(cols.is_empty());
+        assert_eq!(location, "s3://warehouse/table_data/");
+    }
 }
