@@ -43,6 +43,35 @@ pub struct VerticalColumn {
     pub description: String,
 }
 
+/// Returns the subset of column names safe to include in a `SELECT` list
+/// for row-level drill-down queries. Trino/Parquet can fail an entire
+/// query with an "Unsupported ... Parquet column" error when a `map` or
+/// `row` (struct) typed column's on-disk encoding doesn't match what the
+/// catalog metadata declares — a schema-drift issue seen in some Hudi
+/// tables. Excluding those columns lets the rest of the row still be
+/// readable instead of the whole query failing. Falls back to an empty
+/// list (meaning "use `SELECT *`") when there's no cached schema yet.
+pub fn safe_select_columns(columns: &[VerticalColumn]) -> Vec<String> {
+    if columns.is_empty() {
+        return Vec::new();
+    }
+    let safe: Vec<String> = columns
+        .iter()
+        .filter(|c| {
+            let t = c.data_type.trim().to_ascii_lowercase();
+            !(t.starts_with("map(") || t.starts_with("row(") || t == "map" || t == "row")
+        })
+        .map(|c| c.name.clone())
+        .collect();
+    // If everything got filtered out (unexpected), fall back to `SELECT *`
+    // rather than sending an empty/invalid column list.
+    if safe.is_empty() {
+        Vec::new()
+    } else {
+        safe
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ActivePanel {
     MenuPane,
@@ -94,7 +123,58 @@ pub struct TableState {
     pub selected: usize,
 }
 
-#[derive(Clone)]
+/// Ordered partition-column layout + storage location for a table, parsed
+/// once (per table) from a live `SHOW CREATE TABLE` response during table
+/// entry recon. `partitioned_by` is empty for unpartitioned tables. This is
+/// always derived dynamically from that table's own DDL — never hardcoded
+/// by table/schema name.
+#[derive(Clone, Debug, Default)]
+pub struct TableRecon {
+    pub partitioned_by: Vec<String>,
+    pub location: String,
+    /// Raw `SHOW CREATE TABLE` DDL text fetched during recon. Cached here so
+    /// `Action::TableDDL` can render it instantly without re-querying Trino.
+    pub ddl_text: String,
+}
+
+/// Tracks cd/ls-style drill-down progress through a partitioned table's
+/// hierarchy: which partition columns exist (from `TableRecon`), which
+/// values have been fixed so far (`path`), and the distinct values shown
+/// at each previously-visited depth (`levels_cache`, so navigating back up
+/// with `h` doesn't need to re-query Trino).
+#[derive(Clone, Debug, Default)]
+pub struct DrillDownState {
+    pub partition_cols: Vec<String>,
+    pub path: Vec<(String, String)>,
+    pub levels_cache: Vec<Vec<String>>,
+    pub selected: usize,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub truncated: bool,
+}
+
+impl DrillDownState {
+    /// Depth (0-based) of the level currently being displayed, i.e. how
+    /// many partition columns have already been fixed.
+    pub fn depth(&self) -> usize {
+        self.path.len()
+    }
+
+    /// True once every partition column has a fixed value and the caller
+    /// should switch to the leaf record view instead of another distinct
+    /// value list.
+    pub fn is_leaf(&self) -> bool {
+        self.path.len() >= self.partition_cols.len()
+    }
+
+    /// The next partition column to fetch distinct values for, if any
+    /// levels remain.
+    pub fn next_column(&self) -> Option<&str> {
+        self.partition_cols.get(self.path.len()).map(|s| s.as_str())
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct ActionState {
     pub catalog: String,
     pub schema: String,
@@ -103,6 +183,15 @@ pub struct ActionState {
     pub query_buffer: String,
     pub query_cursor: usize,
     pub results: Option<ResultsState>,
+    pub metadata: Option<TableRecon>,
+    /// True until `SHOW CREATE TABLE` (the DDL/partition-layout part of
+    /// recon) resolves. Only gates `Table DDL` and `Table View`, which only
+    /// need `metadata`, not the slower `$partitions`/info-schema queries.
+    pub ddl_loading: bool,
+    /// True until the `$partitions` and `information_schema.columns` recon
+    /// queries resolve. Gates `Partitions` and `Schema`.
+    pub metadata_loading: bool,
+    pub drilldown: Option<DrillDownState>,
 }
 
 #[derive(Clone)]
@@ -125,6 +214,12 @@ pub struct ResultsState {
     pub has_more_rows: bool,
     pub invalid_query_error: Option<String>,
     pub selection_anchor: Option<usize>,
+    /// Partition predicates (`col`, `value`) baked into this view's query,
+    /// e.g. when viewing leaf-level records reached via partition
+    /// drill-down. Empty for ordinary (non-drill-down) queries. Threaded
+    /// through to `FetchNextPage` so infinite scroll keeps the same
+    /// predicate on subsequent pages.
+    pub filters: Vec<(String, String)>,
 }
 
 impl ResultsState {
@@ -188,7 +283,6 @@ pub enum Mode {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
     TableView,
-    Describe,
     TableDDL,
     InfoSchema,
     ShowStats,
@@ -200,7 +294,6 @@ pub enum Action {
 
 pub const ACTIONS: &[(char, &str, Action)] = &[
     ('v', "Table View Mode", Action::TableView),
-    ('d', "Describe", Action::Describe),
     ('c', "Table DDL", Action::TableDDL),
     ('i', "Info Schema", Action::InfoSchema),
     ('s', "Show Stats", Action::ShowStats),
@@ -214,7 +307,6 @@ impl Action {
     pub fn build_query(&self, catalog: &str, schema: &str, table: &str) -> String {
         match self {
             Action::TableView => crate::trino::queries::page_query(catalog, schema, table, 0, 100),
-            Action::Describe => crate::trino::queries::describe(catalog, schema, table),
             Action::TableDDL => crate::trino::queries::show_create(catalog, schema, table),
             Action::InfoSchema => {
                 crate::trino::queries::info_schema_columns(catalog, schema, table)
@@ -449,11 +541,7 @@ mod tests {
                 Action::TableView,
                 queries::page_query(catalog, schema, table, 0, 100),
             ),
-            (Action::Describe, queries::describe(catalog, schema, table)),
-            (
-                Action::TableDDL,
-                queries::show_create(catalog, schema, table),
-            ),
+            (Action::TableDDL, queries::show_create(catalog, schema, table)),
             (
                 Action::InfoSchema,
                 queries::info_schema_columns(catalog, schema, table),
@@ -474,5 +562,40 @@ mod tests {
         for (action, expected) in cases {
             assert_eq!(action.build_query(catalog, schema, table), expected);
         }
+    }
+
+    fn vcol(name: &str, data_type: &str) -> VerticalColumn {
+        VerticalColumn {
+            index: 0,
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            key_meta: String::new(),
+            description: String::new(),
+        }
+    }
+
+    #[test]
+    fn safe_select_columns_returns_empty_when_no_schema_cached() {
+        assert!(safe_select_columns(&[]).is_empty());
+    }
+
+    #[test]
+    fn safe_select_columns_excludes_map_and_row_typed_columns() {
+        let cols = vec![
+            vcol("event_type", "varchar"),
+            vcol("policy_id", "map(varchar, varchar)"),
+            vcol("nested", "row(a varchar, b bigint)"),
+            vcol("timestamp", "bigint"),
+        ];
+        assert_eq!(
+            safe_select_columns(&cols),
+            vec!["event_type".to_string(), "timestamp".to_string()]
+        );
+    }
+
+    #[test]
+    fn safe_select_columns_falls_back_to_select_star_when_all_columns_unsafe() {
+        let cols = vec![vcol("policy_id", "map(varchar, varchar)")];
+        assert!(safe_select_columns(&cols).is_empty());
     }
 }

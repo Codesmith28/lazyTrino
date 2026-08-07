@@ -99,6 +99,10 @@ pub enum Command {
         catalog: String,
         schema: String,
         table: String,
+        /// Partition predicates baked into `query`, carried along so the
+        /// resulting `ResultsState` (and any subsequent `FetchNextPage`)
+        /// keeps using them. Empty for ordinary, non-drill-down queries.
+        filters: Vec<(String, String)>,
     },
     FetchNextPage {
         catalog: String,
@@ -106,6 +110,18 @@ pub enum Command {
         table: String,
         offset: usize,
         limit: usize,
+        filters: Vec<(String, String)>,
+    },
+    /// Fetches the distinct values of the next unfixed partition column in
+    /// a cd/ls-style drill-down, scoped by the partition predicates already
+    /// fixed by the levels above it (`filters`). Used only for tables whose
+    /// `partitioned_by` (from live `SHOW CREATE TABLE` recon) is non-empty.
+    FetchPartitionLevel {
+        catalog: String,
+        schema: String,
+        table: String,
+        filters: Vec<(String, String)>,
+        column: String,
     },
 }
 
@@ -129,6 +145,17 @@ pub enum AsyncResult {
         schema: String,
         result: Result<Vec<String>, TrinoClientError>,
     },
+    /// Sent as soon as `SHOW CREATE TABLE` returns — before the slower
+    /// `$partitions` / `information_schema.columns` recon queries finish —
+    /// so `Table DDL` and the partitioned-ness needed by `Table View` are
+    /// available immediately instead of waiting on the full recon batch.
+    FetchTableDdl {
+        show_create_log_id: usize,
+        partitioned_by: Vec<String>,
+        location: String,
+        ddl_text: String,
+        show_create_error: Option<TrinoClientError>,
+    },
     FetchTableMetadata {
         partitions_log_id: usize,
         cols_log_id: usize,
@@ -145,12 +172,19 @@ pub enum AsyncResult {
         schema: String,
         table: String,
         is_paginated: bool,
+        filters: Vec<(String, String)>,
         result: Result<crate::trino::types::QueryResults, TrinoClientError>,
     },
     FetchNextPage {
         log_id: usize,
         offset: usize,
         limit: usize,
+        result: Result<crate::trino::types::QueryResults, TrinoClientError>,
+    },
+    FetchPartitionLevel {
+        log_id: usize,
+        filters: Vec<(String, String)>,
+        column: String,
         result: Result<crate::trino::types::QueryResults, TrinoClientError>,
     },
 }

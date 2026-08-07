@@ -14,19 +14,19 @@ Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[C
 |  (Resizable Panel Split)          +-------------------------------------------------------------------+
 |                                   |  Table Query Bar [Press q or : to write query]                    |
 |  ▸ [v] Table View Mode            |  SQL > SELECT * FROM "catalog"."schema"."table" LIMIT 100         |
-|    [d] Describe                   +-------------------------------------------------------------------+
-|    [c] Table DDL                  |  Preview — <table_name> (Table View Mode)                         |
-|    [i] Info Schema                |                                                                   |
-|    [s] Show Stats                 |  +----+-------------+--------------+                              |
-|    [n] Count                      |  | id | name        | status       |                              |
-|    [p] Sample Mode (20 rows)      |  +----+-------------+--------------+                              |
-|    [P] Partitions                 |  | 1  | Alice       | ACTIVE       |                              |
-|    [S] Schema                     |  | 2  | Bob         | INACTIVE     |                              |
+|    [c] Table DDL                  +-------------------------------------------------------------------+
+|    [i] Info Schema                |  Preview — <table_name> (Table View Mode)                         |
+|    [s] Show Stats                 |                                                                   |
+|    [n] Count                      |  +----+-------------+--------------+                              |
+|    [p] Sample Mode (20 rows)      |  | id | name        | status       |                              |
+|    [P] Partitions                 |  +----+-------------+--------------+                              |
+|    [S] Schema                     |  | 1  | Alice       | ACTIVE       |                              |
+|                                   |  | 2  | Bob         | INACTIVE     |                              |
 |                                   |  +----+-------------+--------------+                              |
 +-----------------------------------+-------------------------------------------------------------------+
 |  Query Inspector & Audit Logs [Status: SUCCESS | Duration: 42ms | Rows: 100]                          |
 +-------------------------------------------------------------------------------------------------------+
-|  Footer Hints [ j/k:rows  h/l:cols  g/G:top/btm  q/:query  Esc:menu  Tab:pane  ?:help  Ctrl+C:quit ]  |
+|  Footer Hints [ j/k:rows  </>:cols  g/G:top/btm  q/:query  Esc:menu  Tab:pane  ?:help  Ctrl+C:quit ]  |
 +-------------------------------------------------------------------------------------------------------+
 ```
 
@@ -38,7 +38,6 @@ Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[C
 - 🔍 **Centralized Real-Time Search (`/`)**: Filter catalogs, schemas, tables, and columns instantly across the active hierarchy.
 - ⚡ **Quick Table Actions**:
   - `v` **Table View Mode**: Full interactive table browser with infinite scroll.
-  - `d` **Describe Table**: Column definitions, data types, and nullability.
   - `c` **Table DDL**: `SHOW CREATE TABLE` statement.
   - `i` **Information Schema**: Column metadata from `information_schema.columns`.
   - `s` **Show Statistics**: Trino table statistics (`SHOW STATS FOR table`).
@@ -160,7 +159,6 @@ When a table is selected, press the corresponding action hotkey:
 | Key | Action | Description |
 | --- | --- | --- |
 | `v` | Table View | Open interactive dataset viewer with infinite scroll |
-| `d` | Describe | View column names, data types, and nullability |
 | `c` | DDL | Execute `SHOW CREATE TABLE` |
 | `i` | Info Schema | Query `information_schema.columns` metadata |
 | `s` | Show Stats | Execute `SHOW STATS FOR table` |
@@ -174,14 +172,22 @@ When a table is selected, press the corresponding action hotkey:
 | Key | Action |
 | --- | --- |
 | `j` / `k` or `↓` / `↑` | Scroll result table vertically |
-| `h` / `l` or `←` / `→` | Scroll result table horizontally |
+| `<` / `>` | Scroll result table horizontally |
 | `g` / `G` | Jump to top / bottom of loaded results |
-| `y` / `Y` | Copy current results to clipboard as TSV (`y`) / export to CSV file (`Y`) |
+| `y` | Copy current results to clipboard as TSV |
+| `Y` | Export current results to a CSV file |
 | `q` or `:` | Focus Interactive SQL Query Bar |
 | `Enter` *(Query Bar)* | Execute SQL query |
 | `Shift + ← / →` *(Query Bar)* | Select text in query buffer |
 | `Ctrl+C` / `Ctrl+V` *(Query Bar)* | Copy selected query text / paste clipboard content |
 | `Esc` | Return focus to Menu Pane / cancel query editing |
+
+> **Note on `h`/`l` vs. `<`/`>`:** `h`/`l` (and `←`/`→`) are always
+> *hierarchical* — they move up/down the catalog → schema → table → action
+> tree, and in a partitioned Table View's drill-down, `h` steps up one
+> partition level. They never scroll a result grid. To scroll a wide
+> result grid horizontally (in any results view, including the Table
+> View drill-down's leaf record grid), use `<` / `>` instead.
 
 ### Mouse Controls
 
