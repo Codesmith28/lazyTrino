@@ -244,7 +244,8 @@ pub fn render(
                     let wrapped_lines = wrap_text(val, col_w);
                     max_row_height = max_row_height.max(wrapped_lines.len() as u16);
                     // See actions.rs for why this must be gated by pane focus.
-                    let is_mouse_sel = is_active && app.is_area_mouse_selected(inner.x, inner.width, row_y);
+                    let is_mouse_sel =
+                        is_active && app.is_area_mouse_selected(inner.x, inner.width, row_y);
                     let style = if is_mouse_sel {
                         theme::selection_style()
                     } else {

@@ -58,7 +58,8 @@ pub fn render(
             // otherwise it stays highlighted forever since the underlying
             // anchor/current coordinates are only cleared by the *next*
             // mouse click, not by any keyboard-driven focus change.
-            let is_mouse_sel = is_active && app.is_area_mouse_selected(inner.x, inner.width, item_y);
+            let is_mouse_sel =
+                is_active && app.is_area_mouse_selected(inner.x, inner.width, item_y);
 
             let is_selected = i == selected;
             let prefix = if is_selected { "▸ " } else { "  " };
