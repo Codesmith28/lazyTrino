@@ -26,7 +26,7 @@ use crate::{
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let title = if let Some((ref msg, ref instant)) = app.copied_toast {
-        if instant.elapsed().as_secs() < 3 {
+        if instant.elapsed().as_secs() < 2 {
             format!(" Executed Queries — Copied: \"{}\" ", msg)
         } else {
             " Executed Queries ".to_string()

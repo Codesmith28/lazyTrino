@@ -293,7 +293,7 @@ fn render_copied_toast(frame: &mut Frame, area: Rect, app: &App) {
     let Some((ref msg, ref instant)) = app.copied_toast else {
         return;
     };
-    if instant.elapsed().as_secs() >= 3 {
+    if instant.elapsed().as_secs() >= 2 {
         return;
     }
 
