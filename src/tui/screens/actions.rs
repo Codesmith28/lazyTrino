@@ -24,6 +24,7 @@ use crate::{
     tui::theme,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     frame: &mut Frame,
     area: Rect,

@@ -677,7 +677,13 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 let values: Vec<String> = results
                     .data
                     .into_iter()
-                    .filter_map(|mut r| if r.is_empty() { None } else { Some(r.remove(0)) })
+                    .filter_map(|mut r| {
+                        if r.is_empty() {
+                            None
+                        } else {
+                            Some(r.remove(0))
+                        }
+                    })
                     .collect();
                 if let Screen::Actions(ref mut action_state) = app.screen
                     && let Some(drilldown) = action_state.drilldown.as_mut()

@@ -65,11 +65,7 @@ pub fn safe_select_columns(columns: &[VerticalColumn]) -> Vec<String> {
         .collect();
     // If everything got filtered out (unexpected), fall back to `SELECT *`
     // rather than sending an empty/invalid column list.
-    if safe.is_empty() {
-        Vec::new()
-    } else {
-        safe
-    }
+    if safe.is_empty() { Vec::new() } else { safe }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -541,7 +537,10 @@ mod tests {
                 Action::TableView,
                 queries::page_query(catalog, schema, table, 0, 100),
             ),
-            (Action::TableDDL, queries::show_create(catalog, schema, table)),
+            (
+                Action::TableDDL,
+                queries::show_create(catalog, schema, table),
+            ),
             (
                 Action::InfoSchema,
                 queries::info_schema_columns(catalog, schema, table),
