@@ -81,10 +81,7 @@ pub fn render(
     }
 
     let items_area = if dd.truncated && inner.height > 1 {
-        let notice = Rect {
-            height: 1,
-            ..inner
-        };
+        let notice = Rect { height: 1, ..inner };
         let list_area = Rect {
             y: inner.y + 1,
             height: inner.height.saturating_sub(1),
