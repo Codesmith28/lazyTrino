@@ -43,6 +43,35 @@ pub struct VerticalColumn {
     pub description: String,
 }
 
+/// Returns the subset of column names safe to include in a `SELECT` list
+/// for row-level drill-down queries. Trino/Parquet can fail an entire
+/// query with an "Unsupported ... Parquet column" error when a `map` or
+/// `row` (struct) typed column's on-disk encoding doesn't match what the
+/// catalog metadata declares — a schema-drift issue seen in some Hudi
+/// tables. Excluding those columns lets the rest of the row still be
+/// readable instead of the whole query failing. Falls back to an empty
+/// list (meaning "use `SELECT *`") when there's no cached schema yet.
+pub fn safe_select_columns(columns: &[VerticalColumn]) -> Vec<String> {
+    if columns.is_empty() {
+        return Vec::new();
+    }
+    let safe: Vec<String> = columns
+        .iter()
+        .filter(|c| {
+            let t = c.data_type.trim().to_ascii_lowercase();
+            !(t.starts_with("map(") || t.starts_with("row(") || t == "map" || t == "row")
+        })
+        .map(|c| c.name.clone())
+        .collect();
+    // If everything got filtered out (unexpected), fall back to `SELECT *`
+    // rather than sending an empty/invalid column list.
+    if safe.is_empty() {
+        Vec::new()
+    } else {
+        safe
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ActivePanel {
     MenuPane,
@@ -254,7 +283,6 @@ pub enum Mode {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
     TableView,
-    Describe,
     TableDDL,
     InfoSchema,
     ShowStats,
@@ -266,7 +294,6 @@ pub enum Action {
 
 pub const ACTIONS: &[(char, &str, Action)] = &[
     ('v', "Table View Mode", Action::TableView),
-    ('d', "Describe", Action::Describe),
     ('c', "Table DDL", Action::TableDDL),
     ('i', "Info Schema", Action::InfoSchema),
     ('s', "Show Stats", Action::ShowStats),
@@ -280,7 +307,6 @@ impl Action {
     pub fn build_query(&self, catalog: &str, schema: &str, table: &str) -> String {
         match self {
             Action::TableView => crate::trino::queries::page_query(catalog, schema, table, 0, 100),
-            Action::Describe => crate::trino::queries::describe(catalog, schema, table),
             Action::TableDDL => crate::trino::queries::show_create(catalog, schema, table),
             Action::InfoSchema => {
                 crate::trino::queries::info_schema_columns(catalog, schema, table)
@@ -515,11 +541,7 @@ mod tests {
                 Action::TableView,
                 queries::page_query(catalog, schema, table, 0, 100),
             ),
-            (Action::Describe, queries::describe(catalog, schema, table)),
-            (
-                Action::TableDDL,
-                queries::show_create(catalog, schema, table),
-            ),
+            (Action::TableDDL, queries::show_create(catalog, schema, table)),
             (
                 Action::InfoSchema,
                 queries::info_schema_columns(catalog, schema, table),
@@ -540,5 +562,40 @@ mod tests {
         for (action, expected) in cases {
             assert_eq!(action.build_query(catalog, schema, table), expected);
         }
+    }
+
+    fn vcol(name: &str, data_type: &str) -> VerticalColumn {
+        VerticalColumn {
+            index: 0,
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            key_meta: String::new(),
+            description: String::new(),
+        }
+    }
+
+    #[test]
+    fn safe_select_columns_returns_empty_when_no_schema_cached() {
+        assert!(safe_select_columns(&[]).is_empty());
+    }
+
+    #[test]
+    fn safe_select_columns_excludes_map_and_row_typed_columns() {
+        let cols = vec![
+            vcol("event_type", "varchar"),
+            vcol("policy_id", "map(varchar, varchar)"),
+            vcol("nested", "row(a varchar, b bigint)"),
+            vcol("timestamp", "bigint"),
+        ];
+        assert_eq!(
+            safe_select_columns(&cols),
+            vec!["event_type".to_string(), "timestamp".to_string()]
+        );
+    }
+
+    #[test]
+    fn safe_select_columns_falls_back_to_select_star_when_all_columns_unsafe() {
+        let cols = vec![vcol("policy_id", "map(varchar, varchar)")];
+        assert!(safe_select_columns(&cols).is_empty());
     }
 }
