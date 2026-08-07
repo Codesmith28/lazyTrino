@@ -431,7 +431,11 @@ mod tests {
     fn test_extract_selected_text_catalog_screen() {
         let mut app = sample_app();
         app.screen = Screen::Catalog(CatalogState {
-            items: vec!["iceberg".to_string(), "tpch".to_string(), "system".to_string()],
+            items: vec![
+                "iceberg".to_string(),
+                "tpch".to_string(),
+                "system".to_string(),
+            ],
             selected: 0,
         });
 
