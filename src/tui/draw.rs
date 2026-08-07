@@ -197,7 +197,9 @@ fn footer_hint(app: &App) -> Option<&'static str> {
                         Some(Action::TableView) => Some(
                             " q/:query  Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
                         ),
-                        _ => Some(" Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit "),
+                        _ => Some(
+                            " Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
+                        ),
                     },
                 }
             }
@@ -549,11 +551,9 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                         }
                         crate::app::Action::TableView => {
                             let drilldown_browsing = match &app.screen {
-                                Screen::Actions(state) => state
-                                    .drilldown
-                                    .as_ref()
-                                    .filter(|d| !d.is_leaf())
-                                    .cloned(),
+                                Screen::Actions(state) => {
+                                    state.drilldown.as_ref().filter(|d| !d.is_leaf()).cloned()
+                                }
                                 _ => None,
                             };
                             if let Some(dd) = drilldown_browsing {
@@ -609,10 +609,7 @@ pub(super) fn ui(frame: &mut Frame, app: &App) {
                                         format!(" [{spin}] "),
                                         theme::warning_bold_style(),
                                     ),
-                                    Span::styled(
-                                        "FETCHING TABLE DDL...",
-                                        theme::info_bold_style(),
-                                    ),
+                                    Span::styled("FETCHING TABLE DDL...", theme::info_bold_style()),
                                 ]))
                                 .alignment(Alignment::Center);
                                 frame.render_widget(spin_text, inner);
