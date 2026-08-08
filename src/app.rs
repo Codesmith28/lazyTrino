@@ -119,6 +119,57 @@ pub struct TableState {
     pub selected: usize,
 }
 
+pub trait SelectableList {
+    fn items(&self) -> &[String];
+    fn selected(&self) -> usize;
+    fn set_selected(&mut self, selected: usize);
+    fn selected_item(&self) -> Option<&str> {
+        let items = self.items();
+        let idx = self.selected();
+        if idx < items.len() {
+            Some(&items[idx])
+        } else {
+            None
+        }
+    }
+}
+
+impl SelectableList for CatalogState {
+    fn items(&self) -> &[String] {
+        &self.items
+    }
+    fn selected(&self) -> usize {
+        self.selected
+    }
+    fn set_selected(&mut self, selected: usize) {
+        self.selected = selected;
+    }
+}
+
+impl SelectableList for SchemaState {
+    fn items(&self) -> &[String] {
+        &self.items
+    }
+    fn selected(&self) -> usize {
+        self.selected
+    }
+    fn set_selected(&mut self, selected: usize) {
+        self.selected = selected;
+    }
+}
+
+impl SelectableList for TableState {
+    fn items(&self) -> &[String] {
+        &self.items
+    }
+    fn selected(&self) -> usize {
+        self.selected
+    }
+    fn set_selected(&mut self, selected: usize) {
+        self.selected = selected;
+    }
+}
+
 /// Ordered partition-column layout + storage location for a table, parsed
 /// once (per table) from a live `SHOW CREATE TABLE` response during table
 /// entry recon. `partitioned_by` is empty for unpartitioned tables. This is
