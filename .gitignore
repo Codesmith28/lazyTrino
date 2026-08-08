@@ -2,3 +2,4 @@
 /dist
 /lazyTrino
 *.log
+.DS_Store
