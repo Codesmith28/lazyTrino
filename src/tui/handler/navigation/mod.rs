@@ -164,9 +164,9 @@ pub fn get_selected(screen: &Screen) -> Option<usize> {
 
 #[cfg(test)]
 pub mod tests {
-    use super::drilldown::*;
     use super::*;
-    use crate::app::{ActionState, DrillDownState, ResultsState, TableRecon};
+    use super::drilldown::*;
+    use crate::app::{ActionState, DrillDownState, Mode, ResultsState, TableRecon};
     use crate::config::ConnectionConfig;
     use crate::trino::client::TrinoClient;
     use crate::tui::handler::Command;
@@ -728,5 +728,67 @@ pub mod tests {
         };
         assert!(state.drilldown.as_ref().unwrap().path.is_empty());
         assert!(state.results.is_none());
+    }
+
+    #[test]
+    fn connect_pane_allows_typing_digits_and_symbols_without_triggering_shortcuts() {
+        let mut app = sample_app(Screen::Connect(ConnectState {
+            url: "http://localhost:".to_string(),
+            user: "trino_".to_string(),
+            password: "pass_".to_string(),
+            focused: 0,
+            loading: false,
+            error: None,
+        }));
+
+        // Type digits into URL field (focused = 0)
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('8')));
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('0')));
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('8')));
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('0')));
+        // Type / into URL
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('/')));
+
+        let Screen::Connect(ref state) = app.screen else {
+            panic!("expected connect screen");
+        };
+        assert_eq!(state.url, "http://localhost:8080/");
+        assert!(app.number_buffer.is_empty(), "number_buffer must not be populated on connect screen");
+        assert!(matches!(app.mode, Mode::Normal), "typing / on connect screen must not enter Search mode");
+
+        // Move focus to user (focused = 1)
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Tab));
+        let Screen::Connect(ref state) = app.screen else {
+            panic!("expected connect screen");
+        };
+        assert_eq!(state.focused, 1);
+
+        // Type digits into username
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('1')));
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('2')));
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('3')));
+
+        let Screen::Connect(ref state) = app.screen else {
+            panic!("expected connect screen");
+        };
+        assert_eq!(state.user, "trino_123");
+
+        // Move focus to password (focused = 2) via Down arrow
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Down));
+        let Screen::Connect(ref state) = app.screen else {
+            panic!("expected connect screen");
+        };
+        assert_eq!(state.focused, 2);
+
+        // Type digits and special characters into password
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('4')));
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('5')));
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('?')));
+
+        let Screen::Connect(ref state) = app.screen else {
+            panic!("expected connect screen");
+        };
+        assert_eq!(state.password, "pass_45?");
+        assert!(!matches!(app.screen, Screen::Help), "typing ? on connect screen must not open Help");
     }
 }

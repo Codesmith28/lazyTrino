@@ -205,6 +205,10 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return None;
     }
 
+    if matches!(app.screen, Screen::Connect(_)) {
+        return navigation::connect_keys(app, key);
+    }
+
     if navigation::handle_pane_focus_keys(app, key) {
         return None;
     }
