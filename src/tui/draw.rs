@@ -16,6 +16,59 @@ fn spinner(app: &App) -> String {
     SPINNER_FRAMES[idx].to_string()
 }
 
+pub fn chunk_query_buffer<'a>(
+    buf: &'a str,
+    line0_cap: usize,
+    inner_w: usize,
+) -> Vec<(usize, usize, &'a str)> {
+    if buf.is_empty() {
+        return vec![(0, 0, "")];
+    }
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    let mut cap = line0_cap.max(1);
+
+    while start < buf.len() {
+        let mut byte_count = 0;
+        let mut char_count = 0;
+        for (idx, ch) in buf[start..].char_indices() {
+            if char_count >= cap {
+                break;
+            }
+            char_count += 1;
+            byte_count = idx + ch.len_utf8();
+        }
+        let end = start + byte_count;
+        chunks.push((start, end, &buf[start..end]));
+        start = end;
+        cap = inner_w.max(1);
+    }
+    chunks
+}
+
+pub fn cursor_line_and_col(
+    buf: &str,
+    cursor: usize,
+    line0_cap: usize,
+    inner_w: usize,
+    prefix_len: usize,
+) -> (usize, usize) {
+    let cursor = cursor.min(buf.len());
+    let chunks = chunk_query_buffer(buf, line0_cap, inner_w);
+    for (line_idx, (start, end, _)) in chunks.iter().enumerate() {
+        if cursor >= *start && (cursor < *end || line_idx == chunks.len() - 1) {
+            let char_offset = buf[*start..cursor.min(*end)].chars().count();
+            let col = if line_idx == 0 {
+                prefix_len + char_offset
+            } else {
+                char_offset
+            };
+            return (line_idx, col);
+        }
+    }
+    (0, prefix_len)
+}
+
 fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
     let is_editing = matches!(app.mode, Mode::Search);
     let title = if is_editing {
@@ -30,27 +83,57 @@ fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
         .border_type(BorderType::Rounded)
         .border_style(theme::border_style(is_editing));
 
-    let search_text = if app.search_query.is_empty() {
-        Span::styled(
+    let inner_width = area.width.saturating_sub(2).max(1) as usize;
+    let line0_cap = inner_width.saturating_sub(3);
+
+    let (lines, cursor_line, cursor_col) = if app.search_query.is_empty() {
+        let span = Span::styled(
             "Type to filter catalogs, schemas, tables, and columns...",
             theme::muted_style(),
+        );
+        (
+            vec![Line::from(vec![Span::raw(" / "), span])],
+            0,
+            3,
         )
     } else {
-        Span::styled(&app.search_query, theme::bold_text_style())
+        let chunks = chunk_query_buffer(&app.search_query, line0_cap, inner_width);
+        let mut lines = Vec::new();
+        for (line_idx, (_, _, chunk_str)) in chunks.iter().enumerate() {
+            if line_idx == 0 {
+                lines.push(Line::from(vec![
+                    Span::raw(" / "),
+                    Span::styled(*chunk_str, theme::bold_text_style()),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled(*chunk_str, theme::bold_text_style()),
+                ]));
+            }
+        }
+        let (cline, ccol) = cursor_line_and_col(
+            &app.search_query,
+            app.search_query.len(),
+            line0_cap,
+            inner_width,
+            3,
+        );
+        (lines, cline, ccol)
     };
 
-    let p = Paragraph::new(Line::from(vec![Span::raw(" / "), search_text]))
-        .block(block)
-        .wrap(ratatui::widgets::Wrap { trim: false });
+    let visible_lines = area.height.saturating_sub(2).max(1) as usize;
+    let mut scroll_y: u16 = 0;
+    if is_editing && cursor_line >= visible_lines {
+        scroll_y = (cursor_line - visible_lines + 1) as u16;
+    }
+
+    let p = Paragraph::new(lines).block(block).scroll((scroll_y, 0));
     frame.render_widget(p, area);
 
-    if is_editing {
-        let inner_width = area.width.saturating_sub(2).max(1) as usize;
-        let cursor_index = 3 + app.search_query.len();
-        let line_offset = cursor_index / inner_width;
-        let col_offset = cursor_index % inner_width;
-        let cursor_x = area.x + 1 + (col_offset as u16);
-        let cursor_y = area.y + 1 + (line_offset as u16);
+    if is_editing && cursor_line >= scroll_y as usize {
+        let rel_line = cursor_line - scroll_y as usize;
+        let cursor_x = area.x + 1 + (cursor_col as u16);
+        let cursor_y = area.y + 1 + (rel_line as u16);
         if cursor_y < area.y + area.height - 1 && cursor_x < area.x + area.width - 1 {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
@@ -96,67 +179,68 @@ fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
         _ => ("", 0, None),
     };
 
-    let (spans, cursor_pos) = if buf.is_empty() {
+    let inner_w = area.width.saturating_sub(2).max(1) as usize;
+    let line0_cap = inner_w.saturating_sub(7);
+
+    let (lines, cursor_line, cursor_col) = if buf.is_empty() {
+        let span = Span::styled(
+            "Write query (e.g. SELECT * FROM table)...",
+            theme::muted_style(),
+        );
         (
-            vec![Span::styled(
-                "Write query (e.g. SELECT * FROM table)...",
-                theme::muted_style(),
-            )],
-            if is_editing { Some(0) } else { None },
+            vec![Line::from(vec![
+                Span::styled(" SQL > ", theme::warning_style()),
+                span,
+            ])],
+            0,
+            7,
         )
-    } else if is_editing {
-        if let Some((sel_start, sel_end)) = sel_range {
-            let sel_start = sel_start.min(buf.len());
-            let sel_end = sel_end.min(buf.len());
-            let before = &buf[..sel_start];
-            let selected = &buf[sel_start..sel_end];
-            let after = &buf[sel_end..];
-            (
-                vec![
-                    Span::styled(before, theme::bold_text_style()),
-                    Span::styled(selected, theme::query_selection_style()),
-                    Span::styled(after, theme::bold_text_style()),
-                ],
-                Some(cursor),
-            )
-        } else {
-            (
-                vec![Span::styled(buf, theme::bold_text_style())],
-                Some(cursor),
-            )
-        }
     } else {
-        (vec![Span::styled(buf, theme::bold_text_style())], None)
+        let chunks = chunk_query_buffer(buf, line0_cap, inner_w);
+        let mut lines = Vec::new();
+        for (line_idx, (start, end, chunk_str)) in chunks.iter().enumerate() {
+            let mut spans = Vec::new();
+            if line_idx == 0 {
+                spans.push(Span::styled(" SQL > ", theme::warning_style()));
+            }
+            if is_editing && let Some((sel_start, sel_end)) = sel_range {
+                let s_start = sel_start.clamp(*start, *end);
+                let s_end = sel_end.clamp(*start, *end);
+                if s_start < s_end {
+                    let before = &buf[*start..s_start];
+                    let selected = &buf[s_start..s_end];
+                    let after = &buf[s_end..*end];
+                    if !before.is_empty() {
+                        spans.push(Span::styled(before, theme::bold_text_style()));
+                    }
+                    spans.push(Span::styled(selected, theme::query_selection_style()));
+                    if !after.is_empty() {
+                        spans.push(Span::styled(after, theme::bold_text_style()));
+                    }
+                } else {
+                    spans.push(Span::styled(*chunk_str, theme::bold_text_style()));
+                }
+            } else {
+                spans.push(Span::styled(*chunk_str, theme::bold_text_style()));
+            }
+            lines.push(Line::from(spans));
+        }
+        let (cline, ccol) = cursor_line_and_col(buf, cursor, line0_cap, inner_w, 7);
+        (lines, cline, ccol)
     };
 
-    let inner_w = area.width.saturating_sub(2).max(1) as usize;
     let visible_lines = area.height.saturating_sub(2).max(1) as usize;
-
     let mut scroll_y: u16 = 0;
-    if is_editing && let Some(pos) = cursor_pos {
-        let cursor_index = 7 + pos;
-        let line_offset = cursor_index / inner_w;
-        if line_offset >= visible_lines {
-            scroll_y = (line_offset - visible_lines + 1) as u16;
-        }
+    if is_editing && cursor_line >= visible_lines {
+        scroll_y = (cursor_line - visible_lines + 1) as u16;
     }
 
-    let mut line_spans = vec![Span::styled(" SQL > ", theme::warning_style())];
-    line_spans.extend(spans);
-
-    let p = Paragraph::new(Line::from(line_spans))
-        .block(block)
-        .wrap(ratatui::widgets::Wrap { trim: false })
-        .scroll((scroll_y, 0));
+    let p = Paragraph::new(lines).block(block).scroll((scroll_y, 0));
     frame.render_widget(p, area);
 
-    if is_editing && let Some(pos) = cursor_pos {
-        let cursor_index = 7 + pos;
-        let line_offset = cursor_index / inner_w;
-        let col_offset = cursor_index % inner_w;
-
-        let rel_line = line_offset.saturating_sub(scroll_y as usize);
-        let cursor_x = area.x + 1 + (col_offset as u16);
+    if is_editing && cursor_line >= scroll_y as usize {
+        let rel_line = cursor_line - scroll_y as usize;
+        let cursor_x = area.x + 1 + (cursor_col as u16);
         let cursor_y = area.y + 1 + (rel_line as u16);
         if cursor_y < area.y + area.height - 1 && cursor_x < area.x + area.width - 1 {
             frame.set_cursor_position((cursor_x, cursor_y));
