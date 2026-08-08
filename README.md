@@ -6,6 +6,12 @@ Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[C
 
 ---
 
+## Demo
+
+![lazyTrino demo](demos/demo.gif)
+
+---
+
 ## Layout Overview
 
 ```
