@@ -7,77 +7,6 @@ use ratatui::{
 
 use crate::tui::theme;
 
-#[derive(Default)]
-#[allow(dead_code)]
-struct TreeNode {
-    name: String,
-    children: Vec<TreeNode>,
-}
-
-#[allow(dead_code)]
-impl TreeNode {
-    fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            children: Vec::new(),
-        }
-    }
-
-    fn insert_path(&mut self, segments: &[&str]) {
-        if segments.is_empty() {
-            return;
-        }
-        let head = segments[0];
-        let tail = &segments[1..];
-
-        if let Some(child) = self.children.iter_mut().find(|c| c.name == head) {
-            child.insert_path(tail);
-        } else {
-            let mut child = TreeNode::new(head);
-            child.insert_path(tail);
-            self.children.push(child);
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn format_tree_node(
-    node: &TreeNode,
-    prefix: &str,
-    is_last: bool,
-    depth: usize,
-    lines: &mut Vec<String>,
-) {
-    if depth > 0 {
-        let branch = if is_last { "└── " } else { "├── " };
-        let level_tag = format!("  (Level {})", depth);
-        lines.push(format!("{prefix}{branch}{}/{level_tag}", node.name));
-    }
-
-    let child_prefix = if depth == 0 {
-        " ".to_string()
-    } else if is_last {
-        format!("{prefix}    ")
-    } else {
-        format!("{prefix}│   ")
-    };
-
-    if node.children.is_empty() && depth > 0 {
-        lines.push(format!(
-            "{child_prefix}├── .hoodie/                (Apache Hudi Metadata)"
-        ));
-        lines.push(format!(
-            "{child_prefix}└── data_files.parquet       (Apache Parquet Data Files)"
-        ));
-    } else {
-        let total_children = node.children.len();
-        for (i, child) in node.children.iter().enumerate() {
-            let child_is_last = i == total_children - 1;
-            format_tree_node(child, &child_prefix, child_is_last, depth + 1, lines);
-        }
-    }
-}
-
 /// Parses a `SHOW CREATE TABLE` DDL string into the ordered list of
 /// partition column names (as declared in `partitioned_by`/`partitioning`)
 /// and the table's storage location. This is the single source of truth
@@ -171,71 +100,6 @@ pub fn parse_show_create_to_tree_lines(ddl: &str, override_location: Option<&str
             "{prefix}└── data_files.parquet       (Apache Parquet Data Files)"
         ));
     }
-
-    lines
-}
-
-#[allow(dead_code)]
-pub fn build_tree_lines(raw_partitions: &[String], override_location: Option<&str>) -> Vec<String> {
-    if raw_partitions.is_empty() {
-        return vec![" (No partitions found)".to_string()];
-    }
-
-    if raw_partitions.len() == 1
-        && (raw_partitions[0].contains("CREATE TABLE") || raw_partitions[0].contains("WITH ("))
-    {
-        return parse_show_create_to_tree_lines(&raw_partitions[0], override_location);
-    }
-
-    let mut lines = Vec::new();
-    let mut base_prefix = override_location
-        .filter(|l| !l.is_empty())
-        .map(|l| if l.ends_with('/') { l.to_string() } else { format!("{l}/") })
-        .unwrap_or_else(|| "s3://warehouse/table_data/".to_string());
-
-    if let Some(first) = raw_partitions.first()
-        && (first.starts_with("s3://") || first.starts_with("hdfs://") || first.starts_with('/'))
-    {
-        let parts: Vec<&str> = first.split('/').collect();
-        if parts.len() > 3 {
-            base_prefix = parts[..parts.len().saturating_sub(2)].join("/") + "/";
-        }
-    }
-
-    lines.push(format!(" {base_prefix}"));
-
-    let mut root = TreeNode::new("root");
-    for p_str in raw_partitions.iter().take(20) {
-        let clean = p_str.trim();
-        let segments: Vec<&str> = if clean.starts_with('{') && clean.contains('=') {
-            let inside = clean.trim_start_matches('{').split('}').next().unwrap_or(clean);
-            inside
-                .split(',')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .collect()
-        } else {
-            let path_clean = clean.trim_matches('/');
-            path_clean
-                .split('/')
-                .filter(|s| {
-                    s.contains('=')
-                        || (!s.starts_with("s3:")
-                            && !s.starts_with("hdfs:")
-                            && !s.ends_with(".parquet")
-                            && !s.ends_with(".orc")
-                            && *s != "data"
-                            && *s != "table_data"
-                            && !s.is_empty())
-                })
-                .collect()
-        };
-        if !segments.is_empty() {
-            root.insert_path(&segments);
-        }
-    }
-
-    format_tree_node(&root, "", true, 0, &mut lines);
 
     lines
 }
@@ -383,33 +247,20 @@ WITH (
     }
 
     #[test]
-    fn build_tree_lines_parses_iceberg_partition_structs() {
-        let raw = vec![
-            "{shipdate_year=22, shipmode=TRUCK}".to_string(),
-            "{shipdate_year=22, shipmode=AIR}".to_string(),
-            "{shipdate_year=24, shipmode=RAIL}".to_string(),
-        ];
-        let lines = build_tree_lines(&raw, Some("s3://warehouse/demo/lineitem/"));
-        assert_eq!(lines[0], " s3://warehouse/demo/lineitem/");
-        assert!(lines.iter().any(|l| l.contains("shipdate_year=22/")));
-        assert!(lines.iter().any(|l| l.contains("shipmode=TRUCK/")));
-        assert!(lines.iter().any(|l| l.contains("shipmode=AIR/")));
-        assert!(lines.iter().any(|l| l.contains("shipdate_year=24/")));
-        assert!(lines.iter().any(|l| l.contains("shipmode=RAIL/")));
-        assert!(lines.iter().any(|l| l.contains("data_files.parquet")));
-        // Ensure record_counts and sizes are not nested as pseudo-directories
-        assert!(!lines.iter().any(|l| l.contains("130123/")));
-    }
-
-    #[test]
-    fn build_tree_lines_parses_show_create_ddl_fallback() {
-        let ddl = vec![
-            "CREATE TABLE iceberg.demo.lineitem_partitioned (\n   orderkey bigint\n)\nWITH (\n   location = 's3://warehouse/demo/lineitem/',\n   partitioning = ARRAY['year(shipdate)','shipmode']\n)".to_string(),
-        ];
-        let lines = build_tree_lines(&ddl, None);
+    fn parse_show_create_to_tree_lines_parses_partition_hierarchy() {
+        let ddl = "CREATE TABLE iceberg.demo.lineitem_partitioned (\n   orderkey bigint\n)\nWITH (\n   location = 's3://warehouse/demo/lineitem/',\n   partitioning = ARRAY['year(shipdate)','shipmode']\n)";
+        let lines = parse_show_create_to_tree_lines(ddl, None);
         assert_eq!(lines[0], " s3://warehouse/demo/lineitem/");
         assert!(lines.iter().any(|l| l.contains("year(shipdate)=<YYYY>/")));
         assert!(lines.iter().any(|l| l.contains("shipmode=<value>/")));
         assert!(lines.iter().any(|l| l.contains("data_files.parquet")));
+    }
+
+    #[test]
+    fn parse_show_create_to_tree_lines_handles_unpartitioned_table() {
+        let ddl = "CREATE TABLE iceberg.demo.lookup (\n   id bigint\n)\nWITH (\n   location = 's3://warehouse/demo/lookup/'\n)";
+        let lines = parse_show_create_to_tree_lines(ddl, None);
+        assert_eq!(lines[0], " s3://warehouse/demo/lookup/");
+        assert!(lines.iter().any(|l| l.contains("(Non-partitioned Table)")));
     }
 }
