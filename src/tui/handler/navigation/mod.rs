@@ -14,9 +14,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{
-    ActivePanel, App, CatalogState, ConnectState, SchemaState, Screen, TableState,
-};
+use crate::app::{ActivePanel, App, CatalogState, ConnectState, SchemaState, Screen, TableState};
 
 pub mod actions;
 pub mod clipboard;
@@ -166,8 +164,8 @@ pub fn get_selected(screen: &Screen) -> Option<usize> {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
     use super::drilldown::*;
+    use super::*;
     use crate::app::{ActionState, DrillDownState, ResultsState, TableRecon};
     use crate::config::ConnectionConfig;
     use crate::trino::client::TrinoClient;

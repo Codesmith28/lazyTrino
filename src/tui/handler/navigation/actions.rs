@@ -14,7 +14,9 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::{ACTIONS, Action, ActionState, ActivePanel, App, DrillDownState, Mode, ResultsState, Screen};
+use crate::app::{
+    ACTIONS, Action, ActionState, ActivePanel, App, DrillDownState, Mode, ResultsState, Screen,
+};
 use crate::tui::handler::{Command, export};
 
 use super::clipboard::copy_active_pane_content;

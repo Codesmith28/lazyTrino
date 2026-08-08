@@ -16,7 +16,10 @@ use crate::app::ActionState;
 use crate::trino::queries;
 use crate::tui::handler::Command;
 
-pub fn drilldown_drill_into_selected(s: &mut ActionState, safe_columns: &[String]) -> Option<Command> {
+pub fn drilldown_drill_into_selected(
+    s: &mut ActionState,
+    safe_columns: &[String],
+) -> Option<Command> {
     let catalog = s.catalog.clone();
     let schema = s.schema.clone();
     let table = s.table.clone();
@@ -35,15 +38,8 @@ pub fn drilldown_drill_into_selected(s: &mut ActionState, safe_columns: &[String
     if dd.is_leaf() {
         let filters = dd.path.clone();
         s.results = None;
-        let query = queries::filtered_page_query(
-            &catalog,
-            &schema,
-            &table,
-            &filters,
-            0,
-            100,
-            safe_columns,
-        );
+        let query =
+            queries::filtered_page_query(&catalog, &schema, &table, &filters, 0, 100, safe_columns);
         let query_len = query.len();
         s.query_buffer = query.clone();
         s.query_cursor = query_len;
