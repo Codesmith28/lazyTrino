@@ -786,4 +786,67 @@ pub mod tests {
             "typing ? on connect screen must not open Help"
         );
     }
+
+    #[test]
+    fn test_switching_from_table_ddl_to_table_view_fires_query_and_clears_ddl_results() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 1, // Table DDL
+            metadata: Some(TableRecon {
+                partitioned_by: Vec::new(),
+                location: "s3://bucket/orders".to_string(),
+                ddl_text: "CREATE TABLE orders (id bigint)".to_string(),
+            }),
+            results: Some(ResultsState {
+                query_buffer: String::new(),
+                query_cursor: 0,
+                columns: vec!["Create Table".to_string()],
+                rows: vec![vec!["CREATE TABLE orders (id bigint)".to_string()]],
+                scroll_v: 0,
+                scroll_h: 0,
+                loading: false,
+                error: None,
+                is_paginated: false,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                offset: 0,
+                page_size: 100,
+                is_fetching_next_page: false,
+                has_more_rows: false,
+                invalid_query_error: None,
+                selection_anchor: None,
+                filters: Vec::new(),
+            }),
+            ..Default::default()
+        }));
+
+        // User triggers Table View (action idx 0)
+        let cmd = trigger_action(&mut app, 0);
+        let Some(Command::ExecuteQuery {
+            is_paginated,
+            catalog,
+            schema,
+            table,
+            ..
+        }) = cmd
+        else {
+            panic!("expected ExecuteQuery when switching from Table DDL to Table View");
+        };
+        assert!(is_paginated);
+        assert_eq!(catalog, "iceberg");
+        assert_eq!(schema, "sales");
+        assert_eq!(table, "orders");
+
+        let Screen::Actions(ref state) = app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.selected, 0);
+        assert!(
+            state.results.is_none(),
+            "stale DDL results must be cleared on transition to Table View"
+        );
+    }
 }

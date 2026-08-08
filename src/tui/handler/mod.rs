@@ -137,6 +137,9 @@ pub enum AsyncResult {
     /// available immediately instead of waiting on the full recon batch.
     FetchTableDdl {
         show_create_log_id: usize,
+        catalog: String,
+        schema: String,
+        table: String,
         partitioned_by: Vec<String>,
         location: String,
         ddl_text: String,
@@ -145,6 +148,9 @@ pub enum AsyncResult {
     FetchTableMetadata {
         partitions_log_id: usize,
         cols_log_id: usize,
+        catalog: String,
+        schema: String,
+        table: String,
         partition_lines: Vec<String>,
         columns: Vec<VerticalColumn>,
         partitions_error: Option<TrinoClientError>,
@@ -163,12 +169,18 @@ pub enum AsyncResult {
     },
     FetchNextPage {
         log_id: usize,
+        catalog: String,
+        schema: String,
+        table: String,
         offset: usize,
         limit: usize,
         result: Result<crate::trino::types::QueryResults, TrinoClientError>,
     },
     FetchPartitionLevel {
         log_id: usize,
+        catalog: String,
+        schema: String,
+        table: String,
         filters: Vec<(String, String)>,
         column: String,
         result: Result<crate::trino::types::QueryResults, TrinoClientError>,
