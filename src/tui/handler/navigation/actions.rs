@@ -78,6 +78,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
             return None;
         }
 
+        let prev_selected = s.selected;
         s.selected = action_idx;
         if app.active_panel != ActivePanel::MainViewer {
             app.mouse_selection_anchor = None;
@@ -87,9 +88,14 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
         match action {
             Action::Partitions | Action::Schema => None,
             Action::TableView => {
-                if s.drilldown.is_some() || s.results.is_some() {
+                let is_same_table_view = prev_selected == action_idx
+                    && (s.drilldown.is_some()
+                        || s.results.as_ref().is_some_and(|r| r.is_paginated));
+                if is_same_table_view {
                     return None;
                 }
+                s.results = None;
+                s.drilldown = None;
                 let partition_cols = s
                     .metadata
                     .as_ref()
@@ -97,8 +103,6 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                     .unwrap_or_default();
                 if partition_cols.is_empty() {
                     let query = action.build_query(&s.catalog, &s.schema, &s.table);
-                    s.results = None;
-                    s.drilldown = None;
                     Some(Command::ExecuteQuery {
                         query,
                         is_paginated: true,
@@ -109,7 +113,6 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                     })
                 } else {
                     let first_col = partition_cols[0].clone();
-                    s.results = None;
                     s.drilldown = Some(DrillDownState {
                         partition_cols,
                         path: Vec::new(),
@@ -129,12 +132,14 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                 }
             }
             Action::TableDDL if s.metadata.is_some() => {
+                s.drilldown = None;
                 populate_table_ddl_results(s);
                 None
             }
             _ => {
                 let query = action.build_query(&s.catalog, &s.schema, &s.table);
                 s.results = None;
+                s.drilldown = None;
                 Some(Command::ExecuteQuery {
                     query,
                     is_paginated: false,
@@ -166,6 +171,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                 KeyCode::Char('j') | KeyCode::Down => {
                     s.selected = (s.selected + 1) % ACTIONS.len();
                     s.results = None;
+                    s.drilldown = None;
                     None
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
@@ -175,6 +181,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         s.selected - 1
                     };
                     s.results = None;
+                    s.drilldown = None;
                     None
                 }
                 KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
