@@ -114,30 +114,69 @@ fn is_enter_key(code: KeyCode) -> bool {
     )
 }
 
-fn prev_word_pos(s: &str, cursor: usize) -> usize {
+fn prev_char_boundary(s: &str, cursor: usize) -> usize {
     if cursor == 0 {
         return 0;
     }
-    let chars: Vec<char> = s.chars().collect();
-    let mut i = cursor.min(chars.len());
-    while i > 0 && chars[i - 1].is_whitespace() {
-        i -= 1;
-    }
-    while i > 0 && !chars[i - 1].is_whitespace() {
+    let mut i = cursor.min(s.len()) - 1;
+    while i > 0 && !s.is_char_boundary(i) {
         i -= 1;
     }
     i
 }
 
-fn next_word_pos(s: &str, cursor: usize) -> usize {
-    let chars: Vec<char> = s.chars().collect();
-    let len = chars.len();
-    let mut i = cursor.min(len);
-    while i < len && !chars[i].is_whitespace() {
+fn next_char_boundary(s: &str, cursor: usize) -> usize {
+    let len = s.len();
+    if cursor >= len {
+        return len;
+    }
+    let mut i = cursor + 1;
+    while i < len && !s.is_char_boundary(i) {
         i += 1;
     }
-    while i < len && chars[i].is_whitespace() {
-        i += 1;
+    i
+}
+
+fn prev_word_pos(s: &str, cursor: usize) -> usize {
+    let cursor = cursor.min(s.len());
+    let mut i = cursor;
+    while i > 0 {
+        let prev = prev_char_boundary(s, i);
+        if let Some(c) = s[prev..i].chars().next() && c.is_whitespace() {
+            i = prev;
+        } else {
+            break;
+        }
+    }
+    while i > 0 {
+        let prev = prev_char_boundary(s, i);
+        if let Some(c) = s[prev..i].chars().next() && !c.is_whitespace() {
+            i = prev;
+        } else {
+            break;
+        }
+    }
+    i
+}
+
+fn next_word_pos(s: &str, cursor: usize) -> usize {
+    let len = s.len();
+    let mut i = cursor.min(len);
+    while i < len {
+        let next = next_char_boundary(s, i);
+        if let Some(c) = s[i..next].chars().next() && !c.is_whitespace() {
+            i = next;
+        } else {
+            break;
+        }
+    }
+    while i < len {
+        let next = next_char_boundary(s, i);
+        if let Some(c) = s[i..next].chars().next() && c.is_whitespace() {
+            i = next;
+        } else {
+            break;
+        }
     }
     i
 }
@@ -162,49 +201,50 @@ pub(super) fn query_text_index_from_mouse(
     query_x_start: u16,
     query_y_start: u16,
     inner_w: usize,
-    buffer_len: usize,
+    buffer: &str,
 ) -> usize {
-    if inner_w == 0 {
+    if inner_w == 0 || buffer.is_empty() {
         return 0;
     }
+    let line0_cap = inner_w.saturating_sub(7);
+    let chunks = crate::tui::draw::chunk_query_buffer(buffer, line0_cap, inner_w);
     let rel_y = mouse_row.saturating_sub(query_y_start + 1) as usize;
     let rel_x = mouse_col.saturating_sub(query_x_start + 1) as usize;
 
-    let char_idx = if rel_y == 0 {
-        let line0_x = rel_x.saturating_sub(7);
-        let max_line0 = inner_w.saturating_sub(7);
-        line0_x.min(max_line0)
+    if rel_y >= chunks.len() {
+        return buffer.len();
+    }
+    let (start, end, chunk_str) = chunks[rel_y];
+    let target_col = if rel_y == 0 {
+        rel_x.saturating_sub(7)
     } else {
-        let max_line0 = inner_w.saturating_sub(7);
-        let line_x = rel_x.min(inner_w);
-        max_line0 + (rel_y - 1) * inner_w + line_x
+        rel_x
     };
-
-    char_idx.min(buffer_len)
+    let mut cur_char = 0;
+    for (idx, _) in chunk_str.char_indices() {
+        if cur_char >= target_col {
+            return start + idx;
+        }
+        cur_char += 1;
+    }
+    end
 }
 
 pub(super) fn active_query_state_mut(app: &mut App) -> Option<&mut ResultsState> {
     match &mut app.screen {
-        Screen::Actions(action_state)
-            if action_state.selected < ACTIONS.len()
-                && matches!(ACTIONS[action_state.selected].2, Action::TableView) =>
-        {
-            action_state.results.as_mut()
-        }
+        Screen::Actions(action_state) => action_state.results.as_mut(),
         _ => None,
     }
 }
 
-pub(super) fn active_query_buffer_len(app: &App) -> Option<usize> {
+pub(super) fn active_query_buffer(app: &App) -> Option<String> {
     match &app.screen {
-        Screen::Actions(action_state)
-            if action_state.selected < ACTIONS.len()
-                && matches!(ACTIONS[action_state.selected].2, Action::TableView) =>
-        {
-            action_state
-                .results
-                .as_ref()
-                .map(|state| state.query_buffer.len())
+        Screen::Actions(action_state) => {
+            if let Some(ref res) = action_state.results {
+                Some(res.query_buffer.clone())
+            } else {
+                Some(action_state.query_buffer.clone())
+            }
         }
         _ => None,
     }
@@ -215,7 +255,7 @@ pub(super) fn query_bar_layout(
     term_width: u16,
     term_height: u16,
 ) -> Option<(u16, u16, u16, u16, usize)> {
-    let query_len = active_query_buffer_len(app)?;
+    let query_buf = active_query_buffer(app)?;
     let bottom_y = term_height.saturating_sub(7);
     if bottom_y == 0 {
         return None;
@@ -239,9 +279,9 @@ pub(super) fn query_bar_layout(
     };
 
     let query_height = if matches!(app.mode, Mode::QueryInput) {
-        let total_chars = 7 + query_len;
+        let total_chars = 7 + query_buf.len();
         let lines = total_chars.div_ceil(inner_w);
-        (lines as u16 + 2).clamp(3, 4)
+        (lines as u16 + 2).clamp(3, 7)
     } else {
         3
     };
@@ -355,7 +395,7 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
                     let new_cursor = if word_jump {
                         prev_word_pos(&state.query_buffer, state.query_cursor)
                     } else {
-                        state.query_cursor.saturating_sub(1)
+                        prev_char_boundary(&state.query_buffer, state.query_cursor)
                     };
                     set_query_cursor(state, new_cursor, selecting);
                 }
@@ -363,7 +403,7 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
                     let new_cursor = if word_jump {
                         next_word_pos(&state.query_buffer, state.query_cursor)
                     } else {
-                        (state.query_cursor + 1).min(state.query_buffer.len())
+                        next_char_boundary(&state.query_buffer, state.query_cursor)
                     };
                     set_query_cursor(state, new_cursor, selecting);
                 }
@@ -371,14 +411,16 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
                 KeyCode::End => set_query_cursor(state, state.query_buffer.len(), selecting),
                 KeyCode::Backspace => {
                     if !state.delete_selection() && state.query_cursor > 0 {
-                        state.query_cursor -= 1;
-                        state.query_buffer.remove(state.query_cursor);
+                        let prev = prev_char_boundary(&state.query_buffer, state.query_cursor);
+                        state.query_buffer.drain(prev..state.query_cursor);
+                        state.query_cursor = prev;
                     }
                     state.invalid_query_error = None;
                 }
                 KeyCode::Delete => {
                     if !state.delete_selection() && state.query_cursor < state.query_buffer.len() {
-                        state.query_buffer.remove(state.query_cursor);
+                        let next = next_char_boundary(&state.query_buffer, state.query_cursor);
+                        state.query_buffer.drain(state.query_cursor..next);
                     }
                     state.invalid_query_error = None;
                 }
@@ -536,9 +578,35 @@ mod tests {
 
     #[test]
     fn test_mouse_index_calculation() {
-        let len = 50;
-        assert_eq!(query_text_index_from_mouse(8, 3, 0, 2, 40, len), 0);
-        assert_eq!(query_text_index_from_mouse(18, 3, 0, 2, 40, len), 10);
+        let text = "SELECT * FROM orders WHERE id > 100 AND status = 'ACTIVE'";
+        assert_eq!(query_text_index_from_mouse(8, 3, 0, 2, 40, text), 0);
+        assert_eq!(query_text_index_from_mouse(18, 3, 0, 2, 40, text), 10);
+    }
+
+    #[test]
+    fn test_chunk_query_buffer_and_cursor_sync() {
+        use crate::tui::draw::{chunk_query_buffer, cursor_line_and_col};
+        let query = "SELECT * FROM iceberg.demo.lineitem_partitioned WHERE year(shipdate) = 1998 ORDER BY shipmode DESC";
+        let inner_w = 40;
+        let line0_cap = inner_w - 7;
+        let chunks = chunk_query_buffer(query, line0_cap, inner_w);
+        assert!(chunks.len() >= 3);
+        assert_eq!(chunks[0].0, 0);
+        assert_eq!(chunks[0].1, 33);
+        assert_eq!(chunks[1].0, 33);
+        assert_eq!(chunks[1].1, 73);
+
+        // Cursor at index 0 is at line 0, column 7 (after prefix " SQL > ")
+        assert_eq!(cursor_line_and_col(query, 0, line0_cap, inner_w, 7), (0, 7));
+
+        // Cursor at index 33 (start of line 1) is at line 1, column 0
+        assert_eq!(cursor_line_and_col(query, 33, line0_cap, inner_w, 7), (1, 0));
+
+        // Cursor at index 35 (line 1, char 2) is at line 1, column 2
+        assert_eq!(cursor_line_and_col(query, 35, line0_cap, inner_w, 7), (1, 2));
+
+        // Cursor at index 73 (start of line 2) is at line 2, column 0
+        assert_eq!(cursor_line_and_col(query, 73, line0_cap, inner_w, 7), (2, 0));
     }
 
     #[test]

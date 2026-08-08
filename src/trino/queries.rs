@@ -84,9 +84,36 @@ pub fn page_query(catalog: &str, schema: &str, table: &str, offset: usize, limit
     )
 }
 
+fn is_numeric_literal(val: &str) -> bool {
+    let s = val.trim();
+    if s.is_empty() {
+        return false;
+    }
+    s.parse::<i64>().is_ok() || s.parse::<f64>().is_ok()
+}
+
+pub(crate) fn format_predicate(col: &str, val: &str) -> String {
+    let col = col.trim();
+    let val = val.trim();
+    if val.eq_ignore_ascii_case("null") {
+        format!("{col} IS NULL")
+    } else if val.eq_ignore_ascii_case("true") || val.eq_ignore_ascii_case("false") {
+        format!("{col} = {}", val.to_lowercase())
+    } else if (col.contains('(') || is_numeric_literal(val)) && is_numeric_literal(val) {
+        // If col is an expression like year(shipdate), month(orderdate), bucket(N, x)
+        // or a numeric value, format as numeric literal in SQL without quotes so Trino
+        // does not fail with "Cannot apply operator: bigint = varchar(4)".
+        format!("{col} = {val}")
+    } else {
+        format!("{} = '{}'", col, val.replace('\'', "''"))
+    }
+}
+
 /// Builds a `WHERE` clause fragment (without the leading `WHERE`) from an
 /// ordered list of `(column, value)` partition predicates, quoting/escaping
-/// each value as a string literal. Returns `None` when there are no filters.
+/// each value appropriately (e.g. numeric literals for expressions/numbers,
+/// quoted string literals for varchars, IS NULL for nulls).
+/// Returns `None` when there are no filters.
 fn build_where_clause(filters: &[(String, String)]) -> Option<String> {
     if filters.is_empty() {
         return None;
@@ -94,7 +121,7 @@ fn build_where_clause(filters: &[(String, String)]) -> Option<String> {
     Some(
         filters
             .iter()
-            .map(|(col, val)| format!("{} = '{}'", col.trim(), val.trim().replace('\'', "''")))
+            .map(|(col, val)| format_predicate(col, val))
             .collect::<Vec<_>>()
             .join(" AND "),
     )
@@ -277,6 +304,34 @@ mod tests {
         assert_eq!(
             filtered_page_query("datalake", "tenant", "events", &[], 0, 100, &columns),
             "SELECT \"event_type\", \"source_id\" FROM \"datalake\".\"tenant\".\"events\" \
+             OFFSET 0 LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn distinct_partition_values_formats_expression_and_numeric_predicates_unquoted() {
+        let filters = vec![
+            ("year(shipdate)".to_string(), "1998".to_string()),
+        ];
+        assert_eq!(
+            distinct_partition_values("iceberg", "demo", "lineitem_partitioned", &filters, "shipmode", 200),
+            "SELECT DISTINCT shipmode FROM \"iceberg\".\"demo\".\"lineitem_partitioned\" \
+             WHERE year(shipdate) = 1998 ORDER BY shipmode DESC LIMIT 200"
+        );
+    }
+
+    #[test]
+    fn filtered_page_query_formats_numeric_boolean_and_null_predicates() {
+        let filters = vec![
+            ("year(shipdate)".to_string(), "1998".to_string()),
+            ("shipmode".to_string(), "AIR".to_string()),
+            ("is_active".to_string(), "true".to_string()),
+            ("deleted_at".to_string(), "NULL".to_string()),
+        ];
+        assert_eq!(
+            filtered_page_query("iceberg", "demo", "lineitem_partitioned", &filters, 0, 100, &[]),
+            "SELECT * FROM \"iceberg\".\"demo\".\"lineitem_partitioned\" \
+             WHERE year(shipdate) = 1998 AND shipmode = 'AIR' AND is_active = true AND deleted_at IS NULL \
              OFFSET 0 LIMIT 100"
         );
     }

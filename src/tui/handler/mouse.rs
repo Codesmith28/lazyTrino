@@ -23,7 +23,7 @@ use super::{
         trigger_action,
     },
     query::{
-        active_query_buffer_len, active_query_state_mut, copy_to_clipboard, query_bar_layout,
+        active_query_buffer, active_query_state_mut, copy_to_clipboard, query_bar_layout,
         query_text_index_from_mouse,
     },
 };
@@ -49,13 +49,14 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     && mouse.row < query_y.saturating_add(query_height);
 
                 if inside_query_bar {
+                    let buf = active_query_buffer(app).unwrap_or_default();
                     let idx = query_text_index_from_mouse(
                         mouse.column,
                         mouse.row,
                         query_x,
                         query_y,
                         inner_w,
-                        active_query_buffer_len(app).unwrap_or(0),
+                        &buf,
                     );
                     app.mode = Mode::QueryInput;
                     app.set_active_panel(ActivePanel::MainViewer);
@@ -104,13 +105,14 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 if let Some((query_x, query_y, _, _, inner_w)) =
                     query_bar_layout(app, term_width, term_height)
                 {
+                    let buf = active_query_buffer(app).unwrap_or_default();
                     let idx = query_text_index_from_mouse(
                         mouse.column,
                         mouse.row,
                         query_x,
                         query_y,
                         inner_w,
-                        active_query_buffer_len(app).unwrap_or(0),
+                        &buf,
                     );
                     if let Some(state) = active_query_state_mut(app) {
                         state.query_cursor = idx;
