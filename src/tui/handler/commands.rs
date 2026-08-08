@@ -102,18 +102,14 @@ pub fn dispatch_command(
             if let Some(client) = app.trino_client.clone() {
                 let show_create_query = queries::show_create(&catalog, &schema, &table);
                 let show_create_log_id = app.add_query_log(show_create_query.clone());
-                let part_query = queries::partitions(&catalog, &schema, &table);
-                let part_log_id = app.add_query_log(part_query.clone());
                 let desc_query = queries::info_schema_columns(&catalog, &schema, &table);
                 let cols_log_id = app.add_query_log(desc_query.clone());
                 app.loading = true;
 
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    // The table's own partition layout (if any) is always resolved
-                    // dynamically from this specific table's live `SHOW CREATE TABLE`
-                    // DDL — never hardcoded by table/schema name. An unpartitioned
-                    // table simply yields an empty `partitioned_by`.
+                    // The table's partition layout is always derived directly
+                    // from the table's DDL (`SHOW CREATE TABLE`).
                     let (partitioned_by, location, ddl_text, show_create_error) =
                         match client.execute(&show_create_query).await {
                             Ok(res) => {
@@ -130,38 +126,18 @@ pub fn dispatch_command(
                             Err(err) => (Vec::new(), String::new(), String::new(), Some(err)),
                         };
 
-                    // Send the DDL result the moment it's ready — Table DDL
-                    // (and knowing whether the table is partitioned, for
-                    // Table View's drill-down decision) shouldn't have to
-                    // wait on the slower `$partitions` / info-schema queries
-                    // below.
                     let _ = tx.send(AsyncResult::FetchTableDdl {
                         show_create_log_id,
                         partitioned_by: partitioned_by.clone(),
-                        location,
+                        location: location.clone(),
                         ddl_text: ddl_text.clone(),
                         show_create_error,
                     });
 
-                    let (partition_lines, partitions_error) = match client
-                        .execute(&part_query)
-                        .await
-                    {
-                        Ok(res) if !res.data.is_empty() => {
-                            let raw_lines: Vec<String> =
-                                res.data.into_iter().map(|r| r.join("/")).collect();
-                            (
-                                crate::tui::screens::partition_tree::build_tree_lines(&raw_lines),
-                                None,
-                            )
-                        }
-                        Ok(_) | Err(_) => (
-                            crate::tui::screens::partition_tree::build_tree_lines(
-                                std::slice::from_ref(&ddl_text),
-                            ),
-                            None,
-                        ),
-                    };
+                    let partition_lines = crate::tui::screens::partition_tree::parse_show_create_to_tree_lines(
+                        &ddl_text,
+                        Some(&location),
+                    );
 
                     let (columns, columns_error) = match client.execute(&desc_query).await {
                         Ok(res) => {
@@ -178,7 +154,10 @@ pub fn dispatch_command(
                                         "Hudi Metadata".to_string()
                                     } else if name.starts_with("$") || name.contains("iceberg") {
                                         "Iceberg Meta".to_string()
-                                    } else if partitioned_by.iter().any(|p| p == &name) {
+                                    } else if crate::trino::queries::is_partition_column(
+                                        &partitioned_by,
+                                        &name,
+                                    ) {
                                         "Partition Key".to_string()
                                     } else if is_nullable == "NO" {
                                         "PK".to_string()
@@ -200,11 +179,11 @@ pub fn dispatch_command(
                     };
 
                     let _ = tx.send(AsyncResult::FetchTableMetadata {
-                        partitions_log_id: part_log_id,
+                        partitions_log_id: show_create_log_id,
                         cols_log_id,
                         partition_lines,
                         columns,
-                        partitions_error,
+                        partitions_error: None,
                         columns_error,
                     });
                 });

@@ -463,6 +463,566 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
     }
 }
 
+fn select_current_item(app: &mut App) -> Option<Command> {
+    match &app.screen {
+        Screen::Catalog(_) => {
+            let catalog = get_selected_item_label(app)?;
+            if app.schemas.contains_key(&catalog) {
+                let items = app.schemas[&catalog]
+                    .iter()
+                    .map(|x| x.trim().to_string())
+                    .collect();
+                app.clear_mouse_selection();
+                app.screen = Screen::Schema(SchemaState {
+                    catalog,
+                    items,
+                    selected: 0,
+                });
+                None
+            } else {
+                Some(Command::FetchSchemas { catalog })
+            }
+        }
+        Screen::Schema(s) => {
+            let schema = get_selected_item_label(app)?;
+            let catalog = s.catalog.trim().to_string();
+            if app.tables.contains_key(&(catalog.clone(), schema.clone())) {
+                let items = app.tables[&(catalog.clone(), schema.clone())]
+                    .iter()
+                    .map(|x| x.trim().to_string())
+                    .collect();
+                app.clear_mouse_selection();
+                app.screen = Screen::Table(TableState {
+                    catalog,
+                    schema,
+                    items,
+                    selected: 0,
+                });
+                None
+            } else {
+                Some(Command::FetchTables { catalog, schema })
+            }
+        }
+        Screen::Table(s) => {
+            let table = get_selected_item_label(app)?;
+            let catalog = s.catalog.clone();
+            let schema = s.schema.clone();
+            app.main_panel_pct = 15;
+            app.set_active_panel(ActivePanel::MenuPane);
+            app.partition_tree_lines.clear();
+            app.vertical_schema_cols.clear();
+            let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
+            let query_len = default_query.len();
+            app.clear_mouse_selection();
+            app.screen = Screen::Actions(ActionState {
+                catalog: catalog.clone(),
+                schema: schema.clone(),
+                table: table.clone(),
+                selected: 0,
+                query_buffer: default_query,
+                query_cursor: query_len,
+                results: None,
+                ddl_loading: true,
+                metadata_loading: true,
+                ..Default::default()
+            });
+            // Fire the grouped table-entry recon (SHOW CREATE TABLE +
+            // information_schema.columns) immediately, before any menu
+            // action is selected, so Partitions/Schema/Table View have
+            // their data ready (or already in flight) as soon as the user
+            // reaches for them.
+            Some(Command::FetchTableMetadata {
+                catalog,
+                schema,
+                table,
+            })
+        }
+        Screen::Actions(s) => {
+            let idx = s.selected;
+            trigger_action(app, idx)
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn connect_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    let state_loading = match &app.screen {
+        Screen::Connect(s) => s.loading,
+        _ => return None,
+    };
+    if state_loading {
+        return None;
+    }
+    let state = match &mut app.screen {
+        Screen::Connect(s) => s,
+        _ => return None,
+    };
+    match key.code {
+        KeyCode::Tab | KeyCode::Char('\t') => {
+            state.focused = (state.focused + 1) % 3;
+        }
+        KeyCode::Backspace => match state.focused {
+            0 => {
+                state.url.pop();
+            }
+            1 => {
+                state.user.pop();
+            }
+            2 => {
+                state.password.pop();
+            }
+            _ => {}
+        },
+        KeyCode::Char(c) => match state.focused {
+            0 => state.url.push(c),
+            1 => state.user.push(c),
+            2 => state.password.push(c),
+            _ => {}
+        },
+        KeyCode::Enter if !state.url.is_empty() && !state.user.is_empty() => {
+            let url = state.url.clone();
+            let user = state.user.clone();
+            let password = state.password.clone();
+            state.loading = true;
+            return Some(Command::Connect {
+                url,
+                user,
+                password,
+            });
+        }
+        _ => {}
+    }
+    None
+}
+
+pub(super) fn copy_active_pane_content(app: &mut App) {
+    let mut text_to_copy = String::new();
+
+    if let (Some(anchor), Some(current)) = (app.mouse_selection_anchor, app.mouse_selection_current)
+    {
+        text_to_copy = super::mouse::extract_selected_text(app, anchor, current);
+    }
+
+    if text_to_copy.is_empty() {
+        match &app.screen {
+            Screen::Catalog(s) => {
+                text_to_copy = filter_items(&s.items, &app.search_query)
+                    .iter()
+                    .map(|x| x.trim())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            Screen::Schema(s) => {
+                text_to_copy = filter_items(&s.items, &app.search_query)
+                    .iter()
+                    .map(|x| x.trim())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            Screen::Table(s) => {
+                text_to_copy = filter_items(&s.items, &app.search_query)
+                    .iter()
+                    .map(|x| x.trim())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            Screen::Actions(s) => {
+                if app.active_panel == ActivePanel::MenuPane {
+                    text_to_copy = ACTIONS
+                        .iter()
+                        .map(|(_, l, _)| l.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                } else if app.active_panel == ActivePanel::MainViewer {
+                    if s.selected == 6 {
+                        text_to_copy = app.partition_tree_lines.join("\n");
+                    } else if s.selected == 7 {
+                        text_to_copy = app
+                            .vertical_schema_cols
+                            .iter()
+                            .map(|col| {
+                                format!(
+                                    "{}\t{}\t{}\t{}",
+                                    col.name, col.data_type, col.key_meta, col.description
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                    } else {
+                        export::copy_results_to_clipboard(app);
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if !text_to_copy.is_empty() {
+        super::query::copy_to_clipboard(&text_to_copy);
+        app.copied_toast = Some((toast_summary(&text_to_copy), std::time::Instant::now()));
+    }
+}
+
+/// Builds a short, single-line human summary for the "Copied to clipboard"
+/// toast. Multi-line/tab-separated copies (e.g. whole columns or schema
+/// tables) must not be mashed together into an unreadable run of
+/// characters — show the line/row count instead of raw truncated content
+/// in that case, and only preview raw text for genuinely single-line copies.
+fn toast_summary(text: &str) -> String {
+    let line_count = text.lines().count();
+    if line_count > 1 {
+        format!("{line_count} lines")
+    } else {
+        text.chars().take(40).collect()
+    }
+}
+
+pub(super) fn handle_list_navigation_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    let code = normalize_key_code(key.code);
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(items) = extract_list_labels(app)
+                && !items.is_empty()
+                && let Some(s) = get_selected(&app.screen)
+            {
+                mod_list_selected(&mut app.screen, (s + 1).min(items.len() - 1));
+            }
+            None
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(s) = get_selected(&app.screen) {
+                mod_list_selected(&mut app.screen, s.saturating_sub(1));
+            }
+            None
+        }
+        KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => select_current_item(app),
+        KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
+            app.number_buffer.clear();
+            go_back(app);
+            None
+        }
+        KeyCode::Char('g') => {
+            mod_list_selected(&mut app.screen, 0);
+            None
+        }
+        KeyCode::Char('G') => {
+            if let Some(items) = extract_list_labels(app)
+                && !items.is_empty()
+            {
+                mod_list_selected(&mut app.screen, items.len() - 1);
+            }
+            None
+        }
+        KeyCode::Char('y') | KeyCode::Char('c') => {
+            copy_active_pane_content(app);
+            None
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn catalog_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    handle_list_navigation_keys(app, key)
+}
+
+pub(super) fn schema_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    handle_list_navigation_keys(app, key)
+}
+
+pub(super) fn table_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    handle_list_navigation_keys(app, key)
+}
+
+/// Advances the drill-down by fixing the currently highlighted value for
+/// the level being browsed (the `cd` step). If more partition columns
+/// remain, dispatches the next `SELECT DISTINCT` level fetch; once every
+/// partition column has a fixed value, switches to the leaf record view by
+/// dispatching a filtered, paginated query instead of ever firing an
+/// unfiltered `SELECT *` against the (potentially huge/broken) partition
+/// tree.
+fn drilldown_drill_into_selected(s: &mut ActionState, safe_columns: &[String]) -> Option<Command> {
+    let catalog = s.catalog.clone();
+    let schema = s.schema.clone();
+    let table = s.table.clone();
+    let dd = s.drilldown.as_mut()?;
+    if dd.loading || dd.is_leaf() {
+        return None;
+    }
+    let depth = dd.depth();
+    let value = dd.levels_cache.get(depth)?.get(dd.selected)?.clone();
+    let column = dd.partition_cols.get(depth)?.clone();
+    dd.path.push((column, value));
+    let next_depth = dd.depth();
+
+    if next_depth >= dd.partition_cols.len() {
+        let filters = dd.path.clone();
+        s.results = None;
+        Some(Command::ExecuteQuery {
+            query: crate::trino::queries::filtered_page_query(
+                &catalog,
+                &schema,
+                &table,
+                &filters,
+                0,
+                100,
+                safe_columns,
+            ),
+            is_paginated: true,
+            catalog,
+            schema,
+            table,
+            filters,
+        })
+    } else {
+        let next_column = dd.partition_cols[next_depth].clone();
+        let filters = dd.path.clone();
+        dd.loading = true;
+        dd.selected = 0;
+        Some(Command::FetchPartitionLevel {
+            catalog,
+            schema,
+            table,
+            filters,
+            column: next_column,
+        })
+    }
+}
+
+/// Pops back up one partition level (the `cd ..` step): from the leaf
+/// record view back to the last distinct-value list, or from one
+/// distinct-value list back to its parent. Uses the cached level data —
+/// no re-fetch needed. No-ops at the top level (empty path), per spec.
+fn drilldown_go_up(s: &mut ActionState) {
+    let had_leaf_results = s.results.is_some();
+    match s.drilldown.as_mut() {
+        Some(dd) if !dd.path.is_empty() => {
+            dd.path.pop();
+            dd.selected = 0;
+        }
+        _ => return,
+    }
+    if had_leaf_results {
+        s.results = None;
+    }
+}
+
+pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    let code = normalize_key_code(key.code);
+
+    if let KeyCode::Char(c) = code
+        && let Some(pos) = ACTIONS.iter().position(|(k, _, _)| *k == c)
+    {
+        return trigger_action(app, pos);
+    }
+
+    let safe_columns = crate::app::safe_select_columns(&app.vertical_schema_cols);
+    if let Screen::Actions(ref mut s) = app.screen {
+        match app.active_panel {
+            ActivePanel::MenuPane => match code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    s.selected = (s.selected + 1) % ACTIONS.len();
+                    s.results = None;
+                    None
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    s.selected = if s.selected == 0 {
+                        ACTIONS.len() - 1
+                    } else {
+                        s.selected - 1
+                    };
+                    s.results = None;
+                    None
+                }
+                KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+                    let idx = s.selected;
+                    trigger_action(app, idx)
+                }
+                KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
+                    go_back(app);
+                    None
+                }
+                KeyCode::Char('y') => {
+                    copy_active_pane_content(app);
+                    None
+                }
+                _ => None,
+            },
+            ActivePanel::MainViewer => {
+                let in_drilldown = s.drilldown.is_some()
+                    && s.selected < ACTIONS.len()
+                    && matches!(ACTIONS[s.selected].2, Action::TableView);
+                let at_leaf =
+                    in_drilldown && s.drilldown.as_ref().map(|d| d.is_leaf()).unwrap_or(false);
+
+                if in_drilldown && !at_leaf {
+                    // Browsing a level of distinct partition values (the
+                    // `ls` step of the cd/ls-style drill-down) — no
+                    // `ResultsState` exists yet at this point.
+                    match code {
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            if let Some(dd) = s.drilldown.as_mut() {
+                                let depth = dd.depth();
+                                if let Some(items) = dd.levels_cache.get(depth)
+                                    && !items.is_empty()
+                                {
+                                    dd.selected = (dd.selected + 1).min(items.len() - 1);
+                                }
+                            }
+                            None
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            if let Some(dd) = s.drilldown.as_mut() {
+                                dd.selected = dd.selected.saturating_sub(1);
+                            }
+                            None
+                        }
+                        KeyCode::Char('g') => {
+                            if let Some(dd) = s.drilldown.as_mut() {
+                                dd.selected = 0;
+                            }
+                            None
+                        }
+                        KeyCode::Char('G') => {
+                            if let Some(dd) = s.drilldown.as_mut() {
+                                let depth = dd.depth();
+                                if let Some(items) = dd.levels_cache.get(depth) {
+                                    dd.selected = items.len().saturating_sub(1);
+                                }
+                            }
+                            None
+                        }
+                        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+                            drilldown_drill_into_selected(s, &safe_columns)
+                        }
+                        KeyCode::Char('h') | KeyCode::Left => {
+                            drilldown_go_up(s);
+                            None
+                        }
+                        KeyCode::Char('y') => {
+                            copy_active_pane_content(app);
+                            None
+                        }
+                        _ => None,
+                    }
+                } else {
+                    match code {
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            if s.selected == 6 {
+                                let max_lines = app.partition_tree_lines.len().saturating_sub(1);
+                                app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
+                            } else if s.selected == 7 {
+                                let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
+                                app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
+                            } else if let Some(ref mut res) = s.results {
+                                if !res.rows.is_empty() {
+                                    res.scroll_v =
+                                        (res.scroll_v + 1).min(res.rows.len().saturating_sub(1));
+                                }
+                                return check_trigger_infinite_scroll(app);
+                            }
+                            None
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            if s.selected == 6 {
+                                app.partition_scroll = app.partition_scroll.saturating_sub(1);
+                            } else if s.selected == 7 {
+                                app.schema_scroll = app.schema_scroll.saturating_sub(1);
+                            } else if let Some(ref mut res) = s.results {
+                                res.scroll_v = res.scroll_v.saturating_sub(1);
+                            }
+                            None
+                        }
+                        KeyCode::Char('l') | KeyCode::Right => {
+                            // `l` is purely hierarchical now — no-op in
+                            // result-viewing contexts (use `<`/`>` to
+                            // scroll columns instead).
+                            None
+                        }
+                        KeyCode::Char('<') => {
+                            if let Some(ref mut res) = s.results {
+                                res.scroll_h = res.scroll_h.saturating_sub(1);
+                            }
+                            None
+                        }
+                        KeyCode::Char('>') => {
+                            if let Some(ref mut res) = s.results
+                                && !res.columns.is_empty()
+                            {
+                                res.scroll_h =
+                                    (res.scroll_h + 1).min(res.columns.len().saturating_sub(1));
+                            }
+                            None
+                        }
+                        KeyCode::Char('h') | KeyCode::Left => {
+                            // In a partitioned Table View's leaf record grid, `h`
+                            // goes back up one partition level. Elsewhere it's
+                            // a no-op — horizontal scrolling lives on `<`/`>`.
+                            if at_leaf {
+                                drilldown_go_up(s);
+                            }
+                            None
+                        }
+                        KeyCode::Esc => {
+                            app.set_active_panel(ActivePanel::MenuPane);
+                            None
+                        }
+                        KeyCode::Char('g') => {
+                            if s.selected == 6 {
+                                app.partition_scroll = 0;
+                            } else if s.selected == 7 {
+                                app.schema_scroll = 0;
+                            } else if let Some(ref mut res) = s.results {
+                                res.scroll_v = 0;
+                                res.scroll_h = 0;
+                            }
+                            None
+                        }
+                        KeyCode::Char('G') => {
+                            if s.selected == 6 {
+                                app.partition_scroll =
+                                    app.partition_tree_lines.len().saturating_sub(1);
+                            } else if s.selected == 7 {
+                                app.schema_scroll =
+                                    app.vertical_schema_cols.len().saturating_sub(1);
+                            } else if let Some(ref mut res) = s.results {
+                                res.scroll_v = res.rows.len().saturating_sub(1);
+                                return check_trigger_infinite_scroll(app);
+                            }
+                            None
+                        }
+                        KeyCode::Char('q') | KeyCode::Char(':') => {
+                            if s.selected < ACTIONS.len()
+                                && matches!(ACTIONS[s.selected].2, Action::TableView)
+                            {
+                                app.mode = Mode::QueryInput;
+                            }
+                            None
+                        }
+                        KeyCode::Char('y') => {
+                            copy_active_pane_content(app);
+                            None
+                        }
+                        KeyCode::Char('Y')
+                            if s.selected < ACTIONS.len()
+                                && !matches!(
+                                    ACTIONS[s.selected].2,
+                                    Action::Partitions | Action::Schema
+                                ) =>
+                        {
+                            export::export_results_to_csv_file(app);
+                            None
+                        }
+                        _ => None,
+                    }
+                }
+            }
+        }
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1037,565 +1597,5 @@ mod tests {
         };
         assert!(state.drilldown.as_ref().unwrap().path.is_empty());
         assert!(state.results.is_none());
-    }
-}
-
-fn select_current_item(app: &mut App) -> Option<Command> {
-    match &app.screen {
-        Screen::Catalog(_) => {
-            let catalog = get_selected_item_label(app)?;
-            if app.schemas.contains_key(&catalog) {
-                let items = app.schemas[&catalog]
-                    .iter()
-                    .map(|x| x.trim().to_string())
-                    .collect();
-                app.clear_mouse_selection();
-                app.screen = Screen::Schema(SchemaState {
-                    catalog,
-                    items,
-                    selected: 0,
-                });
-                None
-            } else {
-                Some(Command::FetchSchemas { catalog })
-            }
-        }
-        Screen::Schema(s) => {
-            let schema = get_selected_item_label(app)?;
-            let catalog = s.catalog.trim().to_string();
-            if app.tables.contains_key(&(catalog.clone(), schema.clone())) {
-                let items = app.tables[&(catalog.clone(), schema.clone())]
-                    .iter()
-                    .map(|x| x.trim().to_string())
-                    .collect();
-                app.clear_mouse_selection();
-                app.screen = Screen::Table(TableState {
-                    catalog,
-                    schema,
-                    items,
-                    selected: 0,
-                });
-                None
-            } else {
-                Some(Command::FetchTables { catalog, schema })
-            }
-        }
-        Screen::Table(s) => {
-            let table = get_selected_item_label(app)?;
-            let catalog = s.catalog.clone();
-            let schema = s.schema.clone();
-            app.main_panel_pct = 15;
-            app.set_active_panel(ActivePanel::MenuPane);
-            app.partition_tree_lines.clear();
-            app.vertical_schema_cols.clear();
-            let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
-            let query_len = default_query.len();
-            app.clear_mouse_selection();
-            app.screen = Screen::Actions(ActionState {
-                catalog: catalog.clone(),
-                schema: schema.clone(),
-                table: table.clone(),
-                selected: 0,
-                query_buffer: default_query,
-                query_cursor: query_len,
-                results: None,
-                ddl_loading: true,
-                metadata_loading: true,
-                ..Default::default()
-            });
-            // Fire the grouped table-entry recon (SHOW CREATE TABLE +
-            // information_schema.columns) immediately, before any menu
-            // action is selected, so Partitions/Schema/Table View have
-            // their data ready (or already in flight) as soon as the user
-            // reaches for them.
-            Some(Command::FetchTableMetadata {
-                catalog,
-                schema,
-                table,
-            })
-        }
-        Screen::Actions(s) => {
-            let idx = s.selected;
-            trigger_action(app, idx)
-        }
-        _ => None,
-    }
-}
-
-pub(super) fn connect_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    let state_loading = match &app.screen {
-        Screen::Connect(s) => s.loading,
-        _ => return None,
-    };
-    if state_loading {
-        return None;
-    }
-    let state = match &mut app.screen {
-        Screen::Connect(s) => s,
-        _ => return None,
-    };
-    match key.code {
-        KeyCode::Tab | KeyCode::Char('\t') => {
-            state.focused = (state.focused + 1) % 3;
-        }
-        KeyCode::Backspace => match state.focused {
-            0 => {
-                state.url.pop();
-            }
-            1 => {
-                state.user.pop();
-            }
-            2 => {
-                state.password.pop();
-            }
-            _ => {}
-        },
-        KeyCode::Char(c) => match state.focused {
-            0 => state.url.push(c),
-            1 => state.user.push(c),
-            2 => state.password.push(c),
-            _ => {}
-        },
-        KeyCode::Enter if !state.url.is_empty() && !state.user.is_empty() => {
-            let url = state.url.clone();
-            let user = state.user.clone();
-            let password = state.password.clone();
-            state.loading = true;
-            return Some(Command::Connect {
-                url,
-                user,
-                password,
-            });
-        }
-        _ => {}
-    }
-    None
-}
-
-pub(super) fn copy_active_pane_content(app: &mut App) {
-    let mut text_to_copy = String::new();
-
-    if let (Some(anchor), Some(current)) = (app.mouse_selection_anchor, app.mouse_selection_current)
-    {
-        text_to_copy = super::mouse::extract_selected_text(app, anchor, current);
-    }
-
-    if text_to_copy.is_empty() {
-        match &app.screen {
-            Screen::Catalog(s) => {
-                text_to_copy = filter_items(&s.items, &app.search_query)
-                    .iter()
-                    .map(|x| x.trim())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-            }
-            Screen::Schema(s) => {
-                text_to_copy = filter_items(&s.items, &app.search_query)
-                    .iter()
-                    .map(|x| x.trim())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-            }
-            Screen::Table(s) => {
-                text_to_copy = filter_items(&s.items, &app.search_query)
-                    .iter()
-                    .map(|x| x.trim())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-            }
-            Screen::Actions(s) => {
-                if app.active_panel == ActivePanel::MenuPane {
-                    text_to_copy = ACTIONS
-                        .iter()
-                        .map(|(_, l, _)| l.to_string())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                } else if app.active_panel == ActivePanel::MainViewer {
-                    if s.selected == 6 {
-                        text_to_copy = app.partition_tree_lines.join("\n");
-                    } else if s.selected == 7 {
-                        text_to_copy = app
-                            .vertical_schema_cols
-                            .iter()
-                            .map(|col| {
-                                format!(
-                                    "{}\t{}\t{}\t{}",
-                                    col.name, col.data_type, col.key_meta, col.description
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                    } else {
-                        export::copy_results_to_clipboard(app);
-                        return;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if !text_to_copy.is_empty() {
-        super::query::copy_to_clipboard(&text_to_copy);
-        app.copied_toast = Some((toast_summary(&text_to_copy), std::time::Instant::now()));
-    }
-}
-
-/// Builds a short, single-line human summary for the "Copied to clipboard"
-/// toast. Multi-line/tab-separated copies (e.g. whole columns or schema
-/// tables) must not be mashed together into an unreadable run of
-/// characters — show the line/row count instead of raw truncated content
-/// in that case, and only preview raw text for genuinely single-line copies.
-fn toast_summary(text: &str) -> String {
-    let line_count = text.lines().count();
-    if line_count > 1 {
-        format!("{line_count} lines")
-    } else {
-        text.chars().take(40).collect()
-    }
-}
-
-pub(super) fn handle_list_navigation_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    let code = normalize_key_code(key.code);
-    match code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            if let Some(items) = extract_list_labels(app)
-                && !items.is_empty()
-                && let Some(s) = get_selected(&app.screen)
-            {
-                mod_list_selected(&mut app.screen, (s + 1).min(items.len() - 1));
-            }
-            None
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if let Some(s) = get_selected(&app.screen) {
-                mod_list_selected(&mut app.screen, s.saturating_sub(1));
-            }
-            None
-        }
-        KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => select_current_item(app),
-        KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
-            app.number_buffer.clear();
-            go_back(app);
-            None
-        }
-        KeyCode::Char('g') => {
-            mod_list_selected(&mut app.screen, 0);
-            None
-        }
-        KeyCode::Char('G') => {
-            if let Some(items) = extract_list_labels(app)
-                && !items.is_empty()
-            {
-                mod_list_selected(&mut app.screen, items.len() - 1);
-            }
-            None
-        }
-        KeyCode::Char('y') | KeyCode::Char('c') => {
-            copy_active_pane_content(app);
-            None
-        }
-        _ => None,
-    }
-}
-
-pub(super) fn catalog_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    handle_list_navigation_keys(app, key)
-}
-
-pub(super) fn schema_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    handle_list_navigation_keys(app, key)
-}
-
-pub(super) fn table_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    handle_list_navigation_keys(app, key)
-}
-
-/// Advances the drill-down by fixing the currently highlighted value for
-/// the level being browsed (the `cd` step). If more partition columns
-/// remain, dispatches the next `SELECT DISTINCT` level fetch; once every
-/// partition column has a fixed value, switches to the leaf record view by
-/// dispatching a filtered, paginated query instead of ever firing an
-/// unfiltered `SELECT *` against the (potentially huge/broken) partition
-/// tree.
-fn drilldown_drill_into_selected(s: &mut ActionState, safe_columns: &[String]) -> Option<Command> {
-    let catalog = s.catalog.clone();
-    let schema = s.schema.clone();
-    let table = s.table.clone();
-    let dd = s.drilldown.as_mut()?;
-    if dd.loading || dd.is_leaf() {
-        return None;
-    }
-    let depth = dd.depth();
-    let value = dd.levels_cache.get(depth)?.get(dd.selected)?.clone();
-    let column = dd.partition_cols.get(depth)?.clone();
-    dd.path.push((column, value));
-    let next_depth = dd.depth();
-
-    if next_depth >= dd.partition_cols.len() {
-        let filters = dd.path.clone();
-        s.results = None;
-        Some(Command::ExecuteQuery {
-            query: crate::trino::queries::filtered_page_query(
-                &catalog,
-                &schema,
-                &table,
-                &filters,
-                0,
-                100,
-                safe_columns,
-            ),
-            is_paginated: true,
-            catalog,
-            schema,
-            table,
-            filters,
-        })
-    } else {
-        let next_column = dd.partition_cols[next_depth].clone();
-        let filters = dd.path.clone();
-        dd.loading = true;
-        dd.selected = 0;
-        Some(Command::FetchPartitionLevel {
-            catalog,
-            schema,
-            table,
-            filters,
-            column: next_column,
-        })
-    }
-}
-
-/// Pops back up one partition level (the `cd ..` step): from the leaf
-/// record view back to the last distinct-value list, or from one
-/// distinct-value list back to its parent. Uses the cached level data —
-/// no re-fetch needed. No-ops at the top level (empty path), per spec.
-fn drilldown_go_up(s: &mut ActionState) {
-    let had_leaf_results = s.results.is_some();
-    match s.drilldown.as_mut() {
-        Some(dd) if !dd.path.is_empty() => {
-            dd.path.pop();
-            dd.selected = 0;
-        }
-        _ => return,
-    }
-    if had_leaf_results {
-        s.results = None;
-    }
-}
-
-pub(super) fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    let code = normalize_key_code(key.code);
-
-    if let KeyCode::Char(c) = code
-        && let Some(pos) = ACTIONS.iter().position(|(k, _, _)| *k == c)
-    {
-        return trigger_action(app, pos);
-    }
-
-    let safe_columns = crate::app::safe_select_columns(&app.vertical_schema_cols);
-    if let Screen::Actions(ref mut s) = app.screen {
-        match app.active_panel {
-            ActivePanel::MenuPane => match code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    s.selected = (s.selected + 1) % ACTIONS.len();
-                    s.results = None;
-                    None
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    s.selected = if s.selected == 0 {
-                        ACTIONS.len() - 1
-                    } else {
-                        s.selected - 1
-                    };
-                    s.results = None;
-                    None
-                }
-                KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
-                    let idx = s.selected;
-                    trigger_action(app, idx)
-                }
-                KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
-                    go_back(app);
-                    None
-                }
-                KeyCode::Char('y') => {
-                    copy_active_pane_content(app);
-                    None
-                }
-                _ => None,
-            },
-            ActivePanel::MainViewer => {
-                let in_drilldown = s.drilldown.is_some()
-                    && s.selected < ACTIONS.len()
-                    && matches!(ACTIONS[s.selected].2, Action::TableView);
-                let at_leaf =
-                    in_drilldown && s.drilldown.as_ref().map(|d| d.is_leaf()).unwrap_or(false);
-
-                if in_drilldown && !at_leaf {
-                    // Browsing a level of distinct partition values (the
-                    // `ls` step of the cd/ls-style drill-down) — no
-                    // `ResultsState` exists yet at this point.
-                    match code {
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if let Some(dd) = s.drilldown.as_mut() {
-                                let depth = dd.depth();
-                                if let Some(items) = dd.levels_cache.get(depth)
-                                    && !items.is_empty()
-                                {
-                                    dd.selected = (dd.selected + 1).min(items.len() - 1);
-                                }
-                            }
-                            None
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if let Some(dd) = s.drilldown.as_mut() {
-                                dd.selected = dd.selected.saturating_sub(1);
-                            }
-                            None
-                        }
-                        KeyCode::Char('g') => {
-                            if let Some(dd) = s.drilldown.as_mut() {
-                                dd.selected = 0;
-                            }
-                            None
-                        }
-                        KeyCode::Char('G') => {
-                            if let Some(dd) = s.drilldown.as_mut() {
-                                let depth = dd.depth();
-                                if let Some(items) = dd.levels_cache.get(depth) {
-                                    dd.selected = items.len().saturating_sub(1);
-                                }
-                            }
-                            None
-                        }
-                        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
-                            drilldown_drill_into_selected(s, &safe_columns)
-                        }
-                        KeyCode::Char('h') | KeyCode::Left => {
-                            drilldown_go_up(s);
-                            None
-                        }
-                        KeyCode::Char('y') => {
-                            copy_active_pane_content(app);
-                            None
-                        }
-                        _ => None,
-                    }
-                } else {
-                    match code {
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if s.selected == 6 {
-                                let max_lines = app.partition_tree_lines.len().saturating_sub(1);
-                                app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
-                            } else if s.selected == 7 {
-                                let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
-                                app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
-                            } else if let Some(ref mut res) = s.results {
-                                if !res.rows.is_empty() {
-                                    res.scroll_v =
-                                        (res.scroll_v + 1).min(res.rows.len().saturating_sub(1));
-                                }
-                                return check_trigger_infinite_scroll(app);
-                            }
-                            None
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if s.selected == 6 {
-                                app.partition_scroll = app.partition_scroll.saturating_sub(1);
-                            } else if s.selected == 7 {
-                                app.schema_scroll = app.schema_scroll.saturating_sub(1);
-                            } else if let Some(ref mut res) = s.results {
-                                res.scroll_v = res.scroll_v.saturating_sub(1);
-                            }
-                            None
-                        }
-                        KeyCode::Char('l') | KeyCode::Right => {
-                            // `l` is purely hierarchical now — no-op in
-                            // result-viewing contexts (use `<`/`>` to
-                            // scroll columns instead).
-                            None
-                        }
-                        KeyCode::Char('<') => {
-                            if let Some(ref mut res) = s.results {
-                                res.scroll_h = res.scroll_h.saturating_sub(1);
-                            }
-                            None
-                        }
-                        KeyCode::Char('>') => {
-                            if let Some(ref mut res) = s.results
-                                && !res.columns.is_empty()
-                            {
-                                res.scroll_h =
-                                    (res.scroll_h + 1).min(res.columns.len().saturating_sub(1));
-                            }
-                            None
-                        }
-                        KeyCode::Char('h') | KeyCode::Left => {
-                            // In a partitioned Table View's leaf record grid, `h`
-                            // goes back up one partition level. Elsewhere it's
-                            // a no-op — horizontal scrolling lives on `<`/`>`.
-                            if at_leaf {
-                                drilldown_go_up(s);
-                            }
-                            None
-                        }
-                        KeyCode::Esc => {
-                            app.set_active_panel(ActivePanel::MenuPane);
-                            None
-                        }
-                        KeyCode::Char('g') => {
-                            if s.selected == 6 {
-                                app.partition_scroll = 0;
-                            } else if s.selected == 7 {
-                                app.schema_scroll = 0;
-                            } else if let Some(ref mut res) = s.results {
-                                res.scroll_v = 0;
-                                res.scroll_h = 0;
-                            }
-                            None
-                        }
-                        KeyCode::Char('G') => {
-                            if s.selected == 6 {
-                                app.partition_scroll =
-                                    app.partition_tree_lines.len().saturating_sub(1);
-                            } else if s.selected == 7 {
-                                app.schema_scroll =
-                                    app.vertical_schema_cols.len().saturating_sub(1);
-                            } else if let Some(ref mut res) = s.results {
-                                res.scroll_v = res.rows.len().saturating_sub(1);
-                                return check_trigger_infinite_scroll(app);
-                            }
-                            None
-                        }
-                        KeyCode::Char('q') | KeyCode::Char(':') => {
-                            if s.selected < ACTIONS.len()
-                                && matches!(ACTIONS[s.selected].2, Action::TableView)
-                            {
-                                app.mode = Mode::QueryInput;
-                            }
-                            None
-                        }
-                        KeyCode::Char('y') => {
-                            copy_active_pane_content(app);
-                            None
-                        }
-                        KeyCode::Char('Y')
-                            if s.selected < ACTIONS.len()
-                                && !matches!(
-                                    ACTIONS[s.selected].2,
-                                    Action::Partitions | Action::Schema
-                                ) =>
-                        {
-                            export::export_results_to_csv_file(app);
-                            None
-                        }
-                        _ => None,
-                    }
-                }
-            }
-        }
-    } else {
-        None
     }
 }

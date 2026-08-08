@@ -142,7 +142,9 @@ fn prev_word_pos(s: &str, cursor: usize) -> usize {
     let mut i = cursor;
     while i > 0 {
         let prev = prev_char_boundary(s, i);
-        if let Some(c) = s[prev..i].chars().next() && c.is_whitespace() {
+        if let Some(c) = s[prev..i].chars().next()
+            && c.is_whitespace()
+        {
             i = prev;
         } else {
             break;
@@ -150,7 +152,9 @@ fn prev_word_pos(s: &str, cursor: usize) -> usize {
     }
     while i > 0 {
         let prev = prev_char_boundary(s, i);
-        if let Some(c) = s[prev..i].chars().next() && !c.is_whitespace() {
+        if let Some(c) = s[prev..i].chars().next()
+            && !c.is_whitespace()
+        {
             i = prev;
         } else {
             break;
@@ -164,7 +168,9 @@ fn next_word_pos(s: &str, cursor: usize) -> usize {
     let mut i = cursor.min(len);
     while i < len {
         let next = next_char_boundary(s, i);
-        if let Some(c) = s[i..next].chars().next() && !c.is_whitespace() {
+        if let Some(c) = s[i..next].chars().next()
+            && !c.is_whitespace()
+        {
             i = next;
         } else {
             break;
@@ -172,7 +178,9 @@ fn next_word_pos(s: &str, cursor: usize) -> usize {
     }
     while i < len {
         let next = next_char_boundary(s, i);
-        if let Some(c) = s[i..next].chars().next() && c.is_whitespace() {
+        if let Some(c) = s[i..next].chars().next()
+            && c.is_whitespace()
+        {
             i = next;
         } else {
             break;
@@ -220,12 +228,10 @@ pub(super) fn query_text_index_from_mouse(
     } else {
         rel_x
     };
-    let mut cur_char = 0;
-    for (idx, _) in chunk_str.char_indices() {
+    for (cur_char, (idx, _)) in chunk_str.char_indices().enumerate() {
         if cur_char >= target_col {
             return start + idx;
         }
-        cur_char += 1;
     }
     end
 }
@@ -600,13 +606,22 @@ mod tests {
         assert_eq!(cursor_line_and_col(query, 0, line0_cap, inner_w, 7), (0, 7));
 
         // Cursor at index 33 (start of line 1) is at line 1, column 0
-        assert_eq!(cursor_line_and_col(query, 33, line0_cap, inner_w, 7), (1, 0));
+        assert_eq!(
+            cursor_line_and_col(query, 33, line0_cap, inner_w, 7),
+            (1, 0)
+        );
 
         // Cursor at index 35 (line 1, char 2) is at line 1, column 2
-        assert_eq!(cursor_line_and_col(query, 35, line0_cap, inner_w, 7), (1, 2));
+        assert_eq!(
+            cursor_line_and_col(query, 35, line0_cap, inner_w, 7),
+            (1, 2)
+        );
 
         // Cursor at index 73 (start of line 2) is at line 2, column 0
-        assert_eq!(cursor_line_and_col(query, 73, line0_cap, inner_w, 7), (2, 0));
+        assert_eq!(
+            cursor_line_and_col(query, 73, line0_cap, inner_w, 7),
+            (2, 0)
+        );
     }
 
     #[test]
