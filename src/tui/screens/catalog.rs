@@ -69,13 +69,13 @@ pub(crate) fn render_selectable_list(
     let items: Vec<ListItem> = filtered
         .iter()
         .enumerate()
-        .map(|(display_idx, (orig_idx, name))| {
+        .map(|(display_idx, (_orig_idx, name))| {
             let item_y = inner.y + display_idx as u16;
             // See actions.rs for why this must be gated by pane focus.
             let is_mouse_sel =
                 is_active && app.is_area_mouse_selected(inner.x, inner.width, item_y);
 
-            let prefix = format!("{:>3} ", orig_idx + 1);
+            let prefix = format!("{:>3} ", display_idx + 1);
             let is_keyboard_sel = display_idx == clamped_selected;
             let line = if is_mouse_sel {
                 Line::styled(format!("{prefix}{name}"), theme::selection_style())
@@ -98,7 +98,7 @@ pub(crate) fn render_selectable_list(
 
     if filtered.len() > 1 {
         let mut scrollbar_state =
-            ScrollbarState::new(filtered.len().saturating_sub(1)).position(selected);
+            ScrollbarState::new(filtered.len().saturating_sub(1)).position(clamped_selected);
         frame.render_stateful_widget(
             Scrollbar::default()
                 .orientation(ScrollbarOrientation::VerticalRight)

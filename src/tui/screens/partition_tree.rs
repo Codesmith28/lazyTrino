@@ -8,11 +8,13 @@ use ratatui::{
 use crate::tui::theme;
 
 #[derive(Default)]
+#[allow(dead_code)]
 struct TreeNode {
     name: String,
     children: Vec<TreeNode>,
 }
 
+#[allow(dead_code)]
 impl TreeNode {
     fn new(name: &str) -> Self {
         Self {
@@ -38,6 +40,7 @@ impl TreeNode {
     }
 }
 
+#[allow(dead_code)]
 fn format_tree_node(
     node: &TreeNode,
     prefix: &str,
@@ -114,10 +117,14 @@ pub fn parse_partitioned_by(ddl: &str) -> (Vec<String>, String) {
     (partition_cols, location)
 }
 
-pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
+pub fn parse_show_create_to_tree_lines(ddl: &str, override_location: Option<&str>) -> Vec<String> {
     let mut lines = Vec::new();
     let (partition_cols, location) = parse_partitioned_by(ddl);
-    lines.push(format!(" {location}"));
+    let loc = override_location
+        .filter(|l| !l.is_empty())
+        .map(|l| if l.ends_with('/') { l.to_string() } else { format!("{l}/") })
+        .unwrap_or(location);
+    lines.push(format!(" {loc}"));
 
     if partition_cols.is_empty() {
         lines.push(" └── (Non-partitioned Table)".to_string());
@@ -129,11 +136,22 @@ pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
         for (depth, col) in partition_cols.iter().enumerate() {
             let is_last = depth == total - 1;
             let branch = if is_last { "└── " } else { "├── " };
-            let val_placeholder = match col.to_lowercase().as_str() {
-                "date" | "dt" | "day" => "<YYYY-MM-DD>",
-                "service" | "service_name" => "<service_name>",
-                "account" | "account_id" | "accountid" => "<account_id>",
-                _ => "<value>",
+            let col_lower = col.to_lowercase();
+            let val_placeholder = if col_lower.contains("year") {
+                "<YYYY>"
+            } else if col_lower.contains("month") {
+                "<MM>"
+            } else if col_lower.contains("day")
+                || col_lower.contains("date")
+                || col_lower.contains("dt")
+            {
+                "<YYYY-MM-DD>"
+            } else if col_lower.contains("service") {
+                "<service_name>"
+            } else if col_lower.contains("account") {
+                "<account_id>"
+            } else {
+                "<value>"
             };
             let level_tag = format!("  (Partition Level {})", depth + 1);
             lines.push(format!(
@@ -157,7 +175,8 @@ pub fn parse_show_create_to_tree_lines(ddl: &str) -> Vec<String> {
     lines
 }
 
-pub fn build_tree_lines(raw_partitions: &[String]) -> Vec<String> {
+#[allow(dead_code)]
+pub fn build_tree_lines(raw_partitions: &[String], override_location: Option<&str>) -> Vec<String> {
     if raw_partitions.is_empty() {
         return vec![" (No partitions found)".to_string()];
     }
@@ -165,11 +184,14 @@ pub fn build_tree_lines(raw_partitions: &[String]) -> Vec<String> {
     if raw_partitions.len() == 1
         && (raw_partitions[0].contains("CREATE TABLE") || raw_partitions[0].contains("WITH ("))
     {
-        return parse_show_create_to_tree_lines(&raw_partitions[0]);
+        return parse_show_create_to_tree_lines(&raw_partitions[0], override_location);
     }
 
     let mut lines = Vec::new();
-    let mut base_prefix = "s3://warehouse/table_data/".to_string();
+    let mut base_prefix = override_location
+        .filter(|l| !l.is_empty())
+        .map(|l| if l.ends_with('/') { l.to_string() } else { format!("{l}/") })
+        .unwrap_or_else(|| "s3://warehouse/table_data/".to_string());
 
     if let Some(first) = raw_partitions.first()
         && (first.starts_with("s3://") || first.starts_with("hdfs://") || first.starts_with('/'))
@@ -184,8 +206,30 @@ pub fn build_tree_lines(raw_partitions: &[String]) -> Vec<String> {
 
     let mut root = TreeNode::new("root");
     for p_str in raw_partitions.iter().take(20) {
-        let clean = p_str.trim_matches('/');
-        let segments: Vec<&str> = clean.split('/').filter(|s| !s.is_empty()).collect();
+        let clean = p_str.trim();
+        let segments: Vec<&str> = if clean.starts_with('{') && clean.contains('=') {
+            let inside = clean.trim_start_matches('{').split('}').next().unwrap_or(clean);
+            inside
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect()
+        } else {
+            let path_clean = clean.trim_matches('/');
+            path_clean
+                .split('/')
+                .filter(|s| {
+                    s.contains('=')
+                        || (!s.starts_with("s3:")
+                            && !s.starts_with("hdfs:")
+                            && !s.ends_with(".parquet")
+                            && !s.ends_with(".orc")
+                            && *s != "data"
+                            && *s != "table_data"
+                            && !s.is_empty())
+                })
+                .collect()
+        };
         if !segments.is_empty() {
             root.insert_path(&segments);
         }
@@ -336,5 +380,36 @@ WITH (
         let (cols, location) = parse_partitioned_by(ddl);
         assert!(cols.is_empty());
         assert_eq!(location, "s3://warehouse/table_data/");
+    }
+
+    #[test]
+    fn build_tree_lines_parses_iceberg_partition_structs() {
+        let raw = vec![
+            "{shipdate_year=22, shipmode=TRUCK}".to_string(),
+            "{shipdate_year=22, shipmode=AIR}".to_string(),
+            "{shipdate_year=24, shipmode=RAIL}".to_string(),
+        ];
+        let lines = build_tree_lines(&raw, Some("s3://warehouse/demo/lineitem/"));
+        assert_eq!(lines[0], " s3://warehouse/demo/lineitem/");
+        assert!(lines.iter().any(|l| l.contains("shipdate_year=22/")));
+        assert!(lines.iter().any(|l| l.contains("shipmode=TRUCK/")));
+        assert!(lines.iter().any(|l| l.contains("shipmode=AIR/")));
+        assert!(lines.iter().any(|l| l.contains("shipdate_year=24/")));
+        assert!(lines.iter().any(|l| l.contains("shipmode=RAIL/")));
+        assert!(lines.iter().any(|l| l.contains("data_files.parquet")));
+        // Ensure record_counts and sizes are not nested as pseudo-directories
+        assert!(!lines.iter().any(|l| l.contains("130123/")));
+    }
+
+    #[test]
+    fn build_tree_lines_parses_show_create_ddl_fallback() {
+        let ddl = vec![
+            "CREATE TABLE iceberg.demo.lineitem_partitioned (\n   orderkey bigint\n)\nWITH (\n   location = 's3://warehouse/demo/lineitem/',\n   partitioning = ARRAY['year(shipdate)','shipmode']\n)".to_string(),
+        ];
+        let lines = build_tree_lines(&ddl, None);
+        assert_eq!(lines[0], " s3://warehouse/demo/lineitem/");
+        assert!(lines.iter().any(|l| l.contains("year(shipdate)=<YYYY>/")));
+        assert!(lines.iter().any(|l| l.contains("shipmode=<value>/")));
+        assert!(lines.iter().any(|l| l.contains("data_files.parquet")));
     }
 }

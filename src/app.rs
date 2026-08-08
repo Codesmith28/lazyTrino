@@ -296,7 +296,7 @@ impl Action {
             Action::ShowStats => crate::trino::queries::show_stats(catalog, schema, table),
             Action::Count => crate::trino::queries::count(catalog, schema, table),
             Action::Sample => crate::trino::queries::sample(catalog, schema, table),
-            Action::Partitions => crate::trino::queries::partitions(catalog, schema, table),
+            Action::Partitions => crate::trino::queries::show_create(catalog, schema, table),
             Action::Schema => crate::trino::queries::describe(catalog, schema, table),
         }
     }
@@ -566,7 +566,7 @@ mod tests {
             (Action::Sample, queries::sample(catalog, schema, table)),
             (
                 Action::Partitions,
-                queries::partitions(catalog, schema, table),
+                queries::show_create(catalog, schema, table),
             ),
             (Action::Schema, queries::describe(catalog, schema, table)),
         ];

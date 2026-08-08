@@ -16,11 +16,11 @@ fn spinner(app: &App) -> String {
     SPINNER_FRAMES[idx].to_string()
 }
 
-pub fn chunk_query_buffer<'a>(
-    buf: &'a str,
+pub fn chunk_query_buffer(
+    buf: &str,
     line0_cap: usize,
     inner_w: usize,
-) -> Vec<(usize, usize, &'a str)> {
+) -> Vec<(usize, usize, &str)> {
     if buf.is_empty() {
         return vec![(0, 0, "")];
     }
@@ -30,12 +30,10 @@ pub fn chunk_query_buffer<'a>(
 
     while start < buf.len() {
         let mut byte_count = 0;
-        let mut char_count = 0;
-        for (idx, ch) in buf[start..].char_indices() {
+        for (char_count, (idx, ch)) in buf[start..].char_indices().enumerate() {
             if char_count >= cap {
                 break;
             }
-            char_count += 1;
             byte_count = idx + ch.len_utf8();
         }
         let end = start + byte_count;
@@ -91,11 +89,7 @@ fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
             "Type to filter catalogs, schemas, tables, and columns...",
             theme::muted_style(),
         );
-        (
-            vec![Line::from(vec![Span::raw(" / "), span])],
-            0,
-            3,
-        )
+        (vec![Line::from(vec![Span::raw(" / "), span])], 0, 3)
     } else {
         let chunks = chunk_query_buffer(&app.search_query, line0_cap, inner_width);
         let mut lines = Vec::new();
@@ -106,9 +100,10 @@ fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
                     Span::styled(*chunk_str, theme::bold_text_style()),
                 ]));
             } else {
-                lines.push(Line::from(vec![
-                    Span::styled(*chunk_str, theme::bold_text_style()),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    *chunk_str,
+                    theme::bold_text_style(),
+                )]));
             }
         }
         let (cline, ccol) = cursor_line_and_col(

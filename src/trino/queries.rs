@@ -78,6 +78,30 @@ fn is_numeric_literal(val: &str) -> bool {
     s.parse::<i64>().is_ok() || s.parse::<f64>().is_ok()
 }
 
+pub fn is_partition_column(partitioned_by: &[String], col_name: &str) -> bool {
+    let col = col_name.trim().to_ascii_lowercase();
+    if col.is_empty() {
+        return false;
+    }
+    partitioned_by.iter().any(|p| {
+        let p_trimmed = p.trim().to_ascii_lowercase();
+        if p_trimmed == col {
+            return true;
+        }
+        if let Some(open) = p_trimmed.find('(')
+            && let Some(close) = p_trimmed[open + 1..].rfind(')')
+        {
+            let inside = &p_trimmed[open + 1..open + 1 + close];
+            let first_arg = inside.split(',').next().unwrap_or(inside).trim();
+            let clean_arg = first_arg.trim_matches('"').trim_matches('\'').trim();
+            if clean_arg == col {
+                return true;
+            }
+        }
+        false
+    })
+}
+
 pub(crate) fn format_predicate(col: &str, val: &str) -> String {
     let col = col.trim();
     let val = val.trim();
@@ -296,11 +320,16 @@ mod tests {
 
     #[test]
     fn distinct_partition_values_formats_expression_and_numeric_predicates_unquoted() {
-        let filters = vec![
-            ("year(shipdate)".to_string(), "1998".to_string()),
-        ];
+        let filters = vec![("year(shipdate)".to_string(), "1998".to_string())];
         assert_eq!(
-            distinct_partition_values("iceberg", "demo", "lineitem_partitioned", &filters, "shipmode", 200),
+            distinct_partition_values(
+                "iceberg",
+                "demo",
+                "lineitem_partitioned",
+                &filters,
+                "shipmode",
+                200
+            ),
             "SELECT DISTINCT shipmode FROM \"iceberg\".\"demo\".\"lineitem_partitioned\" \
              WHERE year(shipdate) = 1998 ORDER BY shipmode DESC LIMIT 200"
         );
@@ -315,7 +344,15 @@ mod tests {
             ("deleted_at".to_string(), "NULL".to_string()),
         ];
         assert_eq!(
-            filtered_page_query("iceberg", "demo", "lineitem_partitioned", &filters, 0, 100, &[]),
+            filtered_page_query(
+                "iceberg",
+                "demo",
+                "lineitem_partitioned",
+                &filters,
+                0,
+                100,
+                &[]
+            ),
             "SELECT * FROM \"iceberg\".\"demo\".\"lineitem_partitioned\" \
              WHERE year(shipdate) = 1998 AND shipmode = 'AIR' AND is_active = true AND deleted_at IS NULL \
              OFFSET 0 LIMIT 100"
@@ -328,5 +365,21 @@ mod tests {
             info_schema_columns("ice\"berg", "o'hare", "customer's orders"),
             "SELECT column_name, data_type, is_nullable, comment FROM \"ice\"\"berg\".information_schema.columns WHERE table_schema = 'o''hare' AND table_name = 'customer''s orders' ORDER BY ordinal_position"
         );
+    }
+
+    #[test]
+    fn test_is_partition_column() {
+        let partitioned_by = vec![
+            "year(shipdate)".to_string(),
+            "shipmode".to_string(),
+            "month(orderdate)".to_string(),
+            "bucket(account_id, 100)".to_string(),
+        ];
+        assert!(is_partition_column(&partitioned_by, "shipdate"));
+        assert!(is_partition_column(&partitioned_by, "shipmode"));
+        assert!(is_partition_column(&partitioned_by, "orderdate"));
+        assert!(is_partition_column(&partitioned_by, "account_id"));
+        assert!(!is_partition_column(&partitioned_by, "orderkey"));
+        assert!(!is_partition_column(&partitioned_by, "extendedprice"));
     }
 }

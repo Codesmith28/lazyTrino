@@ -366,8 +366,8 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
             // Action::Schema
             let mut lines = Vec::new();
             for r in start_row..=end_row {
-                if r >= preview_inner_y {
-                    let idx = (r - preview_inner_y) as usize + app.schema_scroll;
+                if r >= preview_inner_y + 2 {
+                    let idx = (r - (preview_inner_y + 2)) as usize + app.schema_scroll;
                     if idx < app.vertical_schema_cols.len() {
                         let col = &app.vertical_schema_cols[idx];
                         lines.push(format!(
