@@ -440,7 +440,11 @@ mod tests {
         ];
         assert!(is_stats_table(&stats_cols));
 
-        let generic_cols = vec!["orderkey".to_string(), "totalprice".to_string(), "orderdate".to_string()];
+        let generic_cols = vec![
+            "orderkey".to_string(),
+            "totalprice".to_string(),
+            "orderdate".to_string(),
+        ];
         assert!(!is_stats_table(&generic_cols));
     }
 
