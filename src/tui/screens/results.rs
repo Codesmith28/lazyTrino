@@ -70,6 +70,76 @@ pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
     }
 }
 
+pub fn is_stats_table(columns: &[String]) -> bool {
+    columns.iter().any(|c| {
+        c.eq_ignore_ascii_case("distinct_values_count")
+            || c.eq_ignore_ascii_case("nulls_fraction")
+            || (c.eq_ignore_ascii_case("column_name")
+                && columns.iter().any(|k| k.eq_ignore_ascii_case("row_count")))
+    })
+}
+
+pub fn is_stats_summary_row(columns: &[String], row: &[String]) -> bool {
+    if !is_stats_table(columns) {
+        return false;
+    }
+    row.first()
+        .map(|s| {
+            let trimmed = s.trim();
+            trimmed.is_empty()
+                || trimmed.eq_ignore_ascii_case("null")
+                || trimmed.eq_ignore_ascii_case("none")
+        })
+        .unwrap_or(false)
+}
+
+pub fn compute_stats_aggregates(
+    columns: &[String],
+    rows: &[Vec<String>],
+) -> (Option<String>, Option<f64>) {
+    let mut total_row_count = None;
+    let mut total_data_size = 0.0;
+    let mut has_data_size = false;
+
+    let data_size_idx = columns
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("data_size"));
+    let row_count_idx = columns
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("row_count"));
+
+    for row in rows {
+        if is_stats_summary_row(columns, row) {
+            if let Some(idx) = row_count_idx
+                && let Some(val) = row.get(idx)
+            {
+                let trimmed = val.trim();
+                if !trimmed.is_empty()
+                    && !trimmed.eq_ignore_ascii_case("null")
+                    && !trimmed.eq_ignore_ascii_case("none")
+                {
+                    total_row_count = Some(trimmed.to_string());
+                }
+            }
+        } else if let Some(idx) = data_size_idx
+            && let Some(val) = row.get(idx)
+            && let Ok(bytes) = val.trim().parse::<f64>()
+        {
+            total_data_size += bytes;
+            has_data_size = true;
+        }
+    }
+
+    (
+        total_row_count,
+        if has_data_size {
+            Some(total_data_size)
+        } else {
+            None
+        },
+    )
+}
+
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -192,11 +262,33 @@ pub fn render(
     let mut col_widths: Vec<Constraint> = Vec::new();
     let mut col_width_sizes: Vec<usize> = Vec::new();
 
+    let is_stats = is_stats_table(&state.columns);
+    let (stats_total_row_count, stats_total_data_size) = if is_stats {
+        compute_stats_aggregates(&state.columns, &state.rows)
+    } else {
+        (None, None)
+    };
+
+    let data_size_col_idx = state
+        .columns
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("data_size"));
+    let row_count_col_idx = state
+        .columns
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("row_count"));
+
     for (col_idx, c) in state.columns.iter().enumerate().skip(state.scroll_h) {
         let max_data = state
             .rows
             .iter()
-            .map(|r| r.get(col_idx).map(|v| v.len()).unwrap_or(0))
+            .map(|r| {
+                if is_stats && col_idx == 0 && is_stats_summary_row(&state.columns, r) {
+                    "Summary".len()
+                } else {
+                    r.get(col_idx).map(|v| v.len()).unwrap_or(0)
+                }
+            })
             .max()
             .unwrap_or(0);
         let raw_width = (c.len().max(max_data) as u16).max(8);
@@ -227,37 +319,88 @@ pub fn render(
     let header = Row::new(header_cells).bottom_margin(1);
 
     let mut current_row_y = inner.y + 2; // header line + bottom margin 1
-    let visible_rows: Vec<Row> = state
+    let mut visible_rows: Vec<Row> = Vec::new();
+
+    for row in state
         .rows
         .iter()
         .skip(state.scroll_v)
         .take((inner.height as usize).saturating_sub(2))
-        .map(|row| {
-            let mut max_row_height: u16 = 1;
-            let row_y = current_row_y;
-            let cells: Vec<Cell> = visible_cols
+    {
+        let is_summary = is_stats && is_stats_summary_row(&state.columns, row);
+
+        if is_summary {
+            // Render border separator row with "=======" across all visible columns
+            let border_cells: Vec<Cell> = visible_cols
                 .iter()
                 .enumerate()
-                .map(|(v_idx, (col_idx, _))| {
-                    let val = row.get(*col_idx).map(|s| s.as_str()).unwrap_or("");
+                .map(|(v_idx, _)| {
                     let col_w = col_width_sizes.get(v_idx).copied().unwrap_or(15);
-                    let wrapped_lines = wrap_text(val, col_w);
-                    max_row_height = max_row_height.max(wrapped_lines.len() as u16);
-                    // See actions.rs for why this must be gated by pane focus.
-                    let is_mouse_sel =
-                        is_active && app.is_area_mouse_selected(inner.x, inner.width, row_y);
-                    let style = if is_mouse_sel {
-                        theme::selection_style()
-                    } else {
-                        cell_style
-                    };
-                    Cell::from(wrapped_lines.join("\n")).style(style)
+                    Cell::from("=".repeat(col_w)).style(theme::border_style(false))
                 })
                 .collect();
-            current_row_y += max_row_height;
-            Row::new(cells).height(max_row_height)
-        })
-        .collect();
+            current_row_y += 1;
+            visible_rows.push(Row::new(border_cells).height(1));
+        }
+
+        let mut max_row_height: u16 = 1;
+        let row_y = current_row_y;
+        let cells: Vec<Cell> = visible_cols
+            .iter()
+            .enumerate()
+            .map(|(v_idx, (col_idx, _))| {
+                let raw_val = row.get(*col_idx).map(|s| s.as_str()).unwrap_or("");
+                let is_raw_empty = raw_val.is_empty()
+                    || raw_val.eq_ignore_ascii_case("null")
+                    || raw_val.eq_ignore_ascii_case("none");
+
+                let formatted_val;
+                let display_val: &str = if is_summary && *col_idx == 0 {
+                    "Summary"
+                } else if is_summary && Some(*col_idx) == data_size_col_idx && is_raw_empty {
+                    if let Some(total_bytes) = stats_total_data_size {
+                        formatted_val = format!("{total_bytes:.1}");
+                        formatted_val.as_str()
+                    } else {
+                        "—"
+                    }
+                } else if !is_summary && Some(*col_idx) == row_count_col_idx && is_raw_empty {
+                    if let Some(ref total_rows) = stats_total_row_count {
+                        total_rows.as_str()
+                    } else {
+                        "—"
+                    }
+                } else if is_summary && is_raw_empty {
+                    "—"
+                } else {
+                    raw_val
+                };
+
+                let col_w = col_width_sizes.get(v_idx).copied().unwrap_or(15);
+                let wrapped_lines = wrap_text(display_val, col_w);
+                max_row_height = max_row_height.max(wrapped_lines.len() as u16);
+                // See actions.rs for why this must be gated by pane focus.
+                let is_mouse_sel =
+                    is_active && app.is_area_mouse_selected(inner.x, inner.width, row_y);
+                let style = if is_mouse_sel {
+                    theme::selection_style()
+                } else if is_summary {
+                    if *col_idx == 0 {
+                        theme::warning_bold_style()
+                    } else if display_val != "—" {
+                        theme::success_bold_style()
+                    } else {
+                        theme::muted_style()
+                    }
+                } else {
+                    cell_style
+                };
+                Cell::from(wrapped_lines.join("\n")).style(style)
+            })
+            .collect();
+        current_row_y += max_row_height;
+        visible_rows.push(Row::new(cells).height(max_row_height));
+    }
 
     let table = Table::new(visible_rows, col_widths)
         .header(header)
@@ -291,5 +434,133 @@ pub fn render(
             inner,
             &mut h_scroll_state,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_stats_table_identifies_trino_show_stats_headers() {
+        let stats_cols = vec![
+            "column_name".to_string(),
+            "data_size".to_string(),
+            "distinct_values_count".to_string(),
+            "nulls_fraction".to_string(),
+            "row_count".to_string(),
+            "low_value".to_string(),
+            "high_value".to_string(),
+        ];
+        assert!(is_stats_table(&stats_cols));
+
+        let generic_cols = vec![
+            "orderkey".to_string(),
+            "totalprice".to_string(),
+            "orderdate".to_string(),
+        ];
+        assert!(!is_stats_table(&generic_cols));
+    }
+
+    #[test]
+    fn test_is_stats_summary_row_identifies_null_summary_row() {
+        let stats_cols = vec![
+            "column_name".to_string(),
+            "data_size".to_string(),
+            "distinct_values_count".to_string(),
+            "nulls_fraction".to_string(),
+            "row_count".to_string(),
+            "low_value".to_string(),
+            "high_value".to_string(),
+        ];
+
+        let regular_row = vec![
+            "orderkey".to_string(),
+            "NULL".to_string(),
+            "1498948.0".to_string(),
+            "0.0".to_string(),
+            "NULL".to_string(),
+            "1".to_string(),
+            "6000000".to_string(),
+        ];
+        assert!(!is_stats_summary_row(&stats_cols, &regular_row));
+
+        let summary_row_null = vec![
+            "NULL".to_string(),
+            "NULL".to_string(),
+            "NULL".to_string(),
+            "NULL".to_string(),
+            "6001215.0".to_string(),
+            "NULL".to_string(),
+            "NULL".to_string(),
+        ];
+        assert!(is_stats_summary_row(&stats_cols, &summary_row_null));
+
+        let summary_row_empty = vec![
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "6001215.0".to_string(),
+            "".to_string(),
+            "".to_string(),
+        ];
+        assert!(is_stats_summary_row(&stats_cols, &summary_row_empty));
+    }
+
+    #[test]
+    fn test_compute_stats_aggregates_sums_bytes_and_finds_row_count() {
+        let stats_cols = vec![
+            "column_name".to_string(),
+            "data_size".to_string(),
+            "distinct_values_count".to_string(),
+            "nulls_fraction".to_string(),
+            "row_count".to_string(),
+            "low_value".to_string(),
+            "high_value".to_string(),
+        ];
+
+        let rows = vec![
+            vec![
+                "orderkey".to_string(),
+                "NULL".to_string(),
+                "1498948.0".to_string(),
+                "0.0".to_string(),
+                "NULL".to_string(),
+                "1".to_string(),
+                "6000000".to_string(),
+            ],
+            vec![
+                "returnflag".to_string(),
+                "1361361.0".to_string(),
+                "3.0".to_string(),
+                "0.0".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+            ],
+            vec![
+                "comment".to_string(),
+                "125281177.0".to_string(),
+                "4533595.0".to_string(),
+                "0.0".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+            ],
+            vec![
+                "NULL".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+                "6001215.0".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+            ],
+        ];
+
+        let (total_rows, total_data_size) = compute_stats_aggregates(&stats_cols, &rows);
+        assert_eq!(total_rows.as_deref(), Some("6001215.0"));
+        assert_eq!(total_data_size, Some(1361361.0 + 125281177.0));
     }
 }

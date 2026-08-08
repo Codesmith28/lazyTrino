@@ -102,18 +102,14 @@ pub fn dispatch_command(
             if let Some(client) = app.trino_client.clone() {
                 let show_create_query = queries::show_create(&catalog, &schema, &table);
                 let show_create_log_id = app.add_query_log(show_create_query.clone());
-                let part_query = queries::partitions(&catalog, &schema, &table);
-                let part_log_id = app.add_query_log(part_query.clone());
                 let desc_query = queries::info_schema_columns(&catalog, &schema, &table);
                 let cols_log_id = app.add_query_log(desc_query.clone());
                 app.loading = true;
 
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    // The table's own partition layout (if any) is always resolved
-                    // dynamically from this specific table's live `SHOW CREATE TABLE`
-                    // DDL — never hardcoded by table/schema name. An unpartitioned
-                    // table simply yields an empty `partitioned_by`.
+                    // The table's partition layout is always derived directly
+                    // from the table's DDL (`SHOW CREATE TABLE`).
                     let (partitioned_by, location, ddl_text, show_create_error) =
                         match client.execute(&show_create_query).await {
                             Ok(res) => {
@@ -130,38 +126,22 @@ pub fn dispatch_command(
                             Err(err) => (Vec::new(), String::new(), String::new(), Some(err)),
                         };
 
-                    // Send the DDL result the moment it's ready — Table DDL
-                    // (and knowing whether the table is partitioned, for
-                    // Table View's drill-down decision) shouldn't have to
-                    // wait on the slower `$partitions` / info-schema queries
-                    // below.
                     let _ = tx.send(AsyncResult::FetchTableDdl {
                         show_create_log_id,
+                        catalog: catalog.clone(),
+                        schema: schema.clone(),
+                        table: table.clone(),
                         partitioned_by: partitioned_by.clone(),
-                        location,
+                        location: location.clone(),
                         ddl_text: ddl_text.clone(),
                         show_create_error,
                     });
 
-                    let (partition_lines, partitions_error) = match client
-                        .execute(&part_query)
-                        .await
-                    {
-                        Ok(res) if !res.data.is_empty() => {
-                            let raw_lines: Vec<String> =
-                                res.data.into_iter().map(|r| r.join("/")).collect();
-                            (
-                                crate::tui::screens::partition_tree::build_tree_lines(&raw_lines),
-                                None,
-                            )
-                        }
-                        Ok(_) | Err(_) => (
-                            crate::tui::screens::partition_tree::build_tree_lines(
-                                std::slice::from_ref(&ddl_text),
-                            ),
-                            None,
-                        ),
-                    };
+                    let partition_lines =
+                        crate::tui::screens::partition_tree::parse_show_create_to_tree_lines(
+                            &ddl_text,
+                            Some(&location),
+                        );
 
                     let (columns, columns_error) = match client.execute(&desc_query).await {
                         Ok(res) => {
@@ -178,7 +158,10 @@ pub fn dispatch_command(
                                         "Hudi Metadata".to_string()
                                     } else if name.starts_with("$") || name.contains("iceberg") {
                                         "Iceberg Meta".to_string()
-                                    } else if partitioned_by.iter().any(|p| p == &name) {
+                                    } else if crate::trino::queries::is_partition_column(
+                                        &partitioned_by,
+                                        &name,
+                                    ) {
                                         "Partition Key".to_string()
                                     } else if is_nullable == "NO" {
                                         "PK".to_string()
@@ -200,11 +183,14 @@ pub fn dispatch_command(
                     };
 
                     let _ = tx.send(AsyncResult::FetchTableMetadata {
-                        partitions_log_id: part_log_id,
+                        partitions_log_id: show_create_log_id,
                         cols_log_id,
+                        catalog: catalog.clone(),
+                        schema: schema.clone(),
+                        table: table.clone(),
                         partition_lines,
                         columns,
-                        partitions_error,
+                        partitions_error: None,
                         columns_error,
                     });
                 });
@@ -316,10 +302,16 @@ pub fn dispatch_command(
 
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
+                let catalog = catalog.clone();
+                let schema = schema.clone();
+                let table = table.clone();
                 tokio::spawn(async move {
                     let res = client.execute(&query).await;
                     let _ = tx.send(AsyncResult::FetchNextPage {
                         log_id,
+                        catalog,
+                        schema,
+                        table,
                         offset,
                         limit,
                         result: res,
@@ -352,10 +344,16 @@ pub fn dispatch_command(
 
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
+                let catalog = catalog.clone();
+                let schema = schema.clone();
+                let table = table.clone();
                 tokio::spawn(async move {
                     let res = client.execute(&query).await;
                     let _ = tx.send(AsyncResult::FetchPartitionLevel {
                         log_id,
+                        catalog,
+                        schema,
+                        table,
                         filters,
                         column,
                         result: res,
@@ -461,6 +459,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
         }
         AsyncResult::FetchTableDdl {
             show_create_log_id,
+            catalog,
+            schema,
+            table,
             partitioned_by,
             location,
             ddl_text,
@@ -472,19 +473,17 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
             } else {
                 app.complete_query_log_success(show_create_log_id, 20, 1);
             }
-            if let Screen::Actions(ref mut action_state) = app.screen {
+            if let Screen::Actions(ref mut action_state) = app.screen
+                && action_state.catalog == catalog
+                && action_state.schema == schema
+                && action_state.table == table
+            {
                 action_state.metadata = Some(TableRecon {
                     partitioned_by,
                     location,
                     ddl_text,
                 });
                 action_state.ddl_loading = false;
-                // If the user already selected Table DDL while recon was
-                // still in flight (blocked, see `trigger_action`), the menu
-                // switched to it but nothing was ever populated since the
-                // cached DDL wasn't ready yet. Now that it just landed,
-                // render it immediately instead of leaving the pane stuck
-                // on the loading spinner until the user re-presses `c`.
                 if matches!(
                     ACTIONS.get(action_state.selected).map(|(_, _, a)| a),
                     Some(Action::TableDDL)
@@ -497,6 +496,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
         AsyncResult::FetchTableMetadata {
             partitions_log_id,
             cols_log_id,
+            catalog,
+            schema,
+            table,
             partition_lines,
             columns,
             partitions_error,
@@ -515,9 +517,13 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
             } else {
                 app.complete_query_log_success(cols_log_id, 20, columns.len());
             }
-            app.partition_tree_lines = partition_lines;
-            app.vertical_schema_cols = columns;
-            if let Screen::Actions(ref mut action_state) = app.screen {
+            if let Screen::Actions(ref mut action_state) = app.screen
+                && action_state.catalog == catalog
+                && action_state.schema == schema
+                && action_state.table == table
+            {
+                app.partition_tree_lines = partition_lines;
+                app.vertical_schema_cols = columns;
                 action_state.metadata_loading = false;
             }
         }
@@ -572,7 +578,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         0
                     };
                     if let Screen::Actions(ref mut a) = app.screen {
-                        a.results = Some(res_state);
+                        if a.catalog == catalog && a.schema == schema && a.table == table {
+                            a.results = Some(res_state);
+                        }
                     } else {
                         let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
                         let query_len = default_query.len();
@@ -621,7 +629,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         0
                     };
                     if let Screen::Actions(ref mut a) = app.screen {
-                        a.results = Some(res_state);
+                        if a.catalog == catalog && a.schema == schema && a.table == table {
+                            a.results = Some(res_state);
+                        }
                     } else {
                         let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
                         let query_len = default_query.len();
@@ -642,6 +652,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
         }
         AsyncResult::FetchNextPage {
             log_id,
+            catalog,
+            schema,
+            table,
             offset,
             limit,
             result,
@@ -651,6 +664,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 let new_rows = results.data;
                 let fetched_count = new_rows.len();
                 if let Screen::Actions(ref mut action_state) = app.screen
+                    && action_state.catalog == catalog
+                    && action_state.schema == schema
+                    && action_state.table == table
                     && let Some(state) = action_state.results.as_mut()
                 {
                     state.rows.extend(new_rows);
@@ -665,6 +681,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 error!(error = %e, "Fetch next page failed");
                 app.complete_query_log_error(log_id, e.to_string());
                 if let Screen::Actions(ref mut action_state) = app.screen
+                    && action_state.catalog == catalog
+                    && action_state.schema == schema
+                    && action_state.table == table
                     && let Some(state) = action_state.results.as_mut()
                 {
                     state.is_fetching_next_page = false;
@@ -674,6 +693,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
         },
         AsyncResult::FetchPartitionLevel {
             log_id,
+            catalog,
+            schema,
+            table,
             filters,
             column,
             result,
@@ -693,6 +715,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     })
                     .collect();
                 if let Screen::Actions(ref mut action_state) = app.screen
+                    && action_state.catalog == catalog
+                    && action_state.schema == schema
+                    && action_state.table == table
                     && let Some(drilldown) = action_state.drilldown.as_mut()
                     // Only apply if this result still matches where the user currently
                     // is in the drill-down (guards against stale in-flight responses
@@ -717,6 +742,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 let err = e.to_string();
                 app.complete_query_log_error(log_id, err.clone());
                 if let Screen::Actions(ref mut action_state) = app.screen
+                    && action_state.catalog == catalog
+                    && action_state.schema == schema
+                    && action_state.table == table
                     && let Some(drilldown) = action_state.drilldown.as_mut()
                     && drilldown.path == filters
                     && drilldown.next_column() == Some(column.as_str())
@@ -764,6 +792,9 @@ mod tests {
             &mut app,
             AsyncResult::FetchTableDdl {
                 show_create_log_id: 1,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
                 partitioned_by: vec!["date".to_string()],
                 location: "s3://bucket/orders".to_string(),
                 ddl_text: "CREATE TABLE orders (...)".to_string(),

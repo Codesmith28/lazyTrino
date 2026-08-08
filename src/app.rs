@@ -119,6 +119,57 @@ pub struct TableState {
     pub selected: usize,
 }
 
+pub trait SelectableList {
+    fn items(&self) -> &[String];
+    fn selected(&self) -> usize;
+    fn set_selected(&mut self, selected: usize);
+    fn selected_item(&self) -> Option<&str> {
+        let items = self.items();
+        let idx = self.selected();
+        if idx < items.len() {
+            Some(&items[idx])
+        } else {
+            None
+        }
+    }
+}
+
+impl SelectableList for CatalogState {
+    fn items(&self) -> &[String] {
+        &self.items
+    }
+    fn selected(&self) -> usize {
+        self.selected
+    }
+    fn set_selected(&mut self, selected: usize) {
+        self.selected = selected;
+    }
+}
+
+impl SelectableList for SchemaState {
+    fn items(&self) -> &[String] {
+        &self.items
+    }
+    fn selected(&self) -> usize {
+        self.selected
+    }
+    fn set_selected(&mut self, selected: usize) {
+        self.selected = selected;
+    }
+}
+
+impl SelectableList for TableState {
+    fn items(&self) -> &[String] {
+        &self.items
+    }
+    fn selected(&self) -> usize {
+        self.selected
+    }
+    fn set_selected(&mut self, selected: usize) {
+        self.selected = selected;
+    }
+}
+
 /// Ordered partition-column layout + storage location for a table, parsed
 /// once (per table) from a live `SHOW CREATE TABLE` response during table
 /// entry recon. `partitioned_by` is empty for unpartitioned tables. This is
@@ -310,7 +361,7 @@ impl Action {
             Action::ShowStats => crate::trino::queries::show_stats(catalog, schema, table),
             Action::Count => crate::trino::queries::count(catalog, schema, table),
             Action::Sample => crate::trino::queries::sample(catalog, schema, table),
-            Action::Partitions => crate::trino::queries::partitions(catalog, schema, table),
+            Action::Partitions => crate::trino::queries::show_create(catalog, schema, table),
             Action::Schema => crate::trino::queries::describe(catalog, schema, table),
         }
     }
@@ -580,7 +631,7 @@ mod tests {
             (Action::Sample, queries::sample(catalog, schema, table)),
             (
                 Action::Partitions,
-                queries::partitions(catalog, schema, table),
+                queries::show_create(catalog, schema, table),
             ),
             (Action::Schema, queries::describe(catalog, schema, table)),
         ];
