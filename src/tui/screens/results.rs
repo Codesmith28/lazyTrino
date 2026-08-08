@@ -79,6 +79,53 @@ pub fn is_stats_summary_row(columns: &[String], row: &[String]) -> bool {
         .unwrap_or(false)
 }
 
+pub fn compute_stats_aggregates(
+    columns: &[String],
+    rows: &[Vec<String>],
+) -> (Option<String>, Option<f64>) {
+    let mut total_row_count = None;
+    let mut total_data_size = 0.0;
+    let mut has_data_size = false;
+
+    let data_size_idx = columns
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("data_size"));
+    let row_count_idx = columns
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("row_count"));
+
+    for row in rows {
+        if is_stats_summary_row(columns, row) {
+            if let Some(idx) = row_count_idx
+                && let Some(val) = row.get(idx)
+            {
+                let trimmed = val.trim();
+                if !trimmed.is_empty()
+                    && !trimmed.eq_ignore_ascii_case("null")
+                    && !trimmed.eq_ignore_ascii_case("none")
+                {
+                    total_row_count = Some(trimmed.to_string());
+                }
+            }
+        } else if let Some(idx) = data_size_idx
+            && let Some(val) = row.get(idx)
+            && let Ok(bytes) = val.trim().parse::<f64>()
+        {
+            total_data_size += bytes;
+            has_data_size = true;
+        }
+    }
+
+    (
+        total_row_count,
+        if has_data_size {
+            Some(total_data_size)
+        } else {
+            None
+        },
+    )
+}
+
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -202,6 +249,20 @@ pub fn render(
     let mut col_width_sizes: Vec<usize> = Vec::new();
 
     let is_stats = is_stats_table(&state.columns);
+    let (stats_total_row_count, stats_total_data_size) = if is_stats {
+        compute_stats_aggregates(&state.columns, &state.rows)
+    } else {
+        (None, None)
+    };
+
+    let data_size_col_idx = state
+        .columns
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("data_size"));
+    let row_count_col_idx = state
+        .columns
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("row_count"));
 
     for (col_idx, c) in state.columns.iter().enumerate().skip(state.scroll_h) {
         let max_data = state
@@ -279,8 +340,22 @@ pub fn render(
                     || raw_val.eq_ignore_ascii_case("null")
                     || raw_val.eq_ignore_ascii_case("none");
 
-                let display_val = if is_summary && *col_idx == 0 {
+                let formatted_val;
+                let display_val: &str = if is_summary && *col_idx == 0 {
                     "Summary"
+                } else if is_summary && Some(*col_idx) == data_size_col_idx && is_raw_empty {
+                    if let Some(total_bytes) = stats_total_data_size {
+                        formatted_val = format!("{total_bytes:.1}");
+                        formatted_val.as_str()
+                    } else {
+                        "—"
+                    }
+                } else if !is_summary && Some(*col_idx) == row_count_col_idx && is_raw_empty {
+                    if let Some(ref total_rows) = stats_total_row_count {
+                        total_rows.as_str()
+                    } else {
+                        "—"
+                    }
                 } else if is_summary && is_raw_empty {
                     "—"
                 } else {
@@ -413,5 +488,61 @@ mod tests {
             "".to_string(),
         ];
         assert!(is_stats_summary_row(&stats_cols, &summary_row_empty));
+    }
+
+    #[test]
+    fn test_compute_stats_aggregates_sums_bytes_and_finds_row_count() {
+        let stats_cols = vec![
+            "column_name".to_string(),
+            "data_size".to_string(),
+            "distinct_values_count".to_string(),
+            "nulls_fraction".to_string(),
+            "row_count".to_string(),
+            "low_value".to_string(),
+            "high_value".to_string(),
+        ];
+
+        let rows = vec![
+            vec![
+                "orderkey".to_string(),
+                "NULL".to_string(),
+                "1498948.0".to_string(),
+                "0.0".to_string(),
+                "NULL".to_string(),
+                "1".to_string(),
+                "6000000".to_string(),
+            ],
+            vec![
+                "returnflag".to_string(),
+                "1361361.0".to_string(),
+                "3.0".to_string(),
+                "0.0".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+            ],
+            vec![
+                "comment".to_string(),
+                "125281177.0".to_string(),
+                "4533595.0".to_string(),
+                "0.0".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+            ],
+            vec![
+                "NULL".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+                "6001215.0".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+            ],
+        ];
+
+        let (total_rows, total_data_size) = compute_stats_aggregates(&stats_cols, &rows);
+        assert_eq!(total_rows.as_deref(), Some("6001215.0"));
+        assert_eq!(total_data_size, Some(1361361.0 + 125281177.0));
     }
 }
