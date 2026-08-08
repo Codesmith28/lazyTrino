@@ -120,10 +120,11 @@ pub fn dispatch_command(
                         show_create_error,
                     });
 
-                    let partition_lines = crate::tui::screens::partition_tree::parse_show_create_to_tree_lines(
-                        &ddl_text,
-                        Some(&location),
-                    );
+                    let partition_lines =
+                        crate::tui::screens::partition_tree::parse_show_create_to_tree_lines(
+                            &ddl_text,
+                            Some(&location),
+                        );
 
                     let (columns, columns_error) = match client.execute(&desc_query).await {
                         Ok(res) => {

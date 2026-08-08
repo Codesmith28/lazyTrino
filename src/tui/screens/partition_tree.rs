@@ -51,7 +51,13 @@ pub fn parse_show_create_to_tree_lines(ddl: &str, override_location: Option<&str
     let (partition_cols, location) = parse_partitioned_by(ddl);
     let loc = override_location
         .filter(|l| !l.is_empty())
-        .map(|l| if l.ends_with('/') { l.to_string() } else { format!("{l}/") })
+        .map(|l| {
+            if l.ends_with('/') {
+                l.to_string()
+            } else {
+                format!("{l}/")
+            }
+        })
         .unwrap_or(location);
     lines.push(format!(" {loc}"));
 
