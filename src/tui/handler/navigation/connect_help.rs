@@ -34,7 +34,11 @@ pub fn connect_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
             state.focused = (state.focused + 1) % 3;
         }
         KeyCode::BackTab | KeyCode::Up => {
-            state.focused = if state.focused == 0 { 2 } else { state.focused - 1 };
+            state.focused = if state.focused == 0 {
+                2
+            } else {
+                state.focused - 1
+            };
         }
         KeyCode::Backspace => match state.focused {
             0 => {

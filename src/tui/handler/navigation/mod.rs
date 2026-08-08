@@ -164,8 +164,8 @@ pub fn get_selected(screen: &Screen) -> Option<usize> {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
     use super::drilldown::*;
+    use super::*;
     use crate::app::{ActionState, DrillDownState, Mode, ResultsState, TableRecon};
     use crate::config::ConnectionConfig;
     use crate::trino::client::TrinoClient;
@@ -753,8 +753,14 @@ pub mod tests {
             panic!("expected connect screen");
         };
         assert_eq!(state.url, "http://localhost:8080/");
-        assert!(app.number_buffer.is_empty(), "number_buffer must not be populated on connect screen");
-        assert!(matches!(app.mode, Mode::Normal), "typing / on connect screen must not enter Search mode");
+        assert!(
+            app.number_buffer.is_empty(),
+            "number_buffer must not be populated on connect screen"
+        );
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "typing / on connect screen must not enter Search mode"
+        );
 
         // Move focus to user (focused = 1)
         crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Tab));
@@ -789,6 +795,9 @@ pub mod tests {
             panic!("expected connect screen");
         };
         assert_eq!(state.password, "pass_45?");
-        assert!(!matches!(app.screen, Screen::Help), "typing ? on connect screen must not open Help");
+        assert!(
+            !matches!(app.screen, Screen::Help),
+            "typing ? on connect screen must not open Help"
+        );
     }
 }
