@@ -15,25 +15,25 @@ Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[C
 ## Layout Overview
 
 ```
-+-----------------------------------+-------------------------------------------------------------------+
-|  Menu — <table_name>              |  Centralized Search Bar [/ to search]                             |
-|  (Resizable Panel Split)          +-------------------------------------------------------------------+
-|                                   |  Table Query Bar [Press q or : to write query]                    |
-|  ▸ [v] Table View Mode            |  SQL > SELECT * FROM "catalog"."schema"."table" LIMIT 100         |
-|    [c] Table DDL                  +-------------------------------------------------------------------+
-|    [i] Info Schema                |  Preview — <table_name> (Table View Mode)                         |
-|    [s] Show Stats                 |                                                                   |
-|    [n] Count                      |  +----+-------------+--------------+                              |
-|    [p] Sample Mode (20 rows)      |  | id | name        | status       |                              |
-|    [P] Partitions                 |  +----+-------------+--------------+                              |
-|    [S] Schema                     |  | 1  | Alice       | ACTIVE       |                              |
-|                                   |  | 2  | Bob         | INACTIVE     |                              |
-|                                   |  +----+-------------+--------------+                              |
-+-----------------------------------+-------------------------------------------------------------------+
-|  Query Inspector & Audit Logs [Status: SUCCESS | Duration: 42ms | Rows: 100]                          |
-+-------------------------------------------------------------------------------------------------------+
-|  Footer Hints [ j/k:rows  </>:cols  g/G:top/btm  q/:query  Esc:menu  Tab:pane  ?:help  Ctrl+C:quit ]  |
-+-------------------------------------------------------------------------------------------------------+
++----------------------------------+----------------------------------------------------------------+
+| Menu — <table_name>              |  Centralized Search Bar [/ to search]                          |
+| (Resizable Panel Split)          +----------------------------------------------------------------+
+|                                  |  Table Query Bar [Press q or : to write query]                 |
+| ▸ [v] Table View Mode            |  SQL > SELECT * FROM "catalog"."schema"."table" LIMIT 100      |
+|   [c] Table DDL                  +----------------------------------------------------------------+
+|   [i] Info Schema                |  Preview — <table_name> (Table View Mode)                      |
+|   [s] Show Stats                 |                                                                |
+|   [n] Count                      |  +----+-------------+--------------+                           |
+|   [p] Sample Mode (20 rows)      |  | id | name        | status       |                           |
+|   [P] Partitions                 |  +----+-------------+--------------+                           |
+|   [S] Schema                     |  | 1  | Alice       | ACTIVE       |                           |
+|                                  |  | 2  | Bob         | INACTIVE     |                           |
+|                                  |  +----+-------------+--------------+                           |
++----------------------------------+----------------------------------------------------------------+
+| Query Inspector & Audit Logs [Status: SUCCESS | Duration: 42ms | Rows: 100]                       |
++---------------------------------------------------------------------------------------------------+
+| Footer Hints [j/k:rows  </>:cols  g/G:top/btm  q/:query  Esc:menu  Tab:pane  ?:help  Ctrl+C:quit] |
++---------------------------------------------------------------------------------------------------+
 ```
 
 ---
