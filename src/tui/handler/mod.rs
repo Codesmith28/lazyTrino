@@ -238,13 +238,23 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     }
 
     if code == KeyCode::Char('?') {
+        if matches!(app.screen, Screen::Help) {
+            navigation::go_back(app);
+            return None;
+        }
         app.prev_screen = Some(Box::new(app.screen.clone()));
         app.clear_mouse_selection();
+        app.search_query.clear();
         app.screen = Screen::Help;
         return None;
     }
 
-    if code == KeyCode::Char('/') {
+    if code == KeyCode::Char('/')
+        && matches!(
+            app.screen,
+            Screen::Catalog(_) | Screen::Schema(_) | Screen::Table(_) | Screen::Help
+        )
+    {
         app.mode = Mode::Search;
         return None;
     }
@@ -254,6 +264,9 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         let is_in_table = matches!(app.screen, Screen::Actions(_));
         if is_in_table && app.active_panel == ActivePanel::MainViewer {
             app.set_active_panel(ActivePanel::MenuPane);
+            return None;
+        } else if matches!(app.screen, Screen::Help) && !app.search_query.is_empty() {
+            app.search_query.clear();
             return None;
         } else {
             navigation::go_back(app);

@@ -400,8 +400,58 @@ pub fn split_sql_clauses(sql: &str) -> (&str, Option<&str>, &str) {
     }
 }
 
-pub fn build_query_with_column_filters(
+pub fn replace_select_columns(
+    head: &str,
+    visible_columns: &[String],
+    all_columns_count: usize,
+) -> String {
+    if visible_columns.len() == all_columns_count || visible_columns.is_empty() {
+        return head.to_string();
+    }
+
+    let upper = head.to_ascii_uppercase();
+    if !upper.starts_with("SELECT ") {
+        return head.to_string();
+    }
+
+    let mut depth: usize = 0;
+    let mut from_pos = None;
+    let bytes = head.as_bytes();
+    let len = bytes.len();
+
+    for i in 6..len {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            _ if depth == 0
+                && i + 6 <= len
+                && head[i..i + 6].eq_ignore_ascii_case(" FROM ") =>
+            {
+                from_pos = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    let Some(f_pos) = from_pos else {
+        return head.to_string();
+    };
+
+    let from_and_rest = &head[f_pos..];
+    let formatted_cols = visible_columns
+        .iter()
+        .map(|c| q(c))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!("SELECT {formatted_cols}{from_and_rest}")
+}
+
+pub fn build_query_with_all_filters(
     base_query: &str,
+    all_columns: &[String],
+    hidden_columns: &HashSet<String>,
     column_filters: &HashMap<String, HashSet<String>>,
     col_distinct_values: &HashMap<String, Vec<String>>,
 ) -> String {
@@ -421,6 +471,13 @@ pub fn build_query_with_column_filters(
 
     let (head, existing_where, tail) = split_sql_clauses(base_query);
 
+    let visible_cols: Vec<String> = all_columns
+        .iter()
+        .filter(|c| !hidden_columns.contains(*c))
+        .cloned()
+        .collect();
+    let updated_head = replace_select_columns(head, &visible_cols, all_columns.len());
+
     let where_clause = match (existing_where, predicates.is_empty()) {
         (Some(orig), false) if !orig.trim().is_empty() => {
             let preds = predicates.join(" AND ");
@@ -437,8 +494,8 @@ pub fn build_query_with_column_filters(
     };
 
     let mut parts = Vec::new();
-    if !head.is_empty() {
-        parts.push(head);
+    if !updated_head.is_empty() {
+        parts.push(updated_head.as_str());
     }
     if !where_clause.is_empty() {
         parts.push(&where_clause);
@@ -447,6 +504,20 @@ pub fn build_query_with_column_filters(
         parts.push(tail);
     }
     parts.join(" ")
+}
+
+pub fn build_query_with_column_filters(
+    base_query: &str,
+    column_filters: &HashMap<String, HashSet<String>>,
+    col_distinct_values: &HashMap<String, Vec<String>>,
+) -> String {
+    build_query_with_all_filters(
+        base_query,
+        &[],
+        &HashSet::new(),
+        column_filters,
+        col_distinct_values,
+    )
 }
 
 #[cfg(test)]
@@ -685,6 +756,40 @@ mod tests {
         assert_eq!(
             sql_where,
             "SELECT * FROM tbl WHERE (date = '2026-08-06') AND (\"status\" = 'ACTIVE') OFFSET 0 LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn test_replace_select_columns() {
+        let head = "SELECT * FROM \"iceberg\".\"sales\".\"orders\"";
+        let cols = vec!["id".to_string(), "status".to_string()];
+        let replaced = replace_select_columns(head, &cols, 3);
+        assert_eq!(replaced, "SELECT \"id\", \"status\" FROM \"iceberg\".\"sales\".\"orders\"");
+
+        // All columns visible preserves original head
+        let all_cols = vec!["id".to_string(), "status".to_string(), "amount".to_string()];
+        let preserved = replace_select_columns(head, &all_cols, 3);
+        assert_eq!(preserved, head);
+    }
+
+    #[test]
+    fn test_build_query_with_all_filters() {
+        let base_query = "SELECT * FROM orders OFFSET 0 LIMIT 100";
+        let all_cols = vec!["id".to_string(), "status".to_string(), "amount".to_string()];
+        let mut hidden = HashSet::new();
+        hidden.insert("amount".to_string());
+
+        let mut filters = HashMap::new();
+        let mut distinct = HashMap::new();
+        let mut sel = HashSet::new();
+        sel.insert("ACTIVE".to_string());
+        filters.insert("status".to_string(), sel);
+        distinct.insert("status".to_string(), vec!["ACTIVE".to_string(), "PENDING".to_string()]);
+
+        let sql = build_query_with_all_filters(base_query, &all_cols, &hidden, &filters, &distinct);
+        assert_eq!(
+            sql,
+            "SELECT \"id\", \"status\" FROM orders WHERE \"status\" = 'ACTIVE' OFFSET 0 LIMIT 100"
         );
     }
 }

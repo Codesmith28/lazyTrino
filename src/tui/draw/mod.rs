@@ -33,7 +33,8 @@ pub use search_query::*;
 pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
     match app.screen {
         Screen::Help => {
-            screens::help::render(frame, frame.area());
+            let is_searching = matches!(app.mode, Mode::Search);
+            screens::help::render(frame, frame.area(), &app.search_query, is_searching);
         }
         _ => {
             let is_in_table = matches!(app.screen, Screen::Actions(_));
@@ -56,24 +57,30 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
                 ])
                 .split(outer_chunks[0]);
 
-                let search_active = matches!(app.mode, Mode::Search);
-                let inner_w = main_chunks[0].width.saturating_sub(2).max(1) as usize;
-                let search_height = if search_active {
-                    let total_chars = 3 + app.search_query.len();
-                    let lines = total_chars.div_ceil(inner_w);
-                    (lines as u16 + 2).clamp(3, 8)
+                screens::help::render(frame, main_chunks[1], "", false);
+
+                let is_connect = matches!(app.screen, Screen::Connect(_));
+                let main = if is_connect {
+                    main_chunks[0]
                 } else {
-                    3
+                    let search_active = matches!(app.mode, Mode::Search);
+                    let inner_w = main_chunks[0].width.saturating_sub(2).max(1) as usize;
+                    let search_height = if search_active {
+                        let total_chars = 3 + app.search_query.len();
+                        let lines = total_chars.div_ceil(inner_w);
+                        (lines as u16 + 2).clamp(3, 8)
+                    } else {
+                        3
+                    };
+
+                    let left_chunks =
+                        Layout::vertical([Constraint::Length(search_height), Constraint::Min(0)])
+                            .split(main_chunks[0]);
+
+                    render_search_bar(frame, left_chunks[0], app);
+                    left_chunks[1]
                 };
 
-                let left_chunks =
-                    Layout::vertical([Constraint::Length(search_height), Constraint::Min(0)])
-                        .split(main_chunks[0]);
-
-                render_search_bar(frame, left_chunks[0], app);
-                screens::help::render(frame, main_chunks[1]);
-
-                let main = left_chunks[1];
                 let main_is_active = true;
 
                 match &app.screen {
@@ -128,17 +135,8 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
                 let menu_area = main_chunks[0];
                 let preview_column = main_chunks[1];
 
-                let search_active = matches!(app.mode, Mode::Search);
                 let query_active = matches!(app.mode, Mode::QueryInput);
                 let inner_w = preview_column.width.saturating_sub(2).max(1) as usize;
-
-                let search_height = if search_active {
-                    let total_chars = 3 + app.search_query.len();
-                    let lines = total_chars.div_ceil(inner_w);
-                    (lines as u16 + 2).clamp(3, 8)
-                } else {
-                    3
-                };
 
                 let selected_idx = match &app.screen {
                     Screen::Actions(a) => a.selected,
@@ -161,15 +159,13 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
                 };
 
                 let preview_chunks = Layout::vertical([
-                    Constraint::Length(search_height),
                     Constraint::Length(query_height),
                     Constraint::Min(0),
                 ])
                 .split(preview_column);
 
-                render_search_bar(frame, preview_chunks[0], app);
-                render_query_bar(frame, preview_chunks[1], app);
-                let preview_pane_area = preview_chunks[2];
+                render_query_bar(frame, preview_chunks[0], app);
+                let preview_pane_area = preview_chunks[1];
 
                 let menu_is_active = app.active_panel == ActivePanel::MenuPane;
                 let preview_is_active = app.active_panel == ActivePanel::MainViewer;
@@ -429,7 +425,7 @@ pub mod toast_border_regression {
         terminal.draw(|f| ui(f, &app)).unwrap();
         let buf = terminal.backend().buffer().clone();
 
-        for y in [0u16, 3u16] {
+        for y in [0u16] {
             let mut corner_x = None;
             for x in (0..200u16).rev() {
                 let sym = buf.cell((x, y)).unwrap().symbol().to_string();
@@ -545,7 +541,7 @@ pub mod query_bar_height_regression {
         terminal.draw(|f| ui(f, &app)).unwrap();
         let buf = terminal.backend().buffer().clone();
 
-        let query_bar_top = 3u16;
+        let query_bar_top = 0u16;
         let mut bottom_y = query_bar_top;
         for y in query_bar_top..40u16 {
             let has_corner = (0..120u16).any(|x| buf.cell((x, y)).unwrap().symbol() == "╰");
@@ -583,7 +579,7 @@ pub mod query_bar_height_regression {
         terminal.draw(|f| ui(f, &app)).unwrap();
         let buf = terminal.backend().buffer().clone();
 
-        let query_bar_top = 3u16;
+        let query_bar_top = 0u16;
         let mut bottom_y = query_bar_top;
         for y in query_bar_top..40u16 {
             let has_corner = (0..120u16).any(|x| buf.cell((x, y)).unwrap().symbol() == "╰");

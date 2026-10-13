@@ -31,7 +31,10 @@ pub fn go_back(app: &mut App) {
     app.main_panel_pct = 60;
 
     let next = match &app.screen {
-        Screen::Help => app.prev_screen.take().map(|p| *p),
+        Screen::Help => {
+            app.search_query.clear();
+            app.prev_screen.take().map(|p| *p)
+        }
         Screen::Catalog(_) => {
             if logged_in {
                 None

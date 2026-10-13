@@ -63,21 +63,70 @@ pub fn open_filter_modal(app: &mut App) {
             selected_values,
             cursor: 0,
             scroll: 0,
+            search_query: String::new(),
+            is_searching: false,
         });
         app.mode = Mode::FilterModal;
     }
 }
 
 pub fn handle_filter_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> {
+    let is_searching = app
+        .filter_modal
+        .as_ref()
+        .map(|m| m.is_searching)
+        .unwrap_or(false);
+
+    if is_searching {
+        match key.code {
+            KeyCode::Esc => {
+                if let Some(ref mut m) = app.filter_modal {
+                    m.is_searching = false;
+                }
+                return None;
+            }
+            KeyCode::Enter => {
+                if let Some(ref mut m) = app.filter_modal {
+                    m.is_searching = false;
+                }
+                return None;
+            }
+            KeyCode::Backspace => {
+                if let Some(ref mut m) = app.filter_modal {
+                    m.search_query.pop();
+                    m.cursor = 0;
+                    m.scroll = 0;
+                }
+                return None;
+            }
+            KeyCode::Char(c) => {
+                if let Some(ref mut m) = app.filter_modal {
+                    m.search_query.push(c);
+                    m.cursor = 0;
+                    m.scroll = 0;
+                }
+                return None;
+            }
+            _ => return None,
+        }
+    }
+
     let code = normalize_key_code(key.code);
     match code {
+        KeyCode::Char('/') => {
+            if let Some(ref mut m) = app.filter_modal {
+                m.is_searching = true;
+            }
+            None
+        }
         KeyCode::Char('j') | KeyCode::Down => {
-            if let Some(ref mut m) = app.filter_modal
-                && !m.values.is_empty()
-            {
-                m.cursor = (m.cursor + 1).min(m.values.len() - 1);
-                if m.cursor >= m.scroll + 10 {
-                    m.scroll = m.cursor.saturating_sub(9);
+            if let Some(ref mut m) = app.filter_modal {
+                let matched = m.filtered_indices();
+                if !matched.is_empty() {
+                    m.cursor = (m.cursor + 1).min(matched.len() - 1);
+                    if m.cursor >= m.scroll + 10 {
+                        m.scroll = m.cursor.saturating_sub(9);
+                    }
                 }
             }
             None
@@ -99,41 +148,62 @@ pub fn handle_filter_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
             None
         }
         KeyCode::Char('G') => {
-            if let Some(ref mut m) = app.filter_modal
-                && !m.values.is_empty()
-            {
-                m.cursor = m.values.len() - 1;
-                if m.cursor >= 10 {
-                    m.scroll = m.cursor.saturating_sub(9);
+            if let Some(ref mut m) = app.filter_modal {
+                let matched = m.filtered_indices();
+                if !matched.is_empty() {
+                    m.cursor = matched.len() - 1;
+                    if m.cursor >= 10 {
+                        m.scroll = m.cursor.saturating_sub(9);
+                    }
                 }
             }
             None
         }
         KeyCode::Char(' ') => {
-            if let Some(ref mut m) = app.filter_modal
-                && let Some(val) = m.values.get(m.cursor).cloned()
-            {
-                if m.selected_values.contains(&val) {
-                    m.selected_values.remove(&val);
-                } else {
-                    m.selected_values.insert(val);
+            if let Some(ref mut m) = app.filter_modal {
+                let matched = m.filtered_indices();
+                if let Some(&orig_idx) = matched.get(m.cursor)
+                    && let Some(val) = m.values.get(orig_idx).cloned()
+                {
+                    if m.selected_values.contains(&val) {
+                        m.selected_values.remove(&val);
+                    } else {
+                        m.selected_values.insert(val);
+                    }
                 }
             }
             None
         }
         KeyCode::Char('a') | KeyCode::Char('A') => {
             if let Some(ref mut m) = app.filter_modal {
-                if m.selected_values.len() == m.values.len() {
-                    m.selected_values.clear();
+                let matched = m.filtered_indices();
+                let all_matched_selected = !matched.is_empty()
+                    && matched
+                        .iter()
+                        .all(|&i| m.selected_values.contains(&m.values[i]));
+                if all_matched_selected {
+                    for &i in &matched {
+                        m.selected_values.remove(&m.values[i]);
+                    }
                 } else {
-                    m.selected_values = m.values.iter().cloned().collect();
+                    for &i in &matched {
+                        m.selected_values.insert(m.values[i].clone());
+                    }
                 }
             }
             None
         }
         KeyCode::Esc => {
-            app.mode = Mode::Normal;
-            app.filter_modal = None;
+            if let Some(ref mut m) = app.filter_modal
+                && !m.search_query.is_empty()
+            {
+                m.search_query.clear();
+                m.cursor = 0;
+                m.scroll = 0;
+            } else {
+                app.mode = Mode::Normal;
+                app.filter_modal = None;
+            }
             None
         }
         KeyCode::Enter => apply_filter_modal(app),
@@ -188,8 +258,10 @@ pub fn apply_filter_modal(app: &mut App) -> Option<Command> {
         }
         let base_q = res.base_query.as_ref().unwrap();
 
-        let updated_query = crate::trino::queries::build_query_with_column_filters(
+        let updated_query = crate::trino::queries::build_query_with_all_filters(
             base_q,
+            &res.columns,
+            &res.hidden_columns,
             &res.column_filters,
             &res.col_distinct_values,
         );

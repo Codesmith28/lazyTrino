@@ -322,15 +322,6 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
         let preview_w = term_width.saturating_sub(border_x);
         let inner_w = preview_w.saturating_sub(2).max(1) as usize;
 
-        let search_active = matches!(app.mode, Mode::Search);
-        let search_height = if search_active {
-            let total_chars = 3 + app.search_query.len();
-            let lines = total_chars.div_ceil(inner_w);
-            (lines as u16 + 2).clamp(3, 8)
-        } else {
-            3
-        };
-
         let query_active = matches!(app.mode, Mode::QueryInput);
         let query_height = if query_active {
             let total_chars = 7 + state
@@ -362,7 +353,7 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
         }
 
         // Right Main Viewer Pane
-        let preview_inner_y = search_height + query_height + 1;
+        let preview_inner_y = query_height + 1;
 
         if matches!(
             ACTIONS.get(state.selected).map(|(_, _, a)| a),
@@ -529,8 +520,8 @@ mod tests {
         let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0;
         let menu_x = term_width / 2; // Right side
 
-        // Header line (preview_inner_y = 7) and first row (preview_inner_y + 2 = 9)
-        let text = extract_selected_text(&app, (menu_x, 7), (menu_x, 9));
+        // Header line (preview_inner_y = 4) and first row (preview_inner_y + 2 = 6)
+        let text = extract_selected_text(&app, (menu_x, 4), (menu_x, 6));
         assert_eq!(text, "id\tstatus\n1\tOK");
     }
 
@@ -560,7 +551,7 @@ mod tests {
         let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0;
         let right_x = term_width / 2;
 
-        let text = extract_selected_text(&app, (right_x, 7), (right_x, 9));
+        let text = extract_selected_text(&app, (right_x, 4), (right_x, 6));
         assert_eq!(
             text,
             " s3a://local-minio-bucket/lakehouse/\n ├── date=2024-01-01/\n └── date=2024-01-02/"

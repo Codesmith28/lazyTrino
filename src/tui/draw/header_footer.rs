@@ -71,7 +71,7 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
                     },
                 }
             }
-            Screen::Help => None,
+            Screen::Help => Some(" /:search  Esc/?:close  Ctrl+C:quit "),
         },
     }
 }

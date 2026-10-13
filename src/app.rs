@@ -447,6 +447,24 @@ pub struct FilterModalState {
     pub selected_values: HashSet<String>,
     pub cursor: usize,
     pub scroll: usize,
+    pub search_query: String,
+    pub is_searching: bool,
+}
+
+impl FilterModalState {
+    pub fn filtered_indices(&self) -> Vec<usize> {
+        if self.search_query.is_empty() {
+            (0..self.values.len()).collect()
+        } else {
+            let q = self.search_query.to_lowercase();
+            self.values
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| v.to_lowercase().contains(&q))
+                .map(|(i, _)| i)
+                .collect()
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -455,6 +473,24 @@ pub struct ColumnModalState {
     pub selected_columns: HashSet<String>,
     pub cursor: usize,
     pub scroll: usize,
+    pub search_query: String,
+    pub is_searching: bool,
+}
+
+impl ColumnModalState {
+    pub fn filtered_indices(&self) -> Vec<usize> {
+        if self.search_query.is_empty() {
+            (0..self.columns.len()).collect()
+        } else {
+            let q = self.search_query.to_lowercase();
+            self.columns
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.to_lowercase().contains(&q))
+                .map(|(i, _)| i)
+                .collect()
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

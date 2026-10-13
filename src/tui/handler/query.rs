@@ -276,14 +276,6 @@ pub(super) fn query_bar_layout(
     let query_width = term_width.saturating_sub(query_x);
     let inner_w = query_width.saturating_sub(2).max(1) as usize;
 
-    let search_height = if matches!(app.mode, Mode::Search) {
-        let total_chars = 3 + app.search_query.len();
-        let lines = total_chars.div_ceil(inner_w);
-        (lines as u16 + 2).clamp(3, 8)
-    } else {
-        3
-    };
-
     let query_height = if matches!(app.mode, Mode::QueryInput) {
         let total_chars = 7 + query_buf.len();
         let lines = total_chars.div_ceil(inner_w);
@@ -292,11 +284,11 @@ pub(super) fn query_bar_layout(
         3
     };
 
-    if search_height + query_height > bottom_y {
+    if query_height > bottom_y {
         return None;
     }
 
-    Some((query_x, search_height, query_width, query_height, inner_w))
+    Some((query_x, 0, query_width, query_height, inner_w))
 }
 
 fn set_query_cursor(state: &mut ResultsState, new_cursor: usize, selecting: bool) {

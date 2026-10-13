@@ -43,21 +43,70 @@ pub fn open_column_modal(app: &mut App) {
             selected_columns,
             cursor,
             scroll,
+            search_query: String::new(),
+            is_searching: false,
         });
         app.mode = Mode::ColumnModal;
     }
 }
 
 pub fn handle_column_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> {
+    let is_searching = app
+        .column_modal
+        .as_ref()
+        .map(|m| m.is_searching)
+        .unwrap_or(false);
+
+    if is_searching {
+        match key.code {
+            KeyCode::Esc => {
+                if let Some(ref mut m) = app.column_modal {
+                    m.is_searching = false;
+                }
+                return None;
+            }
+            KeyCode::Enter => {
+                if let Some(ref mut m) = app.column_modal {
+                    m.is_searching = false;
+                }
+                return None;
+            }
+            KeyCode::Backspace => {
+                if let Some(ref mut m) = app.column_modal {
+                    m.search_query.pop();
+                    m.cursor = 0;
+                    m.scroll = 0;
+                }
+                return None;
+            }
+            KeyCode::Char(c) => {
+                if let Some(ref mut m) = app.column_modal {
+                    m.search_query.push(c);
+                    m.cursor = 0;
+                    m.scroll = 0;
+                }
+                return None;
+            }
+            _ => return None,
+        }
+    }
+
     let code = normalize_key_code(key.code);
     match code {
+        KeyCode::Char('/') => {
+            if let Some(ref mut m) = app.column_modal {
+                m.is_searching = true;
+            }
+            None
+        }
         KeyCode::Char('j') | KeyCode::Down => {
-            if let Some(ref mut m) = app.column_modal
-                && !m.columns.is_empty()
-            {
-                m.cursor = (m.cursor + 1).min(m.columns.len() - 1);
-                if m.cursor >= m.scroll + 10 {
-                    m.scroll = m.cursor.saturating_sub(9);
+            if let Some(ref mut m) = app.column_modal {
+                let matched = m.filtered_indices();
+                if !matched.is_empty() {
+                    m.cursor = (m.cursor + 1).min(matched.len() - 1);
+                    if m.cursor >= m.scroll + 10 {
+                        m.scroll = m.cursor.saturating_sub(9);
+                    }
                 }
             }
             None
@@ -79,49 +128,68 @@ pub fn handle_column_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
             None
         }
         KeyCode::Char('G') => {
-            if let Some(ref mut m) = app.column_modal
-                && !m.columns.is_empty()
-            {
-                m.cursor = m.columns.len() - 1;
-                if m.cursor >= 10 {
-                    m.scroll = m.cursor.saturating_sub(9);
+            if let Some(ref mut m) = app.column_modal {
+                let matched = m.filtered_indices();
+                if !matched.is_empty() {
+                    m.cursor = matched.len() - 1;
+                    if m.cursor >= 10 {
+                        m.scroll = m.cursor.saturating_sub(9);
+                    }
                 }
             }
             None
         }
         KeyCode::Char(' ') => {
-            if let Some(ref mut m) = app.column_modal
-                && let Some(col) = m.columns.get(m.cursor).cloned()
-            {
-                if m.selected_columns.contains(&col) {
-                    // Prevent hiding all columns: require at least 1 visible
-                    if m.selected_columns.len() > 1 {
-                        m.selected_columns.remove(&col);
+            if let Some(ref mut m) = app.column_modal {
+                let matched = m.filtered_indices();
+                if let Some(&orig_idx) = matched.get(m.cursor)
+                    && let Some(col) = m.columns.get(orig_idx).cloned()
+                {
+                    if m.selected_columns.contains(&col) {
+                        // Prevent hiding all columns: require at least 1 visible
+                        if m.selected_columns.len() > 1 {
+                            m.selected_columns.remove(&col);
+                        }
+                    } else {
+                        m.selected_columns.insert(col);
                     }
-                } else {
-                    m.selected_columns.insert(col);
                 }
             }
             None
         }
         KeyCode::Char('a') | KeyCode::Char('A') => {
             if let Some(ref mut m) = app.column_modal {
-                if m.selected_columns.len() == m.columns.len() {
-                    // Deselect all except currently highlighted column
-                    if let Some(cur) = m.columns.get(m.cursor).cloned() {
-                        m.selected_columns.clear();
-                        m.selected_columns.insert(cur);
+                let matched = m.filtered_indices();
+                let all_matched_selected = !matched.is_empty()
+                    && matched
+                        .iter()
+                        .all(|&i| m.selected_columns.contains(&m.columns[i]));
+                if all_matched_selected {
+                    let cur_orig_idx = matched.get(m.cursor).copied();
+                    for &i in &matched {
+                        if Some(i) != cur_orig_idx && m.selected_columns.len() > 1 {
+                            m.selected_columns.remove(&m.columns[i]);
+                        }
                     }
                 } else {
-                    // Select all
-                    m.selected_columns = m.columns.iter().cloned().collect();
+                    for &i in &matched {
+                        m.selected_columns.insert(m.columns[i].clone());
+                    }
                 }
             }
             None
         }
         KeyCode::Esc => {
-            app.mode = Mode::Normal;
-            app.column_modal = None;
+            if let Some(ref mut m) = app.column_modal
+                && !m.search_query.is_empty()
+            {
+                m.search_query.clear();
+                m.cursor = 0;
+                m.scroll = 0;
+            } else {
+                app.mode = Mode::Normal;
+                app.column_modal = None;
+            }
             None
         }
         KeyCode::Enter => apply_column_modal(app),
@@ -157,6 +225,25 @@ pub fn apply_column_modal(app: &mut App) -> Option<Command> {
             }
         }
         res.scroll_h = 0;
+
+        // 3. Update query in query cell
+        if res.base_query.is_none() {
+            res.base_query = Some(res.query_buffer.clone());
+        }
+        let base_q = res.base_query.as_ref().unwrap();
+
+        let updated_query = crate::trino::queries::build_query_with_all_filters(
+            base_q,
+            &res.columns,
+            &res.hidden_columns,
+            &res.column_filters,
+            &res.col_distinct_values,
+        );
+
+        res.query_buffer = updated_query.clone();
+        res.query_cursor = updated_query.len();
+        action_state.query_buffer = updated_query.clone();
+        action_state.query_cursor = updated_query.len();
     }
     None
 }
@@ -280,5 +367,53 @@ mod tests {
 
         // Since 'status' was selected_col (1) and was hidden, selected_col should adjust to nearest visible column
         assert!(res.selected_col == 0 || res.selected_col == 2);
+
+        // Query buffers reflect visible columns
+        assert_eq!(
+            res.query_buffer,
+            "SELECT \"id\", \"amount\", \"created_at\" FROM orders"
+        );
+        assert_eq!(
+            action_state.query_buffer,
+            "SELECT \"id\", \"amount\", \"created_at\" FROM orders"
+        );
+    }
+
+    #[test]
+    fn test_column_modal_search_filtering() {
+        let mut app = sample_app_with_results();
+        open_column_modal(&mut app);
+
+        // Press '/' to start searching
+        handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char('/')));
+        assert!(app.column_modal.as_ref().unwrap().is_searching);
+
+        // Type 'st'
+        handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char('s')));
+        handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char('t')));
+        {
+            let m = app.column_modal.as_ref().unwrap();
+            assert_eq!(m.search_query, "st");
+            let matched = m.filtered_indices();
+            assert_eq!(matched.len(), 1);
+            assert_eq!(m.columns[matched[0]], "status");
+        }
+
+        // Press Enter to finish search
+        handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Enter));
+        assert!(!app.column_modal.as_ref().unwrap().is_searching);
+
+        // Space toggles the filtered item (status)
+        handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
+        assert!(!app.column_modal.as_ref().unwrap().selected_columns.contains("status"));
+
+        // Press Esc to clear search
+        handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert!(app.column_modal.as_ref().unwrap().search_query.is_empty());
+
+        // Press Esc again to exit modal
+        handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert!(app.column_modal.is_none());
+        assert_eq!(app.mode, Mode::Normal);
     }
 }
