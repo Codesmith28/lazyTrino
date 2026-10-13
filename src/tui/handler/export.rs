@@ -18,11 +18,38 @@ use crate::app::{ACTIONS, Action, App, ResultsState, Screen};
 
 use super::query::copy_to_clipboard;
 
+fn export_visible_data(state: &ResultsState) -> (Vec<String>, Vec<Vec<String>>) {
+    if state.hidden_columns.is_empty() {
+        (state.columns.clone(), state.rows.clone())
+    } else {
+        let vis_indices: Vec<usize> = state
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !state.hidden_columns.contains(*c))
+            .map(|(i, _)| i)
+            .collect();
+        let cols: Vec<String> = vis_indices.iter().map(|&i| state.columns[i].clone()).collect();
+        let rows: Vec<Vec<String>> = state
+            .rows
+            .iter()
+            .map(|row| {
+                vis_indices
+                    .iter()
+                    .map(|&i| row.get(i).cloned().unwrap_or_default())
+                    .collect()
+            })
+            .collect();
+        (cols, rows)
+    }
+}
+
 pub(super) fn copy_results_to_clipboard(app: &mut App) {
     let message = {
         match active_results_state(app).and_then(validate_exportable_state) {
             Ok(state) => {
-                let tsv = rows_to_tsv(&state.columns, &state.rows);
+                let (cols, rows) = export_visible_data(state);
+                let tsv = rows_to_tsv(&cols, &rows);
                 copy_to_clipboard(&tsv);
                 if state.rows.is_empty() {
                     "Copied headers to clipboard (TSV)".to_string()
@@ -41,7 +68,8 @@ pub(super) fn export_results_to_csv_file(app: &mut App) {
     let message = {
         match active_results_state(app).and_then(validate_exportable_state) {
             Ok(state) => {
-                let csv = rows_to_csv(&state.columns, &state.rows);
+                let (cols, rows) = export_visible_data(state);
+                let csv = rows_to_csv(&cols, &rows);
                 let file_name = export_file_name(state);
                 match std::fs::write(&file_name, csv) {
                     Ok(()) => format!("Exported results to {file_name}"),

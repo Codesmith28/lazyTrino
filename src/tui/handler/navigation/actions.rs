@@ -204,6 +204,12 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                     copy_active_pane_content(app);
                     None
                 }
+                KeyCode::Char('C') => {
+                    if s.results.is_some() {
+                        crate::tui::handler::column_modal::open_column_modal(app);
+                    }
+                    None
+                }
                 _ => None,
             },
             ActivePanel::MainViewer => {
@@ -302,7 +308,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         KeyCode::Char('l') | KeyCode::Right => None,
                         KeyCode::Char('<') => {
                             if let Some(ref mut res) = s.results {
-                                res.selected_col = res.selected_col.saturating_sub(1);
+                                res.selected_col = res.prev_visible_col();
                                 res.scroll_h = res.scroll_h.saturating_sub(1);
                             }
                             None
@@ -311,10 +317,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             if let Some(ref mut res) = s.results
                                 && !res.columns.is_empty()
                             {
-                                res.selected_col =
-                                    (res.selected_col + 1).min(res.columns.len().saturating_sub(1));
-                                res.scroll_h =
-                                    (res.scroll_h + 1).min(res.columns.len().saturating_sub(1));
+                                res.selected_col = res.next_visible_col();
+                                let max_vis_scroll = res.visible_columns().len().saturating_sub(1);
+                                res.scroll_h = (res.scroll_h + 1).min(max_vis_scroll);
                             }
                             None
                         }
@@ -336,7 +341,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             } else if let Some(ref mut res) = s.results {
                                 res.selected_row = 0;
                                 res.scroll_v = 0;
-                                res.selected_col = 0;
+                                res.selected_col = res.first_visible_col();
                                 res.scroll_h = 0;
                             }
                             None
@@ -358,6 +363,12 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         KeyCode::Char('F') | KeyCode::Char('f') => {
                             if s.results.is_some() {
                                 crate::tui::handler::filter_modal::open_filter_modal(app);
+                            }
+                            None
+                        }
+                        KeyCode::Char('C') => {
+                            if s.results.is_some() {
+                                crate::tui::handler::column_modal::open_column_modal(app);
                             }
                             None
                         }

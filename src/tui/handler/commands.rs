@@ -677,6 +677,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     let distinct_vals = existing_results
                         .map(|r| r.col_distinct_values.clone())
                         .unwrap_or_default();
+                    let hidden_cols = existing_results
+                        .map(|r| r.hidden_columns.clone())
+                        .unwrap_or_default();
                     let unfilt = existing_results
                         .and_then(|r| r.unfiltered_rows.clone())
                         .or_else(|| {
@@ -716,6 +719,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         unfiltered_rows: unfilt,
                         column_filters: col_filts,
                         col_distinct_values: distinct_vals,
+                        hidden_columns: hidden_cols,
                     };
 
                     let cur_selected = if let Screen::Actions(ref a) = app.screen {

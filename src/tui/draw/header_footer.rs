@@ -31,7 +31,9 @@ pub fn spinner(app: &App) -> String {
 
 pub fn footer_hint(app: &App) -> Option<&'static str> {
     match app.mode {
-        Mode::FilterModal => Some(" Space:toggle  a:all/none  Enter:apply  Esc:cancel  j/k:move "),
+        Mode::ColumnModal | Mode::FilterModal => {
+            Some(" Space:toggle  a:all/none  Enter:apply  Esc:cancel  j/k:move ")
+        }
         Mode::Search => Some(" Type:filter  Bksp:del  Enter:close  Esc:clear "),
         Mode::QueryInput => Some(" Enter:run  Esc:cancel  Ctrl+A:all  Ctrl+C:copy  Ctrl+V:paste "),
         Mode::Normal => match &app.screen {
@@ -49,7 +51,7 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
                     ),
                     ActivePanel::MainViewer => match selected_action {
                         Some(Action::TableView) if state.results.is_some() => Some(
-                            " j/k:rows  </>:cols  F:filter  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
+                            " j/k:rows  </>:cols  C:cols  F:filter  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
                         ),
                         Some(Action::Partitions) if !app.partition_tree_lines.is_empty() => Some(
                             " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
@@ -58,7 +60,7 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
                             " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
                         ),
                         _ if state.results.is_some() => Some(
-                            " j/k:rows  </>:cols  F:filter  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
+                            " j/k:rows  </>:cols  C:cols  F:filter  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
                         ),
                         Some(Action::TableView) => Some(
                             " q/:query  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",

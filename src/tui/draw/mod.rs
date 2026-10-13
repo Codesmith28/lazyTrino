@@ -388,6 +388,18 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
     if let Some(ref modal) = app.filter_modal {
         screens::filter_modal::render(frame, frame.area(), modal);
     }
+    if let Some(ref modal) = app.column_modal {
+        let has_filter = |col: &str| {
+            if let Screen::Actions(ref a) = app.screen
+                && let Some(ref res) = a.results
+            {
+                res.column_filters.contains_key(col)
+            } else {
+                false
+            }
+        };
+        screens::column_modal::render(frame, frame.area(), modal, has_filter);
+    }
 }
 
 #[cfg(test)]

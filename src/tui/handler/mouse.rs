@@ -401,14 +401,31 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
         } else if let Some(ref res) = state.results {
             // Results table view
             let mut lines = Vec::new();
+            let vis_indices: Vec<usize> = res
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| !res.hidden_columns.contains(*c))
+                .map(|(i, _)| i)
+                .collect();
             for r in start_row..=end_row {
                 if r == preview_inner_y {
                     // Header line
-                    lines.push(res.columns.join("\t"));
+                    let header = vis_indices
+                        .iter()
+                        .map(|&i| res.columns[i].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\t");
+                    lines.push(header);
                 } else if r >= preview_inner_y + 2 {
                     let idx = (r - (preview_inner_y + 2)) as usize + res.scroll_v;
                     if idx < res.rows.len() {
-                        lines.push(res.rows[idx].join("\t"));
+                        let row_line = vis_indices
+                            .iter()
+                            .map(|&i| res.rows[idx].get(i).map(|s| s.as_str()).unwrap_or(""))
+                            .collect::<Vec<_>>()
+                            .join("\t");
+                        lines.push(row_line);
                     }
                 }
             }

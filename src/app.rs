@@ -299,6 +299,7 @@ pub struct ResultsState {
     pub unfiltered_rows: Option<Vec<Vec<String>>>,
     pub column_filters: HashMap<String, HashSet<String>>,
     pub col_distinct_values: HashMap<String, Vec<String>>,
+    pub hidden_columns: HashSet<String>,
 }
 
 pub fn format_count(n: usize) -> String {
@@ -316,6 +317,68 @@ pub fn format_count(n: usize) -> String {
 }
 
 impl ResultsState {
+    pub fn is_column_visible(&self, col_name: &str) -> bool {
+        !self.hidden_columns.contains(col_name)
+    }
+
+    pub fn visible_columns(&self) -> Vec<(usize, &String)> {
+        if self.hidden_columns.is_empty() {
+            self.columns.iter().enumerate().collect()
+        } else {
+            let vis: Vec<_> = self
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| !self.hidden_columns.contains(*c))
+                .collect();
+            if vis.is_empty() {
+                self.columns.iter().enumerate().collect()
+            } else {
+                vis
+            }
+        }
+    }
+
+    pub fn next_visible_col(&self) -> usize {
+        let vis = self.visible_columns();
+        if vis.is_empty() {
+            return self.selected_col;
+        }
+        if let Some(pos) = vis.iter().position(|(idx, _)| *idx == self.selected_col) {
+            let next_pos = (pos + 1).min(vis.len() - 1);
+            vis[next_pos].0
+        } else {
+            vis.iter()
+                .find(|(idx, _)| *idx > self.selected_col)
+                .map(|(idx, _)| *idx)
+                .unwrap_or_else(|| vis.last().map(|(idx, _)| *idx).unwrap_or(0))
+        }
+    }
+
+    pub fn prev_visible_col(&self) -> usize {
+        let vis = self.visible_columns();
+        if vis.is_empty() {
+            return self.selected_col;
+        }
+        if let Some(pos) = vis.iter().position(|(idx, _)| *idx == self.selected_col) {
+            let prev_pos = pos.saturating_sub(1);
+            vis[prev_pos].0
+        } else {
+            vis.iter()
+                .rfind(|(idx, _)| *idx < self.selected_col)
+                .map(|(idx, _)| *idx)
+                .unwrap_or_else(|| vis.first().map(|(idx, _)| *idx).unwrap_or(0))
+        }
+    }
+
+    pub fn first_visible_col(&self) -> usize {
+        self.visible_columns().first().map(|(idx, _)| *idx).unwrap_or(0)
+    }
+
+    pub fn last_visible_col(&self) -> usize {
+        self.visible_columns().last().map(|(idx, _)| *idx).unwrap_or(0)
+    }
+
     pub fn selection_range(&self) -> Option<(usize, usize)> {
         if let Some(anchor) = self.selection_anchor
             && anchor != self.query_cursor
@@ -373,6 +436,7 @@ pub enum Mode {
     Search,
     QueryInput,
     FilterModal,
+    ColumnModal,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -381,6 +445,14 @@ pub struct FilterModalState {
     pub column_name: String,
     pub values: Vec<String>,
     pub selected_values: HashSet<String>,
+    pub cursor: usize,
+    pub scroll: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnModalState {
+    pub columns: Vec<String>,
+    pub selected_columns: HashSet<String>,
     pub cursor: usize,
     pub scroll: usize,
 }
@@ -453,6 +525,7 @@ pub struct App {
     pub is_selecting_text: bool,
     pub copied_toast: Option<(String, std::time::Instant)>,
     pub filter_modal: Option<FilterModalState>,
+    pub column_modal: Option<ColumnModalState>,
 }
 
 impl App {
@@ -495,6 +568,7 @@ impl App {
             is_selecting_text: false,
             copied_toast: None,
             filter_modal: None,
+            column_modal: None,
         }
     }
 

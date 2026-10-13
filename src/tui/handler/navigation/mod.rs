@@ -948,5 +948,60 @@ pub mod tests {
         assert_eq!(modal.column_index, 1);
         assert_eq!(modal.column_name, "status");
     }
+
+    #[test]
+    fn actions_keys_column_visibility_modal_and_visible_column_navigation() {
+        let mut hidden = std::collections::HashSet::new();
+        hidden.insert("status".to_string()); // hide middle column
+
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(ResultsState {
+                query_buffer: "SELECT id, status, amount FROM orders".to_string(),
+                query_cursor: 37,
+                columns: vec!["id".to_string(), "status".to_string(), "amount".to_string()],
+                rows: vec![
+                    vec!["1".to_string(), "active".to_string(), "100".to_string()],
+                ],
+                scroll_v: 0,
+                scroll_h: 0,
+                selected_row: 0,
+                selected_col: 0, // starts at 'id' (col 0)
+                hidden_columns: hidden,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // Move cursor right (>): should skip hidden 'status' (col 1) and jump to 'amount' (col 2)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 2);
+
+        // Move cursor left (<): should skip hidden 'status' (col 1) and jump back to 'id' (col 0)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('<')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+
+        // Press 'C' -> opens column visibility modal
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('C')));
+        assert!(matches!(app.mode, Mode::ColumnModal));
+        let modal = app
+            .column_modal
+            .as_ref()
+            .expect("column modal should be opened");
+        assert_eq!(modal.columns, vec!["id", "status", "amount"]);
+        assert!(modal.selected_columns.contains("id"));
+        assert!(!modal.selected_columns.contains("status"));
+        assert!(modal.selected_columns.contains("amount"));
+    }
 }
 

@@ -64,6 +64,9 @@ pub fn render(frame: &mut Frame, area: Rect) {
             "  < / >                          Move cell cursor horizontally (left / right) across columns",
         ),
         Line::from(
+            "  C                              Open column visibility modal (filter which columns to see in view)",
+        ),
+        Line::from(
             "  F                              Open filter modal for the current column",
         ),
         Line::from(

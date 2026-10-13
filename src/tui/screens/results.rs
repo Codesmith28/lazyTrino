@@ -171,34 +171,54 @@ pub fn render(
         } else {
             String::new()
         };
+        let all_visible_cols = state.visible_columns();
+        let vis_pos = all_visible_cols
+            .iter()
+            .position(|(idx, _)| *idx == state.selected_col)
+            .map(|p| p + 1)
+            .unwrap_or(1);
+        let vis_tot = all_visible_cols.len().max(1);
+        let hidden_count = state.columns.len().saturating_sub(all_visible_cols.len());
+        let col_str = if hidden_count > 0 {
+            format!("{vis_pos}/{vis_tot} ({hidden_count} hidden)")
+        } else {
+            format!("{vis_pos}/{vis_tot}")
+        };
+
         if state.is_fetching_next_page {
             format!(
-                "{title_prefix}Table View — Infinite Scroll{partition_str} ({} rows loaded{total_str}, col {}/{}) [Fetching page...] ",
-                state.rows.len(),
-                state.selected_col + 1,
-                state.columns.len().max(1)
+                "{title_prefix}Table View — Infinite Scroll{partition_str} ({} rows loaded{total_str}, col {col_str}) [Fetching page...] ",
+                state.rows.len()
             )
         } else if !state.has_more_rows {
             format!(
-                "{title_prefix}Table View — Infinite Scroll{partition_str} (All {} rows loaded{total_str}, col {}/{}) ",
-                state.rows.len(),
-                state.selected_col + 1,
-                state.columns.len().max(1)
+                "{title_prefix}Table View — Infinite Scroll{partition_str} (All {} rows loaded{total_str}, col {col_str}) ",
+                state.rows.len()
             )
         } else {
             format!(
-                "{title_prefix}Table View — Infinite Scroll{partition_str} ({} rows loaded{total_str}, col {}/{}) ",
-                state.rows.len(),
-                state.selected_col + 1,
-                state.columns.len().max(1)
+                "{title_prefix}Table View — Infinite Scroll{partition_str} ({} rows loaded{total_str}, col {col_str}) ",
+                state.rows.len()
             )
         }
     } else {
+        let all_visible_cols = state.visible_columns();
+        let vis_pos = all_visible_cols
+            .iter()
+            .position(|(idx, _)| *idx == state.selected_col)
+            .map(|p| p + 1)
+            .unwrap_or(1);
+        let vis_tot = all_visible_cols.len().max(1);
+        let hidden_count = state.columns.len().saturating_sub(all_visible_cols.len());
+        let col_str = if hidden_count > 0 {
+            format!("{vis_pos}/{vis_tot} ({hidden_count} hidden)")
+        } else {
+            format!("{vis_pos}/{vis_tot}")
+        };
+
         format!(
-            "{title_prefix}Sample Mode ({} sample rows, col {}/{}) ",
-            state.rows.len(),
-            state.selected_col + 1,
-            state.columns.len().max(1)
+            "{title_prefix}Sample Mode ({} sample rows, col {col_str}) ",
+            state.rows.len()
         )
     };
 
@@ -292,23 +312,27 @@ pub fn render(
         .iter()
         .position(|c| c.eq_ignore_ascii_case("row_count"));
 
-    let col_count = state.columns.len();
-    let sel_col = state.selected_col.min(col_count.saturating_sub(1));
+    let all_visible_cols = state.visible_columns();
+    let col_count = all_visible_cols.len();
+    let sel_vis_idx = all_visible_cols
+        .iter()
+        .position(|(orig_idx, _)| *orig_idx == state.selected_col)
+        .unwrap_or(0);
 
     let mut effective_scroll_h = state.scroll_h.min(col_count.saturating_sub(1));
-    if sel_col < effective_scroll_h {
-        effective_scroll_h = sel_col;
+    if sel_vis_idx < effective_scroll_h {
+        effective_scroll_h = sel_vis_idx;
     }
 
-    let compute_col_width = |col_idx: usize, col_name: &String| -> u16 {
+    let compute_col_width = |orig_col_idx: usize, col_name: &String| -> u16 {
         let max_data = state
             .rows
             .iter()
             .map(|r| {
-                if is_stats && col_idx == 0 && is_stats_summary_row(&state.columns, r) {
+                if is_stats && orig_col_idx == 0 && is_stats_summary_row(&state.columns, r) {
                     "Summary".len()
                 } else {
-                    r.get(col_idx).map(|v| v.len()).unwrap_or(0)
+                    r.get(orig_col_idx).map(|v| v.len()).unwrap_or(0)
                 }
             })
             .max()
@@ -323,14 +347,14 @@ pub fn render(
         raw_width.min(max_allowed)
     };
 
-    while effective_scroll_h < sel_col {
+    while effective_scroll_h < sel_vis_idx {
         let mut width = 0;
         let mut fits = false;
-        for (col_idx, c) in state.columns.iter().enumerate().skip(effective_scroll_h) {
-            let needed = compute_col_width(col_idx, c) as usize + 2;
+        for (v_idx, (orig_col_idx, c)) in all_visible_cols.iter().enumerate().skip(effective_scroll_h) {
+            let needed = compute_col_width(*orig_col_idx, c) as usize + 2;
             if width + needed <= available_width || width == 0 {
                 width += needed;
-                if col_idx == sel_col {
+                if v_idx == sel_vis_idx {
                     fits = true;
                     break;
                 }
@@ -349,14 +373,14 @@ pub fn render(
     let mut col_widths: Vec<Constraint> = Vec::new();
     let mut col_width_sizes: Vec<usize> = Vec::new();
 
-    for (col_idx, c) in state.columns.iter().enumerate().skip(effective_scroll_h) {
-        let needed_width = compute_col_width(col_idx, c);
+    for (_v_idx, (orig_col_idx, c)) in all_visible_cols.iter().enumerate().skip(effective_scroll_h) {
+        let needed_width = compute_col_width(*orig_col_idx, c);
 
         if visible_cols.is_empty()
             || cumulative_width + (needed_width as usize) + 2 <= available_width
         {
             cumulative_width += (needed_width as usize) + 2;
-            visible_cols.push((col_idx, c));
+            visible_cols.push((*orig_col_idx, c));
             col_widths.push(Constraint::Length(needed_width));
             col_width_sizes.push(needed_width as usize);
         } else {
@@ -371,12 +395,8 @@ pub fn render(
 
     let header_cells: Vec<Cell> = visible_cols
         .iter()
-        .map(|(_, c)| {
-            let is_selected_col = state
-                .columns
-                .iter()
-                .position(|name| name == *c)
-                .is_some_and(|idx| idx == state.selected_col);
+        .map(|(orig_col_idx, c)| {
+            let is_selected_col = *orig_col_idx == state.selected_col;
             let has_filter = state.column_filters.contains_key(*c);
             let display_name = if has_filter {
                 format!("{c} [F]")
@@ -719,5 +739,60 @@ mod tests {
             content.contains("of 45,120 total"),
             "Title should contain total rows: {content}"
         );
+    }
+
+    #[test]
+    fn test_render_table_with_hidden_columns() {
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+        use std::collections::HashSet;
+
+        let mut hidden = HashSet::new();
+        hidden.insert("secret".to_string());
+
+        let state = ResultsState {
+            query_buffer: "SELECT id, secret, name FROM users".to_string(),
+            query_cursor: 35,
+            columns: vec!["id".to_string(), "secret".to_string(), "name".to_string()],
+            rows: vec![
+                vec!["1".to_string(), "pass123".to_string(), "Alice".to_string()],
+            ],
+            scroll_v: 0,
+            scroll_h: 0,
+            selected_row: 0,
+            selected_col: 0,
+            loading: false,
+            error: None,
+            is_paginated: false,
+            catalog: "memory".to_string(),
+            schema: "default".to_string(),
+            table: "users".to_string(),
+            hidden_columns: hidden,
+            ..Default::default()
+        };
+
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        let backend = TestBackend::new(140, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 140, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut content = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                content.push_str(buffer.cell((x, y)).unwrap().symbol());
+            }
+            content.push('\n');
+        }
+
+        assert!(content.contains("id"), "visible column 'id' must be rendered");
+        assert!(content.contains("name"), "visible column 'name' must be rendered");
+        assert!(!content.contains("secret"), "hidden column 'secret' must not be rendered");
+        assert!(!content.contains("pass123"), "hidden column value 'pass123' must not be rendered");
+        assert!(content.contains("(1 hidden)"), "Title should indicate 1 hidden column: {content}");
     }
 }
