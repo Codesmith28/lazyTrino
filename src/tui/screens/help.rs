@@ -44,6 +44,8 @@ const HELP_SECTIONS: &[HelpSection] = &[
         items: &[
             "  j / ↓ / Mouse Wheel Down       Move menu selection down / move cell cursor down / scroll pane",
             "  k / ↑ / Mouse Wheel Up         Move menu selection up / move cell cursor up / scroll pane",
+            "  PgDn / Ctrl+d / Ctrl+f         Scroll page down",
+            "  PgUp / Ctrl+u / Ctrl+b         Scroll page up",
             "  h / ←                          Move cell cursor left across columns / Go back in menus",
             "  l / →                          Move cell cursor right across columns / Select menu option",
             "  g / G                          Jump to top / bottom of active preview pane",

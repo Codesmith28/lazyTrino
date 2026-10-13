@@ -275,6 +275,8 @@ pub struct ResultsState {
     pub scroll_h: Cell<usize>,
     pub selected_row: usize,
     pub selected_col: usize,
+    pub last_selected_row: Cell<usize>,
+    pub last_selected_col: Cell<usize>,
     pub loading: bool,
     pub error: Option<String>,
     pub is_paginated: bool,

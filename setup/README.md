@@ -29,8 +29,8 @@ This directory contains a fully self-contained **Trino + Iceberg + MinIO** stack
 |---|---|---|
 | `trino` | `trinodb/trino:latest` | Query engine — the main entry point |
 | `iceberg-rest` | `apache/iceberg-rest-fixture` | In-memory Iceberg REST catalog (full REST spec) |
-| `minio` | `minio/minio` | S3-compatible object store — holds Parquet data files |
-| `minio-init` | `minio/mc` | One-shot: creates the `warehouse` bucket on first boot |
+| `minio` | `pgsty/minio` | S3-compatible object store — holds Parquet data files |
+| `minio-init` | `pgsty/mc` | One-shot: creates the `warehouse` bucket on first boot |
 | `init-db` | `trinodb/trino:latest` | One-shot: creates schemas and seeds tables from `init.sql` |
 
 > **Note:** The Iceberg catalog is in-memory. Table metadata resets if `iceberg-rest` is restarted. Run `docker compose up init-db` again to reseed.
@@ -188,7 +188,7 @@ Check the logs: `docker logs trino`. Usually a misconfigured `catalog/iceberg.pr
 `iceberg-rest` may not be fully up. Wait a few seconds and retry: `docker compose up init-db`
 
 **MinIO healthcheck stuck**  
-The MinIO image uses `mc ready local` (not `curl`/`wget`). If you see healthcheck errors, confirm you're using the image pinned in `docker-compose.yml` (`RELEASE.2024-03-30T09-41-56Z`).
+The MinIO image uses `mc ready local` (not `curl`/`wget`). If you see healthcheck errors, confirm you're using the image configured in `docker-compose.yml` (`pgsty/minio:latest`).
 
 **Port conflicts**  
 If `8080`, `8181`, `9000`, or `9001` are in use, update the port mappings in `docker-compose.yml`.

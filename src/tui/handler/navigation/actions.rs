@@ -203,8 +203,10 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
 
 pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
     let code = normalize_key_code(key.code);
+    let is_ctrl = key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL);
 
-    if let KeyCode::Char(c) = code
+    if !is_ctrl
+        && let KeyCode::Char(c) = code
         && let Some(pos) = ACTIONS.iter().position(|(k, _, _)| *k == c)
     {
         return trigger_action(app, pos);
@@ -284,6 +286,28 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
+                        KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char('f')
+                            if code == KeyCode::PageDown || is_ctrl =>
+                        {
+                            if let Some(dd) = s.drilldown.as_mut() {
+                                let depth = dd.depth();
+                                if let Some(items) = dd.levels_cache.get(depth)
+                                    && !items.is_empty()
+                                {
+                                    dd.selected =
+                                        (dd.selected + 15).min(items.len().saturating_sub(1));
+                                }
+                            }
+                            None
+                        }
+                        KeyCode::PageUp | KeyCode::Char('u') | KeyCode::Char('b')
+                            if code == KeyCode::PageUp || is_ctrl =>
+                        {
+                            if let Some(dd) = s.drilldown.as_mut() {
+                                dd.selected = dd.selected.saturating_sub(15);
+                            }
+                            None
+                        }
                         KeyCode::Char('g') => {
                             if let Some(dd) = s.drilldown.as_mut() {
                                 dd.selected = 0;
@@ -345,6 +369,36 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 app.schema_scroll = app.schema_scroll.saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {
                                 res.selected_row = res.selected_row.saturating_sub(1);
+                            }
+                            None
+                        }
+                        KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char('f')
+                            if code == KeyCode::PageDown || is_ctrl =>
+                        {
+                            if is_partitions {
+                                let max_lines = app.partition_tree_lines.len().saturating_sub(1);
+                                app.partition_scroll = (app.partition_scroll + 15).min(max_lines);
+                            } else if is_schema {
+                                let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
+                                app.schema_scroll = (app.schema_scroll + 15).min(max_cols);
+                            } else if let Some(ref mut res) = s.results {
+                                if !res.rows.is_empty() {
+                                    res.selected_row =
+                                        (res.selected_row + 15).min(res.rows.len().saturating_sub(1));
+                                }
+                                return check_trigger_infinite_scroll(app);
+                            }
+                            None
+                        }
+                        KeyCode::PageUp | KeyCode::Char('u') | KeyCode::Char('b')
+                            if code == KeyCode::PageUp || is_ctrl =>
+                        {
+                            if is_partitions {
+                                app.partition_scroll = app.partition_scroll.saturating_sub(15);
+                            } else if is_schema {
+                                app.schema_scroll = app.schema_scroll.saturating_sub(15);
+                            } else if let Some(ref mut res) = s.results {
+                                res.selected_row = res.selected_row.saturating_sub(15);
                             }
                             None
                         }

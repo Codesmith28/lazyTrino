@@ -129,6 +129,8 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     {
                         res.selected_row = row_idx;
                         res.selected_col = col_idx;
+                        res.last_selected_row.set(row_idx);
+                        res.last_selected_col.set(col_idx);
                         app.clear_mouse_selection();
                     }
                 }
@@ -213,22 +215,40 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 let action = ACTIONS.get(selected_idx).map(|(_, _, a)| a);
                 if matches!(action, Some(Action::Partitions)) {
                     let max_lines = app.partition_tree_lines.len().saturating_sub(1);
-                    app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
+                    app.partition_scroll = (app.partition_scroll + 3).min(max_lines);
                 } else if matches!(action, Some(Action::Schema)) {
                     let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
-                    app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
+                    app.schema_scroll = (app.schema_scroll + 3).min(max_cols);
+                } else if let Screen::Actions(ref mut a) = app.screen
+                    && let Some(ref mut dd) = a.drilldown
+                    && a.results.is_none()
+                {
+                    let depth = dd.depth();
+                    if let Some(items) = dd.levels_cache.get(depth)
+                        && !items.is_empty()
+                    {
+                        dd.selected = (dd.selected + 3).min(items.len().saturating_sub(1));
+                    }
                 } else if let Screen::Actions(ref mut a) = app.screen
                     && let Some(ref mut res) = a.results
                 {
                     if shift {
                         if !res.columns.is_empty() {
-                            res.scroll_h.set(
-                                (res.scroll_h.get() + 1).min(res.columns.len().saturating_sub(1)),
-                            );
+                            let new_h = (res.scroll_h.get() + 1).min(res.columns.len().saturating_sub(1));
+                            res.scroll_h.set(new_h);
+                            if res.selected_col < new_h {
+                                res.selected_col = new_h;
+                                res.last_selected_col.set(new_h);
+                            }
                         }
                     } else if !res.rows.is_empty() {
-                        res.scroll_v
-                            .set((res.scroll_v.get() + 1).min(res.rows.len().saturating_sub(1)));
+                        let delta = 3;
+                        let new_scroll_v = (res.scroll_v.get() + delta).min(res.rows.len().saturating_sub(1));
+                        res.scroll_v.set(new_scroll_v);
+                        if res.selected_row < new_scroll_v {
+                            res.selected_row = new_scroll_v;
+                            res.last_selected_row.set(new_scroll_v);
+                        }
                         return check_trigger_infinite_scroll(app);
                     }
                 }
@@ -250,6 +270,9 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 return None;
             }
             let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
+            let view_rows = results_table_inner_rect(app, term_width, term_height)
+                .map(|r| (r.height as usize).saturating_sub(3).max(1))
+                .unwrap_or(15);
             if is_in_table {
                 let selected_idx = match &app.screen {
                     Screen::Actions(a) => a.selected,
@@ -257,16 +280,28 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 };
                 let action = ACTIONS.get(selected_idx).map(|(_, _, a)| a);
                 if matches!(action, Some(Action::Partitions)) {
-                    app.partition_scroll = app.partition_scroll.saturating_sub(1);
+                    app.partition_scroll = app.partition_scroll.saturating_sub(3);
                 } else if matches!(action, Some(Action::Schema)) {
-                    app.schema_scroll = app.schema_scroll.saturating_sub(1);
+                    app.schema_scroll = app.schema_scroll.saturating_sub(3);
+                } else if let Screen::Actions(ref mut a) = app.screen
+                    && let Some(ref mut dd) = a.drilldown
+                    && a.results.is_none()
+                {
+                    dd.selected = dd.selected.saturating_sub(3);
                 } else if let Screen::Actions(ref mut a) = app.screen
                     && let Some(ref mut res) = a.results
                 {
                     if shift {
                         res.scroll_h.set(res.scroll_h.get().saturating_sub(1));
                     } else {
-                        res.scroll_v.set(res.scroll_v.get().saturating_sub(1));
+                        let delta = 3;
+                        let new_scroll_v = res.scroll_v.get().saturating_sub(delta);
+                        res.scroll_v.set(new_scroll_v);
+                        let max_visible_row = new_scroll_v + view_rows.saturating_sub(1);
+                        if res.selected_row > max_visible_row {
+                            res.selected_row = max_visible_row.min(res.rows.len().saturating_sub(1));
+                            res.last_selected_row.set(res.selected_row);
+                        }
                     }
                 }
             } else if let Some(s) = get_selected(&app.screen) {
@@ -566,6 +601,7 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
                     crate::tui::screens::results::calculate_effective_scroll_v(
                         res.scroll_v.get(),
                         res.selected_row,
+                        res.last_selected_row.get(),
                         viewport_lines,
                         &row_visual_heights,
                         res.rows.len(),
@@ -812,5 +848,118 @@ mod tests {
         };
         handle_mouse_sync(&mut app, up_event);
         assert!(app.copied_toast.is_none(), "A single click must not copy row to clipboard");
+    }
+
+    #[test]
+    fn test_mouse_scroll_down_and_up_in_table_view() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        let rows: Vec<Vec<String>> = (0..50)
+            .map(|i| vec![format!("id_{i}"), format!("val_{i}")])
+            .collect();
+        let res_state = ResultsState {
+            columns: vec!["id".to_string(), "val".to_string()],
+            rows,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
+            selected_row: 0,
+            selected_col: 0,
+            is_paginated: true,
+            ..Default::default()
+        };
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(res_state),
+            ..Default::default()
+        });
+
+        let scroll_down = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        // Scroll down 4 times
+        for _ in 0..4 {
+            handle_mouse_sync(&mut app, scroll_down);
+        }
+
+        if let Screen::Actions(a) = &app.screen {
+            let res = a.results.as_ref().unwrap();
+            assert_eq!(res.scroll_v.get(), 12, "4 scroll down events must advance scroll_v by 12");
+            assert!(res.selected_row >= 12, "selected_row must stay within visible viewport");
+        } else {
+            panic!("Expected Screen::Actions");
+        }
+
+        let scroll_up = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        // Scroll up 2 times
+        for _ in 0..2 {
+            handle_mouse_sync(&mut app, scroll_up);
+        }
+
+        if let Screen::Actions(a) = &app.screen {
+            let res = a.results.as_ref().unwrap();
+            assert_eq!(res.scroll_v.get(), 6, "2 scroll up events must retreat scroll_v by 6");
+        } else {
+            panic!("Expected Screen::Actions");
+        }
+    }
+
+    #[test]
+    fn test_mouse_scroll_in_drilldown() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        let items: Vec<String> = (0..20).map(|i| format!("partition_{i}")).collect();
+        let dd = DrillDownState {
+            partition_cols: vec!["dt".to_string()],
+            path: Vec::new(),
+            levels_cache: vec![items],
+            selected: 0,
+            ..Default::default()
+        };
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            drilldown: Some(dd),
+            results: None,
+            ..Default::default()
+        });
+
+        let scroll_down = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, scroll_down);
+
+        if let Screen::Actions(a) = &app.screen {
+            let dd = a.drilldown.as_ref().unwrap();
+            assert_eq!(dd.selected, 3, "ScrollDown in drilldown must advance selected by 3");
+        }
+
+        let scroll_up = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, scroll_up);
+
+        if let Screen::Actions(a) = &app.screen {
+            let dd = a.drilldown.as_ref().unwrap();
+            assert_eq!(dd.selected, 0, "ScrollUp in drilldown must retreat selected by 3");
+        }
     }
 }

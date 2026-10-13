@@ -154,13 +154,25 @@ pub fn visible_columns_layout(
         .iter()
         .position(|(orig_idx, _)| *orig_idx == state.selected_col)
         .unwrap_or(0);
+    let last_sel_vis_idx = all_visible_cols
+        .iter()
+        .position(|(orig_idx, _)| *orig_idx == state.last_selected_col.get())
+        .unwrap_or(sel_vis_idx);
 
     let h_margin = 2.min(col_count.saturating_sub(1) / 2);
-    let target_vis_idx = (sel_vis_idx + h_margin).min(col_count.saturating_sub(1));
+    let target_vis_idx = if sel_vis_idx > last_sel_vis_idx {
+        (sel_vis_idx + h_margin).min(col_count.saturating_sub(1))
+    } else {
+        sel_vis_idx
+    };
 
     let mut effective_scroll_h = state.scroll_h.get().min(col_count.saturating_sub(1));
-    if sel_vis_idx < effective_scroll_h + h_margin {
-        effective_scroll_h = sel_vis_idx.saturating_sub(h_margin);
+    if sel_vis_idx < last_sel_vis_idx {
+        if sel_vis_idx < effective_scroll_h + h_margin {
+            effective_scroll_h = sel_vis_idx.saturating_sub(h_margin);
+        }
+    } else if sel_vis_idx == last_sel_vis_idx && sel_vis_idx < effective_scroll_h {
+        effective_scroll_h = sel_vis_idx;
     }
 
     let is_stats = is_stats_table(&state.columns);
@@ -284,6 +296,7 @@ pub fn compute_row_height(
 pub fn calculate_effective_scroll_v(
     current_scroll_v: usize,
     sel_row: usize,
+    last_sel_row: usize,
     viewport_lines: usize,
     row_visual_heights: &[u16],
     total_rows: usize,
@@ -309,9 +322,8 @@ pub fn calculate_effective_scroll_v(
     let v_margin = 4.min(visible_count.saturating_sub(1) / 2);
     let mut scroll_v = current_scroll_v;
 
-    if sel_row < scroll_v + v_margin {
-        scroll_v = sel_row.saturating_sub(v_margin);
-    } else {
+    if sel_row > last_sel_row {
+        // Cursor moved down: advance scroll_v if needed so sel_row has bottom margin
         let target_bottom = (sel_row + v_margin).min(total_rows - 1);
         while scroll_v < sel_row {
             let lines_needed: usize = row_visual_heights[scroll_v..=target_bottom]
@@ -323,6 +335,15 @@ pub fn calculate_effective_scroll_v(
             }
             scroll_v += 1;
         }
+    } else if sel_row < last_sel_row {
+        // Cursor moved up: retreat scroll_v if needed so sel_row has top margin
+        if sel_row < scroll_v + v_margin {
+            scroll_v = sel_row.saturating_sub(v_margin);
+        }
+    } else if sel_row < scroll_v {
+        // Cursor did not move (view scrolled by mouse or initial render):
+        // only pull scroll_v up if sel_row is offscreen above the viewport
+        scroll_v = sel_row;
     }
 
     // Ensure sel_row is always within the viewport:
@@ -444,6 +465,7 @@ pub fn hit_test_cell(
     let effective_scroll_v = calculate_effective_scroll_v(
         state.scroll_v.get(),
         state.selected_row,
+        state.last_selected_row.get(),
         viewport_lines,
         &row_visual_heights,
         state.rows.len(),
@@ -624,6 +646,7 @@ pub fn render(
     let (visible_cols, col_width_sizes, effective_scroll_h) =
         visible_columns_layout(state, available_width);
     state.scroll_h.set(effective_scroll_h);
+    state.last_selected_col.set(state.selected_col);
 
     let col_widths: Vec<Constraint> = col_width_sizes
         .iter()
@@ -671,11 +694,13 @@ pub fn render(
     let effective_scroll_v = calculate_effective_scroll_v(
         state.scroll_v.get(),
         state.selected_row,
+        state.last_selected_row.get(),
         viewport_lines,
         &row_visual_heights,
         state.rows.len(),
     );
     state.scroll_v.set(effective_scroll_v);
+    state.last_selected_row.set(state.selected_row);
 
     let header_cells: Vec<Cell> = visible_cols
         .iter()
@@ -1308,5 +1333,96 @@ mod tests {
         // col 0 width is 8 + 2 spacing = 10, so x = 22 is in col 1
         let res = hit_test_cell(&state, inner, 22, 8);
         assert_eq!(res, Some((1, 1)), "Should hit row 1, col 1");
+    }
+
+    #[test]
+    fn test_wheel_scroll_viewport_not_clamped_to_cursor() {
+        let rows: Vec<Vec<String>> = (0..50)
+            .map(|i| vec![format!("id_{i}"), format!("val_{i}")])
+            .collect();
+
+        let mut state = ResultsState {
+            query_buffer: "SELECT * FROM items".to_string(),
+            query_cursor: 19,
+            columns: vec!["id".to_string(), "val".to_string()],
+            rows,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
+            selected_row: 0,
+            selected_col: 0,
+            ..Default::default()
+        };
+
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Initial render: cursor at 0, scroll_v 0
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(state.scroll_v.get(), 0);
+
+        // Simulate user mouse-scrolling down to row 10 (without keyboard navigation)
+        state.scroll_v.set(10);
+        state.selected_row = 10;
+        state.last_selected_row.set(10);
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(
+            state.scroll_v.get(),
+            10,
+            "Mouse scrolling down must not clamp scroll_v back to top margin"
+        );
+
+        // Scroll further down to row 25
+        state.scroll_v.set(25);
+        state.selected_row = 25;
+        state.last_selected_row.set(25);
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(
+            state.scroll_v.get(),
+            25,
+            "Mouse scrolling down must allow continuous unlimited scrolling"
+        );
+    }
+
+    #[test]
+    fn test_horizontal_scroll_not_clamped_to_first_column() {
+        let cols: Vec<String> = (0..20).map(|i| format!("col_{i}")).collect();
+        let rows = vec![(0..20).map(|i| format!("val_{i}")).collect()];
+
+        let mut state = ResultsState {
+            query_buffer: "SELECT * FROM wide_table".to_string(),
+            query_cursor: 24,
+            columns: cols,
+            rows,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
+            selected_col: 0,
+            selected_row: 0,
+            ..Default::default()
+        };
+
+        // Scroll horizontally to column 5 with column 5 selected
+        state.scroll_h.set(5);
+        state.selected_col = 5;
+        state.last_selected_col.set(5);
+
+        let (vis_cols, _, effective_scroll_h) = visible_columns_layout(&state, 80);
+        assert_eq!(
+            effective_scroll_h, 5,
+            "Horizontal scroll to col 5 must remain at col 5"
+        );
+        assert_eq!(vis_cols.first().map(|(idx, _)| *idx), Some(5));
     }
 }

@@ -744,6 +744,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         column_filters: col_filts,
                         col_distinct_values: distinct_vals,
                         hidden_columns: hidden_cols,
+                        ..Default::default()
                     };
 
                     let cur_selected = if let Screen::Actions(ref a) = app.screen {

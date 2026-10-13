@@ -1240,5 +1240,49 @@ pub mod tests {
         help_keys(&mut app, KeyEvent::from(KeyCode::Char('q')));
         assert!(matches!(app.screen, Screen::Table(_)));
     }
+
+    #[test]
+    fn test_actions_keys_page_down_and_up_in_table_view() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            selected: 0,
+            results: Some(ResultsState {
+                rows: (0..50).map(|i| vec![format!("{i}")]).collect(),
+                columns: vec!["id".to_string()],
+                selected_row: 0,
+                selected_col: 0,
+                is_paginated: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        app.active_panel = ActivePanel::MainViewer;
+
+        // Page down
+        actions_keys(&mut app, KeyEvent::from(KeyCode::PageDown));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 15);
+
+        // Page down again
+        actions_keys(&mut app, KeyEvent::from(KeyCode::PageDown));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 30);
+
+        // Page up
+        actions_keys(&mut app, KeyEvent::from(KeyCode::PageUp));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 15);
+
+        // Ctrl+d (page down)
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_d);
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 30);
+
+        // Ctrl+u (page up)
+        let ctrl_u = KeyEvent::new(KeyCode::Char('u'), crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_u);
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 15);
+    }
 }
 
