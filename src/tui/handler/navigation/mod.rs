@@ -630,8 +630,8 @@ pub mod tests {
             query_cursor: 0,
             columns: vec!["event_type".to_string()],
             rows: vec![vec!["created".to_string()]],
-            scroll_v: 0,
-            scroll_h: 0,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
             loading: false,
             error: None,
             is_paginated: true,
@@ -696,14 +696,12 @@ pub mod tests {
             panic!("expected actions screen");
         };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 1);
-        assert_eq!(state.results.as_ref().unwrap().scroll_h, 1);
 
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
         let Screen::Actions(state) = &app.screen else {
             panic!("expected actions screen");
         };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
-        assert_eq!(state.results.as_ref().unwrap().scroll_h, 0);
     }
 
     #[test]
@@ -723,7 +721,7 @@ pub mod tests {
         let Screen::Actions(state) = &app.screen else {
             panic!("expected actions screen");
         };
-        assert_eq!(state.results.as_ref().unwrap().scroll_h, 0);
+        assert_eq!(state.results.as_ref().unwrap().scroll_h.get(), 0);
         assert!(matches!(app.active_panel, ActivePanel::MainViewer));
 
         let cmd = actions_keys(&mut app, KeyEvent::from(KeyCode::Char('<')));
@@ -938,8 +936,8 @@ pub mod tests {
                 query_cursor: 0,
                 columns: vec!["Create Table".to_string()],
                 rows: vec![vec!["CREATE TABLE orders (id bigint)".to_string()]],
-                scroll_v: 0,
-                scroll_h: 0,
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
                 loading: false,
                 error: None,
                 is_paginated: false,
@@ -1004,8 +1002,8 @@ pub mod tests {
                     vec!["2".to_string(), "pending".to_string(), "200".to_string()],
                     vec!["3".to_string(), "inactive".to_string(), "300".to_string()],
                 ],
-                scroll_v: 0,
-                scroll_h: 0,
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
                 selected_row: 0,
                 selected_col: 0,
                 ..Default::default()
@@ -1076,8 +1074,8 @@ pub mod tests {
                 rows: vec![
                     vec!["1".to_string(), "active".to_string(), "100".to_string()],
                 ],
-                scroll_v: 0,
-                scroll_h: 0,
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
                 selected_row: 0,
                 selected_col: 0, // starts at 'id' (col 0)
                 hidden_columns: hidden,

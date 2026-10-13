@@ -34,8 +34,8 @@ pub fn populate_table_ddl_results(s: &mut ActionState) {
         query_cursor: 0,
         columns: vec!["Create Table".to_string()],
         rows: vec![vec![ddl_text]],
-        scroll_v: 0,
-        scroll_h: 0,
+        scroll_v: std::cell::Cell::new(0),
+        scroll_h: std::cell::Cell::new(0),
         loading: false,
         error: None,
         is_paginated: false,
@@ -287,8 +287,6 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 if !res.rows.is_empty() {
                                     res.selected_row =
                                         (res.selected_row + 1).min(res.rows.len().saturating_sub(1));
-                                    res.scroll_v =
-                                        (res.scroll_v + 1).min(res.rows.len().saturating_sub(1));
                                 }
                                 return check_trigger_infinite_scroll(app);
                             }
@@ -301,14 +299,12 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 app.schema_scroll = app.schema_scroll.saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {
                                 res.selected_row = res.selected_row.saturating_sub(1);
-                                res.scroll_v = res.scroll_v.saturating_sub(1);
                             }
                             None
                         }
                         KeyCode::Char('h') | KeyCode::Left => {
                             if let Some(ref mut res) = s.results {
                                 res.selected_col = res.prev_visible_col();
-                                res.scroll_h = res.scroll_h.saturating_sub(1);
                             }
                             None
                         }
@@ -317,8 +313,6 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 && !res.columns.is_empty()
                             {
                                 res.selected_col = res.next_visible_col();
-                                let max_vis_scroll = res.visible_columns().len().saturating_sub(1);
-                                res.scroll_h = (res.scroll_h + 1).min(max_vis_scroll);
                             }
                             None
                         }
@@ -340,9 +334,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 app.schema_scroll = 0;
                             } else if let Some(ref mut res) = s.results {
                                 res.selected_row = 0;
-                                res.scroll_v = 0;
+                                res.scroll_v.set(0);
                                 res.selected_col = res.first_visible_col();
-                                res.scroll_h = 0;
+                                res.scroll_h.set(0);
                             }
                             None
                         }
@@ -355,7 +349,6 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                     app.vertical_schema_cols.len().saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {
                                 res.selected_row = res.rows.len().saturating_sub(1);
-                                res.scroll_v = res.rows.len().saturating_sub(1);
                                 return check_trigger_infinite_scroll(app);
                             }
                             None

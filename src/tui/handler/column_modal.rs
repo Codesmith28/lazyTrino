@@ -220,7 +220,7 @@ pub fn apply_column_modal(app: &mut App) -> Option<Command> {
                 res.selected_col = closest;
             }
         }
-        res.scroll_h = 0;
+        res.scroll_h.set(0);
 
         // 3. Update query in query cell
         if res.base_query.is_none() {
@@ -278,8 +278,8 @@ mod tests {
                         "2026-01-01".to_string(),
                     ],
                 ],
-                scroll_v: 0,
-                scroll_h: 0,
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
                 selected_row: 0,
                 selected_col: 1, // cursor on 'status'
                 ..Default::default()

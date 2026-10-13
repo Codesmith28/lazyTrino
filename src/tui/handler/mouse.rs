@@ -183,11 +183,13 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 {
                     if shift {
                         if !res.columns.is_empty() {
-                            res.scroll_h =
-                                (res.scroll_h + 1).min(res.columns.len().saturating_sub(1));
+                            res.scroll_h.set(
+                                (res.scroll_h.get() + 1).min(res.columns.len().saturating_sub(1)),
+                            );
                         }
                     } else if !res.rows.is_empty() {
-                        res.scroll_v = (res.scroll_v + 1).min(res.rows.len().saturating_sub(1));
+                        res.scroll_v
+                            .set((res.scroll_v.get() + 1).min(res.rows.len().saturating_sub(1)));
                         return check_trigger_infinite_scroll(app);
                     }
                 }
@@ -222,9 +224,9 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     && let Some(ref mut res) = a.results
                 {
                     if shift {
-                        res.scroll_h = res.scroll_h.saturating_sub(1);
+                        res.scroll_h.set(res.scroll_h.get().saturating_sub(1));
                     } else {
-                        res.scroll_v = res.scroll_v.saturating_sub(1);
+                        res.scroll_v.set(res.scroll_v.get().saturating_sub(1));
                     }
                 }
             } else if let Some(s) = get_selected(&app.screen) {
@@ -427,7 +429,7 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
                         .join("\t");
                     lines.push(header);
                 } else if r >= preview_inner_y + 2 {
-                    let idx = (r - (preview_inner_y + 2)) as usize + res.scroll_v;
+                    let idx = (r - (preview_inner_y + 2)) as usize + res.scroll_v.get();
                     if idx < res.rows.len() {
                         let row_line = vis_indices
                             .iter()
@@ -502,8 +504,8 @@ mod tests {
                 vec!["1".to_string(), "OK".to_string()],
                 vec!["2".to_string(), "PENDING".to_string()],
             ],
-            scroll_v: 0,
-            scroll_h: 0,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
             loading: false,
             error: None,
             is_paginated: true,

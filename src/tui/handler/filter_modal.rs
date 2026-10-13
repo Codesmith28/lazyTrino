@@ -241,7 +241,7 @@ pub fn apply_filter_modal(app: &mut App) -> Option<Command> {
         }
         res.rows = filtered_rows;
         res.selected_row = 0;
-        res.scroll_v = 0;
+        res.scroll_v.set(0);
 
         // 3. Update query in query cell
         if res.base_query.is_none() {
@@ -304,8 +304,8 @@ mod tests {
                     vec!["3".to_string(), "active".to_string()],
                     vec!["4".to_string(), "inactive".to_string()],
                 ],
-                scroll_v: 0,
-                scroll_h: 0,
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
                 selected_row: 0,
                 selected_col: 1, // cursor on 'status' column
                 ..Default::default()

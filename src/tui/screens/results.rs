@@ -319,9 +319,12 @@ pub fn render(
         .position(|(orig_idx, _)| *orig_idx == state.selected_col)
         .unwrap_or(0);
 
-    let mut effective_scroll_h = state.scroll_h.min(col_count.saturating_sub(1));
-    if sel_vis_idx < effective_scroll_h {
-        effective_scroll_h = sel_vis_idx;
+    let h_margin = 2.min(col_count.saturating_sub(1) / 2);
+    let target_vis_idx = (sel_vis_idx + h_margin).min(col_count.saturating_sub(1));
+
+    let mut effective_scroll_h = state.scroll_h.get().min(col_count.saturating_sub(1));
+    if sel_vis_idx < effective_scroll_h + h_margin {
+        effective_scroll_h = sel_vis_idx.saturating_sub(h_margin);
     }
 
     let compute_col_width = |orig_col_idx: usize, col_name: &String| -> u16 {
@@ -354,7 +357,7 @@ pub fn render(
             let needed = compute_col_width(*orig_col_idx, c) as usize + 2;
             if width + needed <= available_width || width == 0 {
                 width += needed;
-                if v_idx == sel_vis_idx {
+                if v_idx == target_vis_idx {
                     fits = true;
                     break;
                 }
@@ -367,6 +370,7 @@ pub fn render(
         }
         effective_scroll_h += 1;
     }
+    state.scroll_h.set(effective_scroll_h);
 
     let mut cumulative_width = 0;
     let mut visible_cols: Vec<(usize, &String)> = Vec::new();
@@ -417,16 +421,23 @@ pub fn render(
         .collect();
     let header = Row::new(header_cells).bottom_margin(1);
 
-    let take_rows = (inner.height as usize).saturating_sub(2).max(1);
-    let mut effective_scroll_v = state.scroll_v;
+    let has_h_scrollbar = state.columns.len() > 1;
+    let table_reserved_rows = if has_h_scrollbar { 3 } else { 2 };
+    let take_rows = (inner.height as usize).saturating_sub(table_reserved_rows).max(1);
+    let mut effective_scroll_v = state.scroll_v.get();
     if !state.rows.is_empty() {
         let sel_row = state.selected_row.min(state.rows.len() - 1);
-        if sel_row < effective_scroll_v {
-            effective_scroll_v = sel_row;
-        } else if sel_row >= effective_scroll_v + take_rows {
-            effective_scroll_v = sel_row.saturating_sub(take_rows - 1);
+        let v_margin = 4.min(take_rows.saturating_sub(1) / 2);
+        let max_scroll_v = state.rows.len().saturating_sub(take_rows);
+
+        if sel_row + v_margin >= effective_scroll_v + take_rows {
+            effective_scroll_v = (sel_row + v_margin + 1).saturating_sub(take_rows);
+        } else if sel_row < effective_scroll_v + v_margin {
+            effective_scroll_v = sel_row.saturating_sub(v_margin);
         }
+        effective_scroll_v = effective_scroll_v.min(max_scroll_v);
     }
+    state.scroll_v.set(effective_scroll_v);
 
     let mut current_row_y = inner.y + 2; // header line + bottom margin 1
     let mut visible_rows: Vec<Row> = Vec::new();
@@ -691,8 +702,8 @@ mod tests {
                 vec!["1".to_string(), "OK".to_string()],
                 vec!["2".to_string(), "PENDING".to_string()],
             ],
-            scroll_v: 0,
-            scroll_h: 0,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
             loading: false,
             error: None,
             is_paginated: true,
@@ -756,8 +767,8 @@ mod tests {
             rows: vec![
                 vec!["1".to_string(), "pass123".to_string(), "Alice".to_string()],
             ],
-            scroll_v: 0,
-            scroll_h: 0,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
             selected_row: 0,
             selected_col: 0,
             loading: false,
@@ -794,5 +805,118 @@ mod tests {
         assert!(!content.contains("secret"), "hidden column 'secret' must not be rendered");
         assert!(!content.contains("pass123"), "hidden column value 'pass123' must not be rendered");
         assert!(content.contains("(1 hidden)"), "Title should indicate 1 hidden column: {content}");
+    }
+
+    #[test]
+    fn test_cursor_navigation_and_incremental_viewport_scrolling() {
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+        let rows: Vec<Vec<String>> = (0..30)
+            .map(|i| vec![format!("id_{i}"), format!("val_{i}"), format!("extra_{i}")])
+            .collect();
+
+        let mut state = ResultsState {
+            query_buffer: "SELECT * FROM items".to_string(),
+            query_cursor: 19,
+            columns: vec!["id".to_string(), "val".to_string(), "extra".to_string()],
+            rows,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
+            selected_row: 0,
+            selected_col: 0,
+            ..Default::default()
+        };
+
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Initial render: cursor at row 0, scroll_v should be 0
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(state.scroll_v.get(), 0, "Initial scroll_v should be 0");
+
+        // Move cursor down to row 10 (take_rows is 15, margin is 4, 10 + 4 < 15): sheet should NOT move
+        state.selected_row = 10;
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(
+            state.scroll_v.get(),
+            0,
+            "Cursor moving within margin threshold should not scroll the sheet"
+        );
+
+        // Move cursor down to row 11 (11 + 4 = 15 >= 15): sheet should incrementally scroll to 1
+        state.selected_row = 11;
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(
+            state.scroll_v.get(),
+            1,
+            "Reaching threshold of 4 rows from bottom should incrementally scroll to 1"
+        );
+
+        // Move cursor down to row 12: sheet should incrementally scroll to 2
+        state.selected_row = 12;
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(state.scroll_v.get(), 2, "Reaching threshold should incrementally scroll to 2");
+
+        // Move cursor down to row 13: sheet should incrementally scroll to 3
+        state.selected_row = 13;
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(state.scroll_v.get(), 3, "Reaching threshold should incrementally scroll to 3");
+
+        // Now move cursor back UP to row 12 (within viewport with scroll_v = 3): sheet should NOT move
+        state.selected_row = 12;
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(state.scroll_v.get(), 3, "Moving up within viewport should NOT move the sheet");
+
+        // Move cursor up to row 7 (7 >= scroll_v 3 + margin 4): sheet should STILL not move
+        state.selected_row = 7;
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(state.scroll_v.get(), 3, "Moving up within margin should keep scroll_v = 3");
+
+        // Move cursor up past the margin threshold (row 6 < scroll_v 3 + margin 4): sheet incrementally scrolls up to 2
+        state.selected_row = 6;
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(state.scroll_v.get(), 2, "Moving past top margin should incrementally scroll up to 2");
+
+        // Move cursor up to row 0: sheet incrementally scrolls up to 0
+        state.selected_row = 0;
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(state.scroll_v.get(), 0, "Moving to top should scroll back to 0");
     }
 }

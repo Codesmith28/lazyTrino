@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 use crate::config::ConnectionConfig;
@@ -270,8 +271,8 @@ pub struct ResultsState {
     pub query_cursor: usize,
     pub columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
-    pub scroll_v: usize,
-    pub scroll_h: usize,
+    pub scroll_v: Cell<usize>,
+    pub scroll_h: Cell<usize>,
     pub selected_row: usize,
     pub selected_col: usize,
     pub loading: bool,
