@@ -15,6 +15,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{ActivePanel, App, CatalogState, ConnectState, SchemaState, Screen, TableState};
+use crate::tui::handler::Command;
 
 pub mod actions;
 pub mod clipboard;
@@ -28,7 +29,9 @@ pub use list::*;
 
 pub fn go_back(app: &mut App) {
     let logged_in = app.trino_client.is_some();
-    app.main_panel_pct = 60;
+    if !matches!(app.screen, Screen::Help) {
+        app.main_panel_pct = 60;
+    }
 
     let next = match &app.screen {
         Screen::Help => {
@@ -98,6 +101,49 @@ pub fn go_back(app: &mut App) {
     if let Some(s) = next {
         app.clear_mouse_selection();
         app.screen = s;
+    }
+}
+
+pub fn help_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    let code = normalize_key_code(key.code);
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.help_scroll = app.help_scroll.saturating_add(1);
+            if let Some(ref mut m) = app.help_modal {
+                m.scroll = app.help_scroll;
+            }
+            None
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.help_scroll = app.help_scroll.saturating_sub(1);
+            if let Some(ref mut m) = app.help_modal {
+                m.scroll = app.help_scroll;
+            }
+            None
+        }
+        KeyCode::Char('g') => {
+            app.help_scroll = 0;
+            if let Some(ref mut m) = app.help_modal {
+                m.scroll = 0;
+            }
+            None
+        }
+        KeyCode::Char('G') => {
+            app.help_scroll = 100;
+            if let Some(ref mut m) = app.help_modal {
+                m.scroll = 100;
+            }
+            None
+        }
+        KeyCode::Char('q') | KeyCode::Char('?') | KeyCode::Esc => {
+            app.help_modal = None;
+            app.mode = crate::app::Mode::Normal;
+            if matches!(app.screen, Screen::Help) {
+                go_back(app);
+            }
+            None
+        }
+        _ => None,
     }
 }
 
@@ -1005,6 +1051,33 @@ pub mod tests {
         assert!(modal.selected_columns.contains("id"));
         assert!(!modal.selected_columns.contains("status"));
         assert!(modal.selected_columns.contains("amount"));
+    }
+
+    #[test]
+    fn test_help_keys_scroll_and_close() {
+        let mut app = sample_app(Screen::Help);
+        app.prev_screen = Some(Box::new(Screen::Table(TableState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            items: vec!["orders".to_string()],
+            selected: 0,
+        })));
+        assert_eq!(app.help_scroll, 0);
+
+        help_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.help_scroll, 1);
+
+        help_keys(&mut app, KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(app.help_scroll, 0);
+
+        help_keys(&mut app, KeyEvent::from(KeyCode::Char('G')));
+        assert_eq!(app.help_scroll, 100);
+
+        help_keys(&mut app, KeyEvent::from(KeyCode::Char('g')));
+        assert_eq!(app.help_scroll, 0);
+
+        help_keys(&mut app, KeyEvent::from(KeyCode::Char('q')));
+        assert!(matches!(app.screen, Screen::Table(_)));
     }
 }
 

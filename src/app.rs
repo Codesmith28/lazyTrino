@@ -437,6 +437,7 @@ pub enum Mode {
     QueryInput,
     FilterModal,
     ColumnModal,
+    HelpModal,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -491,6 +492,13 @@ impl ColumnModalState {
                 .collect()
         }
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HelpModalState {
+    pub search_query: String,
+    pub is_searching: bool,
+    pub scroll: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -562,6 +570,8 @@ pub struct App {
     pub copied_toast: Option<(String, std::time::Instant)>,
     pub filter_modal: Option<FilterModalState>,
     pub column_modal: Option<ColumnModalState>,
+    pub help_modal: Option<HelpModalState>,
+    pub help_scroll: usize,
 }
 
 impl App {
@@ -605,6 +615,8 @@ impl App {
             copied_toast: None,
             filter_modal: None,
             column_modal: None,
+            help_modal: None,
+            help_scroll: 0,
         }
     }
 

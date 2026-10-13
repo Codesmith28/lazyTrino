@@ -88,15 +88,18 @@ pub(super) fn handle_search_mode(app: &mut App, key: KeyEvent) -> Option<Command
     match key.code {
         KeyCode::Char(c) if !c.is_ascii_control() => {
             app.search_query.push(c);
+            app.help_scroll = 0;
             super::navigation::reset_list_selected_for_search(app);
         }
         KeyCode::Backspace => {
             app.search_query.pop();
+            app.help_scroll = 0;
             super::navigation::reset_list_selected_for_search(app);
         }
         KeyCode::Enter | KeyCode::Esc => {
             if key.code == KeyCode::Esc {
                 app.search_query.clear();
+                app.help_scroll = 0;
                 super::navigation::reset_list_selected_for_search(app);
             }
             app.mode = Mode::Normal;

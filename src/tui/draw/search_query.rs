@@ -76,9 +76,9 @@ pub fn cursor_line_and_col(
 pub fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
     let is_editing = matches!(app.mode, Mode::Search);
     let title = if is_editing {
-        " Centralized Search [EDITING - Press Enter/Esc to finish] "
+        " Search [/] [Typing — Enter/Esc to finish] "
     } else {
-        " Centralized Search [Press / to search] "
+        " Search [/] "
     };
 
     let block = Block::default()
@@ -92,7 +92,7 @@ pub fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
 
     let (lines, cursor_line, cursor_col) = if app.search_query.is_empty() {
         let span = Span::styled(
-            "Type to filter catalogs, schemas, tables, and columns...",
+            "Type / to filter catalogs, schemas, tables...",
             theme::muted_style(),
         );
         (vec![Line::from(vec![Span::raw(" / "), span])], 0, 3)
@@ -142,9 +142,14 @@ pub fn render_search_bar(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 pub fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
+    let effective_screen = if let Screen::Help = &app.screen {
+        app.prev_screen.as_deref().unwrap_or(&app.screen)
+    } else {
+        &app.screen
+    };
     let is_editing = matches!(app.mode, Mode::QueryInput);
     let is_table_view = matches!(
-        &app.screen,
+        effective_screen,
         Screen::Actions(state) if state.results.as_ref().is_some_and(|results| results.is_paginated)
     );
 
@@ -165,7 +170,7 @@ pub fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
             is_table_view,
         )));
 
-    let (buf, cursor, sel_range) = match &app.screen {
+    let (buf, cursor, sel_range) = match effective_screen {
         Screen::Actions(state) => {
             if let Some(ref res) = state.results {
                 (

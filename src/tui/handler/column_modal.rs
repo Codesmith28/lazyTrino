@@ -159,22 +159,18 @@ pub fn handle_column_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
         }
         KeyCode::Char('a') | KeyCode::Char('A') => {
             if let Some(ref mut m) = app.column_modal {
-                let matched = m.filtered_indices();
-                let all_matched_selected = !matched.is_empty()
-                    && matched
-                        .iter()
-                        .all(|&i| m.selected_columns.contains(&m.columns[i]));
-                if all_matched_selected {
-                    let cur_orig_idx = matched.get(m.cursor).copied();
-                    for &i in &matched {
-                        if Some(i) != cur_orig_idx && m.selected_columns.len() > 1 {
-                            m.selected_columns.remove(&m.columns[i]);
-                        }
+                if m.selected_columns.len() == m.columns.len() {
+                    let cur_col = if let Some(&orig_idx) = m.filtered_indices().get(m.cursor) {
+                        m.columns.get(orig_idx).cloned()
+                    } else {
+                        m.columns.get(m.cursor).cloned()
+                    };
+                    m.selected_columns.clear();
+                    if let Some(cur) = cur_col {
+                        m.selected_columns.insert(cur);
                     }
                 } else {
-                    for &i in &matched {
-                        m.selected_columns.insert(m.columns[i].clone());
-                    }
+                    m.selected_columns = m.columns.iter().cloned().collect();
                 }
             }
             None
@@ -416,4 +412,39 @@ mod tests {
         assert!(app.column_modal.is_none());
         assert_eq!(app.mode, Mode::Normal);
     }
+
+    #[test]
+    fn test_search_then_a_deselects_entire_column_list_not_just_visible() {
+        let mut app = sample_app_with_results();
+        open_column_modal(&mut app);
+
+        // All 4 columns selected
+        assert_eq!(app.column_modal.as_ref().unwrap().selected_columns.len(), 4);
+
+        // Search for "stat" (only "status" matches)
+        handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char('/')));
+        for c in "stat".chars() {
+            handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char(c)));
+        }
+        handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Enter));
+
+        let m = app.column_modal.as_ref().unwrap();
+        assert_eq!(m.filtered_indices().len(), 1); // Only "status" visible
+
+        // Press 'a': deselects all columns in the entire table except current cursor ("status")
+        handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char('a')));
+
+        let m = app.column_modal.as_ref().unwrap();
+        assert_eq!(m.selected_columns.len(), 1);
+        assert!(m.selected_columns.contains("status"));
+        assert!(!m.selected_columns.contains("id"));
+        assert!(!m.selected_columns.contains("amount"));
+        assert!(!m.selected_columns.contains("created_at"));
+
+        // Press 'a' again: selects all 4 columns across the entire table
+        handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char('a')));
+        let m = app.column_modal.as_ref().unwrap();
+        assert_eq!(m.selected_columns.len(), 4);
+    }
 }
+

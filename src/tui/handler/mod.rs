@@ -23,6 +23,7 @@ mod commands;
 pub mod column_modal;
 mod export;
 pub mod filter_modal;
+pub mod help_modal;
 mod mouse;
 mod navigation;
 mod query;
@@ -214,6 +215,7 @@ pub enum AsyncResult {
 pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     preserve_public_api_symbols();
     match app.mode {
+        Mode::HelpModal => return help_modal::handle_help_modal_key(app, key),
         Mode::FilterModal => return filter_modal::handle_filter_modal_key(app, key),
         Mode::ColumnModal => return column_modal::handle_column_modal_key(app, key),
         Mode::QueryInput => return query::handle_query_input_mode(app, key),
@@ -238,14 +240,14 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     }
 
     if code == KeyCode::Char('?') {
-        if matches!(app.screen, Screen::Help) {
-            navigation::go_back(app);
+        if app.help_modal.is_some() || matches!(app.screen, Screen::Help) {
+            help_modal::close_help_modal(app);
+            if matches!(app.screen, Screen::Help) {
+                navigation::go_back(app);
+            }
             return None;
         }
-        app.prev_screen = Some(Box::new(app.screen.clone()));
-        app.clear_mouse_selection();
-        app.search_query.clear();
-        app.screen = Screen::Help;
+        help_modal::open_help_modal(app);
         return None;
     }
 
@@ -293,6 +295,6 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         Screen::Schema(_) => navigation::schema_keys(app, key),
         Screen::Table(_) => navigation::table_keys(app, key),
         Screen::Actions(_) => navigation::actions_keys(app, key),
-        Screen::Help => None,
+        Screen::Help => navigation::help_keys(app, key),
     }
 }

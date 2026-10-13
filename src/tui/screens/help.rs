@@ -16,7 +16,10 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
+    widgets::{
+        Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Wrap,
+    },
 };
 
 use crate::tui::theme;
@@ -83,47 +86,9 @@ const HELP_SECTIONS: &[HelpSection] = &[
     },
 ];
 
-pub fn render(frame: &mut Frame, area: Rect, search_query: &str, is_searching: bool) {
-    let block = Block::default()
-        .title(" Help & Keybindings ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(theme::border_style(true));
-    frame.render_widget(&block, area);
-
-    let inner = block.inner(area);
-    if inner.height < 2 {
-        return;
-    }
-
-    let show_search = is_searching || !search_query.is_empty();
-    let (search_area, content_area, hint_area) = if show_search {
-        let chunks = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-        (Some(chunks[0]), chunks[1], chunks[2])
-    } else {
-        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
-        (None, chunks[0], chunks[1])
-    };
-
-    if let Some(s_area) = search_area {
-        let prompt_span = Span::styled("/ ", theme::warning_bold_style());
-        let query_span = Span::styled(search_query, theme::text_style());
-        let cursor_span = if is_searching {
-            Span::styled("█", theme::warning_bold_style())
-        } else {
-            Span::styled(" (press / to filter)", theme::muted_style())
-        };
-        let line = Line::from(vec![prompt_span, query_span, cursor_span]);
-        frame.render_widget(Paragraph::new(line), s_area);
-    }
-
+pub fn build_help_lines(search_query: &str) -> Vec<Line<'static>> {
     let query_lower = search_query.trim().to_lowercase();
-    let mut help_text: Vec<Line> = Vec::new();
+    let mut help_text: Vec<Line<'static>> = Vec::new();
 
     if query_lower.is_empty() {
         for (i, section) in HELP_SECTIONS.iter().enumerate() {
@@ -172,8 +137,123 @@ pub fn render(frame: &mut Frame, area: Rect, search_query: &str, is_searching: b
         }
     }
 
-    let paragraph = Paragraph::new(help_text).wrap(Wrap { trim: false });
+    help_text
+}
+
+pub fn render_side_panel(frame: &mut Frame, area: Rect) {
+    let block = Block::default()
+        .title(" Help & Keybindings ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::border_style(false));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let help_lines = build_help_lines("");
+    let paragraph = Paragraph::new(help_lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
+}
+
+pub fn render_modal(
+    frame: &mut Frame,
+    area: Rect,
+    search_query: &str,
+    is_searching: bool,
+    scroll: usize,
+) {
+    let modal_width = (area.width * 70 / 100).clamp(55, 95).min(area.width);
+    let max_height = area.height.saturating_sub(4).max(10);
+    let modal_height = (area.height * 75 / 100).clamp(16, 28).min(max_height).min(area.height);
+
+    let popup_area = Rect {
+        x: area.x + (area.width.saturating_sub(modal_width)) / 2,
+        y: area.y + (area.height.saturating_sub(modal_height)) / 2,
+        width: modal_width,
+        height: modal_height,
+    };
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(" Help & Keybindings ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::border_style(true));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    if inner.height < 4 {
+        return;
+    }
+
+    let chunks = Layout::vertical([
+        Constraint::Length(3), // Dedicated search box
+        Constraint::Min(0),    // Help content
+        Constraint::Length(1), // Hint footer
+    ])
+    .split(inner);
+
+    let search_area = chunks[0];
+    let content_area = chunks[1];
+    let hint_area = chunks[2];
+
+    let search_title = if is_searching {
+        " Search [/] [Typing — Enter/Esc to finish] "
+    } else {
+        " Search [/] "
+    };
+    let search_block = Block::default()
+        .title(search_title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::border_style(is_searching));
+    let s_inner = search_block.inner(search_area);
+    frame.render_widget(search_block, search_area);
+
+    let search_line = if search_query.is_empty() {
+        if is_searching {
+            Line::from(vec![
+                Span::styled("/ ", theme::warning_bold_style()),
+                Span::styled("█", theme::warning_bold_style()),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("/ ", theme::muted_style()),
+                Span::styled("Type / to search shortcuts...", theme::muted_style()),
+            ])
+        }
+    } else {
+        let mut spans = vec![
+            Span::styled("/ ", theme::warning_bold_style()),
+            Span::styled(search_query, theme::text_style()),
+        ];
+        if is_searching {
+            spans.push(Span::styled("█", theme::warning_bold_style()));
+        }
+        Line::from(spans)
+    };
+    frame.render_widget(Paragraph::new(search_line), s_inner);
+
+    let help_lines = build_help_lines(search_query);
+    let total_lines = help_lines.len();
+    let visible_height = content_area.height as usize;
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let effective_scroll = scroll.min(max_scroll);
+
+    let paragraph = Paragraph::new(help_lines).scroll((effective_scroll as u16, 0));
     frame.render_widget(paragraph, content_area);
+
+    if total_lines > visible_height && visible_height > 0 {
+        let mut scrollbar_state = ScrollbarState::new(max_scroll).position(effective_scroll);
+        frame.render_stateful_widget(
+            Scrollbar::default()
+                .orientation(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("▲"))
+                .end_symbol(Some("▼")),
+            content_area,
+            &mut scrollbar_state,
+        );
+    }
 
     let hint_line = if is_searching {
         Line::from(vec![
@@ -185,12 +265,19 @@ pub fn render(frame: &mut Frame, area: Rect, search_query: &str, is_searching: b
     } else {
         Line::from(vec![
             Span::styled("/", theme::selection_style()),
-            Span::styled(":filter help  ", theme::muted_style()),
-            Span::styled("Esc/?", theme::selection_style()),
+            Span::styled(":search  ", theme::muted_style()),
+            Span::styled("j/k", theme::selection_style()),
+            Span::styled(":scroll  ", theme::muted_style()),
+            Span::styled("Esc/?/q", theme::selection_style()),
             Span::styled(":close help", theme::muted_style()),
         ])
     };
     frame.render_widget(Paragraph::new(hint_line), hint_area);
+}
+
+#[allow(dead_code)]
+pub fn render(frame: &mut Frame, area: Rect, search_query: &str, is_searching: bool) {
+    render_modal(frame, area, search_query, is_searching, 0);
 }
 
 #[cfg(test)]
@@ -231,6 +318,17 @@ mod tests {
         terminal
             .draw(|f| {
                 render(f, f.area(), "filter", true);
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_help_render_side_panel() {
+        let backend = TestBackend::new(50, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                render_side_panel(f, f.area());
             })
             .unwrap();
     }

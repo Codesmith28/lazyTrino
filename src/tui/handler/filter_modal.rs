@@ -176,19 +176,10 @@ pub fn handle_filter_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
         }
         KeyCode::Char('a') | KeyCode::Char('A') => {
             if let Some(ref mut m) = app.filter_modal {
-                let matched = m.filtered_indices();
-                let all_matched_selected = !matched.is_empty()
-                    && matched
-                        .iter()
-                        .all(|&i| m.selected_values.contains(&m.values[i]));
-                if all_matched_selected {
-                    for &i in &matched {
-                        m.selected_values.remove(&m.values[i]);
-                    }
+                if m.selected_values.len() == m.values.len() {
+                    m.selected_values.clear();
                 } else {
-                    for &i in &matched {
-                        m.selected_values.insert(m.values[i].clone());
-                    }
+                    m.selected_values = m.values.iter().cloned().collect();
                 }
             }
             None
@@ -451,6 +442,41 @@ mod tests {
         // All 4 rows restored
         assert_eq!(res.rows.len(), 4);
         assert_eq!(res.query_buffer, "SELECT id, status FROM users");
+    }
+
+    #[test]
+    fn test_search_then_a_deselects_entire_list_not_just_visible() {
+        let mut app = sample_app_with_results();
+        open_filter_modal(&mut app);
+
+        // Values: "active", "inactive", "pending" (all 3 selected)
+        assert_eq!(app.filter_modal.as_ref().unwrap().selected_values.len(), 3);
+
+        // Search for "inactive" to limit visible results
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('/')));
+        for c in "inactive".chars() {
+            handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char(c)));
+        }
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Enter));
+
+        let m = app.filter_modal.as_ref().unwrap();
+        assert_eq!(m.filtered_indices().len(), 1); // Only "inactive" is visible
+
+        // Press 'a' to filter out
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('a')));
+
+        // Must deselect all values across the ENTIRE list, not just "inactive"
+        let m = app.filter_modal.as_ref().unwrap();
+        assert!(
+            m.selected_values.is_empty(),
+            "expected entire list to be deselected, but had {:?}",
+            m.selected_values
+        );
+
+        // Press 'a' again to select all values across the entire list
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('a')));
+        let m = app.filter_modal.as_ref().unwrap();
+        assert_eq!(m.selected_values.len(), 3);
     }
 }
 

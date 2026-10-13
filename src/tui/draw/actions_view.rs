@@ -34,7 +34,12 @@ pub fn render_default_results_preview(
     selected_idx: usize,
     preview_is_active: bool,
 ) {
-    if let Screen::Actions(state) = &app.screen {
+    let screen = if let Screen::Help = &app.screen {
+        app.prev_screen.as_deref().unwrap_or(&app.screen)
+    } else {
+        &app.screen
+    };
+    if let Screen::Actions(state) = screen {
         if let Some(ref res_state) = state.results {
             screens::results::render(
                 frame,

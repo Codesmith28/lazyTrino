@@ -157,6 +157,15 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::ScrollDown => {
+            if app.help_modal.is_some() || matches!(app.screen, Screen::Help) {
+                if let Some(ref mut m) = app.help_modal {
+                    m.scroll = m.scroll.saturating_add(1);
+                    app.help_scroll = m.scroll;
+                } else {
+                    app.help_scroll = app.help_scroll.saturating_add(1);
+                }
+                return None;
+            }
             let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
             if is_in_table {
                 let selected_idx = match &app.screen {
@@ -190,6 +199,15 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::ScrollUp => {
+            if app.help_modal.is_some() || matches!(app.screen, Screen::Help) {
+                if let Some(ref mut m) = app.help_modal {
+                    m.scroll = m.scroll.saturating_sub(1);
+                    app.help_scroll = m.scroll;
+                } else {
+                    app.help_scroll = app.help_scroll.saturating_sub(1);
+                }
+                return None;
+            }
             let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
             if is_in_table {
                 let selected_idx = match &app.screen {

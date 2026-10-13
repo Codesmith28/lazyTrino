@@ -31,10 +31,10 @@ pub fn render(
     modal: &ColumnModalState,
     has_value_filter: impl Fn(&str) -> bool,
 ) {
-    let modal_width = (area.width * 60 / 100).clamp(35, 75).min(area.width);
-    let max_height = area.height.saturating_sub(4).max(8);
-    let needed_height = (modal.columns.len() as u16 + 6).min(max_height);
-    let modal_height = needed_height.clamp(9, 22).min(area.height);
+    let modal_width = (area.width * 60 / 100).clamp(40, 80).min(area.width);
+    let max_height = area.height.saturating_sub(4).max(10);
+    let needed_height = (modal.columns.len() as u16 + 8).min(max_height);
+    let modal_height = needed_height.clamp(11, 24).min(area.height);
 
     let popup_area = Rect {
         x: area.x + (area.width.saturating_sub(modal_width)) / 2,
@@ -60,35 +60,57 @@ pub fn render(
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    if inner.height < 2 {
+    if inner.height < 4 {
         return;
     }
 
-    let show_search = modal.is_searching || !modal.search_query.is_empty();
-    let (search_area, list_area, hint_area) = if show_search {
-        let chunks = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-        (Some(chunks[0]), chunks[1], chunks[2])
-    } else {
-        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
-        (None, chunks[0], chunks[1])
-    };
+    let chunks = Layout::vertical([
+        Constraint::Length(3), // Dedicated search box
+        Constraint::Min(0),    // Columns list
+        Constraint::Length(1), // Hint area
+    ])
+    .split(inner);
 
-    if let Some(s_area) = search_area {
-        let prompt_span = Span::styled("/ ", theme::warning_bold_style());
-        let query_span = Span::styled(&modal.search_query, theme::text_style());
-        let cursor_span = if modal.is_searching {
-            Span::styled("█", theme::warning_bold_style())
+    let search_area = chunks[0];
+    let list_area = chunks[1];
+    let hint_area = chunks[2];
+
+    let search_title = if modal.is_searching {
+        " Search [/] [Typing — Enter/Esc to finish] "
+    } else {
+        " Search [/] "
+    };
+    let search_block = Block::default()
+        .title(search_title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::border_style(modal.is_searching));
+    let s_inner = search_block.inner(search_area);
+    frame.render_widget(search_block, search_area);
+
+    let search_line = if modal.search_query.is_empty() {
+        if modal.is_searching {
+            Line::from(vec![
+                Span::styled("/ ", theme::warning_bold_style()),
+                Span::styled("█", theme::warning_bold_style()),
+            ])
         } else {
-            Span::styled(" (press / to edit)", theme::muted_style())
-        };
-        let line = Line::from(vec![prompt_span, query_span, cursor_span]);
-        frame.render_widget(Paragraph::new(line), s_area);
-    }
+            Line::from(vec![
+                Span::styled("/ ", theme::muted_style()),
+                Span::styled("Type / to search columns...", theme::muted_style()),
+            ])
+        }
+    } else {
+        let mut spans = vec![
+            Span::styled("/ ", theme::warning_bold_style()),
+            Span::styled(&modal.search_query, theme::text_style()),
+        ];
+        if modal.is_searching {
+            spans.push(Span::styled("█", theme::warning_bold_style()));
+        }
+        Line::from(spans)
+    };
+    frame.render_widget(Paragraph::new(search_line), s_inner);
 
     let matched_indices = modal.filtered_indices();
     let visible_count = list_area.height as usize;
