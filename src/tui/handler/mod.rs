@@ -21,6 +21,7 @@ use crate::trino::error::TrinoClientError;
 
 mod commands;
 mod export;
+pub mod filter_modal;
 mod mouse;
 mod navigation;
 mod query;
@@ -212,6 +213,7 @@ pub enum AsyncResult {
 pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     preserve_public_api_symbols();
     match app.mode {
+        Mode::FilterModal => return filter_modal::handle_filter_modal_key(app, key),
         Mode::QueryInput => return query::handle_query_input_mode(app, key),
         Mode::Search => return query::handle_search_mode(app, key),
         Mode::Normal => {}

@@ -52,6 +52,7 @@ pub fn populate_table_ddl_results(s: &mut ActionState) {
         total_count: None,
         total_count_loading: false,
         table_count: None,
+        ..Default::default()
     });
 }
 
@@ -278,6 +279,8 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
                             } else if let Some(ref mut res) = s.results {
                                 if !res.rows.is_empty() {
+                                    res.selected_row =
+                                        (res.selected_row + 1).min(res.rows.len().saturating_sub(1));
                                     res.scroll_v =
                                         (res.scroll_v + 1).min(res.rows.len().saturating_sub(1));
                                 }
@@ -291,6 +294,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             } else if is_schema {
                                 app.schema_scroll = app.schema_scroll.saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {
+                                res.selected_row = res.selected_row.saturating_sub(1);
                                 res.scroll_v = res.scroll_v.saturating_sub(1);
                             }
                             None
@@ -298,6 +302,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         KeyCode::Char('l') | KeyCode::Right => None,
                         KeyCode::Char('<') => {
                             if let Some(ref mut res) = s.results {
+                                res.selected_col = res.selected_col.saturating_sub(1);
                                 res.scroll_h = res.scroll_h.saturating_sub(1);
                             }
                             None
@@ -306,6 +311,8 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             if let Some(ref mut res) = s.results
                                 && !res.columns.is_empty()
                             {
+                                res.selected_col =
+                                    (res.selected_col + 1).min(res.columns.len().saturating_sub(1));
                                 res.scroll_h =
                                     (res.scroll_h + 1).min(res.columns.len().saturating_sub(1));
                             }
@@ -327,7 +334,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             } else if is_schema {
                                 app.schema_scroll = 0;
                             } else if let Some(ref mut res) = s.results {
+                                res.selected_row = 0;
                                 res.scroll_v = 0;
+                                res.selected_col = 0;
                                 res.scroll_h = 0;
                             }
                             None
@@ -340,8 +349,15 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 app.schema_scroll =
                                     app.vertical_schema_cols.len().saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {
+                                res.selected_row = res.rows.len().saturating_sub(1);
                                 res.scroll_v = res.rows.len().saturating_sub(1);
                                 return check_trigger_infinite_scroll(app);
+                            }
+                            None
+                        }
+                        KeyCode::Char('F') | KeyCode::Char('f') => {
+                            if s.results.is_some() {
+                                crate::tui::handler::filter_modal::open_filter_modal(app);
                             }
                             None
                         }

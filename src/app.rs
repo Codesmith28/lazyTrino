@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::config::ConnectionConfig;
 use crate::trino::client::TrinoClient;
@@ -264,7 +264,7 @@ pub struct ActionState {
     pub drilldown: Option<DrillDownState>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct ResultsState {
     pub query_buffer: String,
     pub query_cursor: usize,
@@ -272,6 +272,8 @@ pub struct ResultsState {
     pub rows: Vec<Vec<String>>,
     pub scroll_v: usize,
     pub scroll_h: usize,
+    pub selected_row: usize,
+    pub selected_col: usize,
     pub loading: bool,
     pub error: Option<String>,
     pub is_paginated: bool,
@@ -293,6 +295,10 @@ pub struct ResultsState {
     pub total_count: Option<usize>,
     pub total_count_loading: bool,
     pub table_count: Option<usize>,
+    pub base_query: Option<String>,
+    pub unfiltered_rows: Option<Vec<Vec<String>>>,
+    pub column_filters: HashMap<String, HashSet<String>>,
+    pub col_distinct_values: HashMap<String, Vec<String>>,
 }
 
 pub fn format_count(n: usize) -> String {
@@ -361,10 +367,22 @@ pub enum Screen {
     Help,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mode {
     Normal,
     Search,
     QueryInput,
+    FilterModal,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FilterModalState {
+    pub column_index: usize,
+    pub column_name: String,
+    pub values: Vec<String>,
+    pub selected_values: HashSet<String>,
+    pub cursor: usize,
+    pub scroll: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -434,6 +452,7 @@ pub struct App {
     pub mouse_selection_current: Option<(u16, u16)>,
     pub is_selecting_text: bool,
     pub copied_toast: Option<(String, std::time::Instant)>,
+    pub filter_modal: Option<FilterModalState>,
 }
 
 impl App {
@@ -475,6 +494,7 @@ impl App {
             mouse_selection_current: None,
             is_selecting_text: false,
             copied_toast: None,
+            filter_modal: None,
         }
     }
 

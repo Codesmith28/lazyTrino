@@ -15,6 +15,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
+    style::Modifier,
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table},
 };
@@ -174,21 +175,21 @@ pub fn render(
             format!(
                 "{title_prefix}Table View — Infinite Scroll{partition_str} ({} rows loaded{total_str}, col {}/{}) [Fetching page...] ",
                 state.rows.len(),
-                state.scroll_h + 1,
+                state.selected_col + 1,
                 state.columns.len().max(1)
             )
         } else if !state.has_more_rows {
             format!(
                 "{title_prefix}Table View — Infinite Scroll{partition_str} (All {} rows loaded{total_str}, col {}/{}) ",
                 state.rows.len(),
-                state.scroll_h + 1,
+                state.selected_col + 1,
                 state.columns.len().max(1)
             )
         } else {
             format!(
                 "{title_prefix}Table View — Infinite Scroll{partition_str} ({} rows loaded{total_str}, col {}/{}) ",
                 state.rows.len(),
-                state.scroll_h + 1,
+                state.selected_col + 1,
                 state.columns.len().max(1)
             )
         }
@@ -196,7 +197,7 @@ pub fn render(
         format!(
             "{title_prefix}Sample Mode ({} sample rows, col {}/{}) ",
             state.rows.len(),
-            state.scroll_h + 1,
+            state.selected_col + 1,
             state.columns.len().max(1)
         )
     };
@@ -275,11 +276,6 @@ pub fn render(
 
     let available_width = inner.width.saturating_sub(4) as usize;
 
-    let mut cumulative_width = 0;
-    let mut visible_cols: Vec<(usize, &String)> = Vec::new();
-    let mut col_widths: Vec<Constraint> = Vec::new();
-    let mut col_width_sizes: Vec<usize> = Vec::new();
-
     let is_stats = is_stats_table(&state.columns);
     let (stats_total_row_count, stats_total_data_size) = if is_stats {
         compute_stats_aggregates(&state.columns, &state.rows)
@@ -296,7 +292,15 @@ pub fn render(
         .iter()
         .position(|c| c.eq_ignore_ascii_case("row_count"));
 
-    for (col_idx, c) in state.columns.iter().enumerate().skip(state.scroll_h) {
+    let col_count = state.columns.len();
+    let sel_col = state.selected_col.min(col_count.saturating_sub(1));
+
+    let mut effective_scroll_h = state.scroll_h.min(col_count.saturating_sub(1));
+    if sel_col < effective_scroll_h {
+        effective_scroll_h = sel_col;
+    }
+
+    let compute_col_width = |col_idx: usize, col_name: &String| -> u16 {
         let max_data = state
             .rows
             .iter()
@@ -309,9 +313,44 @@ pub fn render(
             })
             .max()
             .unwrap_or(0);
-        let raw_width = (c.len().max(max_data) as u16).max(8);
+        let header_len = if state.column_filters.contains_key(col_name) {
+            col_name.len() + 4
+        } else {
+            col_name.len()
+        };
+        let raw_width = (header_len.max(max_data) as u16).max(8);
         let max_allowed = (available_width / 2).max(15) as u16;
-        let needed_width = raw_width.min(max_allowed);
+        raw_width.min(max_allowed)
+    };
+
+    while effective_scroll_h < sel_col {
+        let mut width = 0;
+        let mut fits = false;
+        for (col_idx, c) in state.columns.iter().enumerate().skip(effective_scroll_h) {
+            let needed = compute_col_width(col_idx, c) as usize + 2;
+            if width + needed <= available_width || width == 0 {
+                width += needed;
+                if col_idx == sel_col {
+                    fits = true;
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        if fits {
+            break;
+        }
+        effective_scroll_h += 1;
+    }
+
+    let mut cumulative_width = 0;
+    let mut visible_cols: Vec<(usize, &String)> = Vec::new();
+    let mut col_widths: Vec<Constraint> = Vec::new();
+    let mut col_width_sizes: Vec<usize> = Vec::new();
+
+    for (col_idx, c) in state.columns.iter().enumerate().skip(effective_scroll_h) {
+        let needed_width = compute_col_width(col_idx, c);
 
         if visible_cols.is_empty()
             || cumulative_width + (needed_width as usize) + 2 <= available_width
@@ -332,18 +371,52 @@ pub fn render(
 
     let header_cells: Vec<Cell> = visible_cols
         .iter()
-        .map(|(_, c)| Cell::from(c.as_str()).style(header_style))
+        .map(|(_, c)| {
+            let is_selected_col = state
+                .columns
+                .iter()
+                .position(|name| name == *c)
+                .is_some_and(|idx| idx == state.selected_col);
+            let has_filter = state.column_filters.contains_key(*c);
+            let display_name = if has_filter {
+                format!("{c} [F]")
+            } else {
+                c.to_string()
+            };
+            let style = if is_selected_col && is_active {
+                theme::warning_bold_style().add_modifier(Modifier::UNDERLINED)
+            } else if is_selected_col {
+                theme::header_style().add_modifier(Modifier::UNDERLINED)
+            } else if has_filter {
+                theme::success_bold_style()
+            } else {
+                header_style
+            };
+            Cell::from(display_name).style(style)
+        })
         .collect();
     let header = Row::new(header_cells).bottom_margin(1);
+
+    let take_rows = (inner.height as usize).saturating_sub(2).max(1);
+    let mut effective_scroll_v = state.scroll_v;
+    if !state.rows.is_empty() {
+        let sel_row = state.selected_row.min(state.rows.len() - 1);
+        if sel_row < effective_scroll_v {
+            effective_scroll_v = sel_row;
+        } else if sel_row >= effective_scroll_v + take_rows {
+            effective_scroll_v = sel_row.saturating_sub(take_rows - 1);
+        }
+    }
 
     let mut current_row_y = inner.y + 2; // header line + bottom margin 1
     let mut visible_rows: Vec<Row> = Vec::new();
 
-    for row in state
+    for (row_idx, row) in state
         .rows
         .iter()
-        .skip(state.scroll_v)
-        .take((inner.height as usize).saturating_sub(2))
+        .enumerate()
+        .skip(effective_scroll_v)
+        .take(take_rows)
     {
         let is_summary = is_stats && is_stats_summary_row(&state.columns, row);
 
@@ -400,8 +473,12 @@ pub fn render(
                 // See actions.rs for why this must be gated by pane focus.
                 let is_mouse_sel =
                     is_active && app.is_area_mouse_selected(inner.x, inner.width, row_y);
+                let is_cell_selected =
+                    row_idx == state.selected_row && *col_idx == state.selected_col;
                 let style = if is_mouse_sel {
                     theme::selection_style()
+                } else if is_cell_selected {
+                    theme::selection_style_for(is_active)
                 } else if is_summary {
                     if *col_idx == 0 {
                         theme::warning_bold_style()
@@ -430,7 +507,7 @@ pub fn render(
 
     if !state.rows.is_empty() {
         let mut v_scroll_state =
-            ScrollbarState::new(state.rows.len().saturating_sub(1)).position(state.scroll_v);
+            ScrollbarState::new(state.rows.len().saturating_sub(1)).position(effective_scroll_v);
         frame.render_stateful_widget(
             Scrollbar::default()
                 .orientation(ScrollbarOrientation::VerticalRight)
@@ -443,7 +520,7 @@ pub fn render(
 
     if state.columns.len() > 1 {
         let mut h_scroll_state =
-            ScrollbarState::new(state.columns.len().saturating_sub(1)).position(state.scroll_h);
+            ScrollbarState::new(state.columns.len().saturating_sub(1)).position(effective_scroll_h);
         frame.render_stateful_widget(
             Scrollbar::default()
                 .orientation(ScrollbarOrientation::HorizontalBottom)
@@ -612,6 +689,7 @@ mod tests {
             total_count: Some(45120),
             total_count_loading: false,
             table_count: Some(1234567),
+            ..Default::default()
         };
 
         let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);

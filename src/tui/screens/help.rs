@@ -61,10 +61,13 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ),
         Line::from("  g / G                          Jump to top / bottom of active preview pane"),
         Line::from(
-            "  < / >                          Scroll active result grid horizontally (left / right)",
+            "  < / >                          Move cell cursor horizontally (left / right) across columns",
         ),
         Line::from(
-            "  y                               Copy loaded result grid as TSV (Y exports it as CSV)",
+            "  F                              Open filter modal for the current column",
+        ),
+        Line::from(
+            "  y                              Copy loaded result grid as TSV (Y exports it as CSV)",
         ),
         Line::from(
             "  h / ← / Esc                    Switch focus to Menu Pane / Go back to Tables list",

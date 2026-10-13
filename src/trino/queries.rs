@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::{HashMap, HashSet};
+
 fn q(id: &str) -> String {
     format!("\"{}\"", id.trim().replace('"', "\"\""))
 }
@@ -240,6 +242,213 @@ pub fn partitions(catalog: &str, schema: &str, table: &str) -> String {
     )
 }
 
+pub fn format_column_filter_predicate(col: &str, selected_values: &HashSet<String>) -> String {
+    let col = col.trim();
+    let col_ref = if col.starts_with('"') || col.contains('(') {
+        col.to_string()
+    } else {
+        q(col)
+    };
+
+    if selected_values.is_empty() {
+        return "1 = 0".to_string();
+    }
+
+    let mut vals: Vec<&String> = selected_values.iter().collect();
+    vals.sort();
+
+    let has_null = vals.iter().any(|v| v.eq_ignore_ascii_case("null") || v.is_empty());
+    let non_nulls: Vec<&&String> = vals
+        .iter()
+        .filter(|v| !v.eq_ignore_ascii_case("null") && !v.is_empty())
+        .collect();
+
+    let non_null_predicate = if non_nulls.is_empty() {
+        None
+    } else if non_nulls.len() == 1 {
+        let v = non_nulls[0];
+        if v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false") {
+            Some(format!("{col_ref} = {}", v.to_lowercase()))
+        } else if is_numeric_literal(v) {
+            Some(format!("{col_ref} = {v}"))
+        } else {
+            Some(format!("{col_ref} = '{}'", v.replace('\'', "''")))
+        }
+    } else {
+        let all_numeric = non_nulls.iter().all(|v| is_numeric_literal(v));
+        if all_numeric {
+            let joined = non_nulls.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(", ");
+            Some(format!("{col_ref} IN ({joined})"))
+        } else {
+            let joined = non_nulls
+                .iter()
+                .map(|v| format!("'{}'", v.replace('\'', "''")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!("{col_ref} IN ({joined})"))
+        }
+    };
+
+    match (non_null_predicate, has_null) {
+        (Some(pred), false) => pred,
+        (Some(pred), true) => format!("({pred} OR {col_ref} IS NULL)"),
+        (None, true) => format!("{col_ref} IS NULL"),
+        (None, false) => "1 = 0".to_string(),
+    }
+}
+
+pub fn split_sql_clauses(sql: &str) -> (&str, Option<&str>, &str) {
+    let bytes = sql.as_bytes();
+    let len = bytes.len();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut paren_depth: usize = 0;
+
+    let mut where_pos: Option<usize> = None;
+    let mut trailing_pos: Option<usize> = None;
+
+    let trailing_keywords = ["GROUP BY", "HAVING", "ORDER BY", "OFFSET", "LIMIT"];
+
+    let mut i = 0;
+    while i < len {
+        let b = bytes[i];
+        if b == b'\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            i += 1;
+            continue;
+        }
+        if b == b'"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            i += 1;
+            continue;
+        }
+        if in_single_quote || in_double_quote {
+            i += 1;
+            continue;
+        }
+        if b == b'(' {
+            paren_depth += 1;
+            i += 1;
+            continue;
+        }
+        if b == b')' {
+            paren_depth = paren_depth.saturating_sub(1);
+            i += 1;
+            continue;
+        }
+
+        if paren_depth == 0 {
+            let at_word_start =
+                i == 0 || bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b')';
+            if at_word_start {
+                let rest = &sql[i..];
+                if where_pos.is_none()
+                    && rest.len() >= 5
+                    && rest[..5].eq_ignore_ascii_case("WHERE")
+                {
+                    let after = &rest[5..];
+                    if after.is_empty()
+                        || after.as_bytes()[0].is_ascii_whitespace()
+                        || after.as_bytes()[0] == b'('
+                    {
+                        where_pos = Some(i);
+                        i += 5;
+                        continue;
+                    }
+                }
+
+                let mut found_trailing = false;
+                for kw in &trailing_keywords {
+                    if rest.len() >= kw.len() && rest[..kw.len()].eq_ignore_ascii_case(kw) {
+                        let after = &rest[kw.len()..];
+                        if after.is_empty()
+                            || after.as_bytes()[0].is_ascii_whitespace()
+                            || after.as_bytes()[0] == b'('
+                        {
+                            trailing_pos = Some(i);
+                            found_trailing = true;
+                            break;
+                        }
+                    }
+                }
+                if found_trailing {
+                    break;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    match (where_pos, trailing_pos) {
+        (Some(w_start), Some(t_start)) => {
+            let head = sql[..w_start].trim();
+            let where_clause = sql[w_start + 5..t_start].trim();
+            let tail = sql[t_start..].trim();
+            (head, Some(where_clause), tail)
+        }
+        (Some(w_start), None) => {
+            let head = sql[..w_start].trim();
+            let where_clause = sql[w_start + 5..].trim();
+            (head, Some(where_clause), "")
+        }
+        (None, Some(t_start)) => {
+            let head = sql[..t_start].trim();
+            let tail = sql[t_start..].trim();
+            (head, None, tail)
+        }
+        (None, None) => (sql.trim(), None, ""),
+    }
+}
+
+pub fn build_query_with_column_filters(
+    base_query: &str,
+    column_filters: &HashMap<String, HashSet<String>>,
+    col_distinct_values: &HashMap<String, Vec<String>>,
+) -> String {
+    let mut predicates = Vec::new();
+    let mut cols: Vec<&String> = column_filters.keys().collect();
+    cols.sort();
+
+    for col in cols {
+        let selected = &column_filters[col];
+        if let Some(distinct) = col_distinct_values.get(col)
+            && selected.len() == distinct.len()
+        {
+            continue;
+        }
+        predicates.push(format_column_filter_predicate(col, selected));
+    }
+
+    let (head, existing_where, tail) = split_sql_clauses(base_query);
+
+    let where_clause = match (existing_where, predicates.is_empty()) {
+        (Some(orig), false) if !orig.trim().is_empty() => {
+            let preds = predicates.join(" AND ");
+            format!("WHERE ({}) AND ({})", orig.trim(), preds)
+        }
+        (Some(orig), true) if !orig.trim().is_empty() => {
+            format!("WHERE {}", orig.trim())
+        }
+        (_, false) => {
+            let preds = predicates.join(" AND ");
+            format!("WHERE {preds}")
+        }
+        (_, true) => String::new(),
+    };
+
+    let mut parts = Vec::new();
+    if !head.is_empty() {
+        parts.push(head);
+    }
+    if !where_clause.is_empty() {
+        parts.push(&where_clause);
+    }
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+    parts.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,5 +621,70 @@ mod tests {
         assert!(is_partition_column(&partitioned_by, "account_id"));
         assert!(!is_partition_column(&partitioned_by, "orderkey"));
         assert!(!is_partition_column(&partitioned_by, "extendedprice"));
+    }
+
+    #[test]
+    fn test_format_column_filter_predicate() {
+        let mut set = HashSet::new();
+        set.insert("ACTIVE".to_string());
+        assert_eq!(format_column_filter_predicate("status", &set), "\"status\" = 'ACTIVE'");
+
+        set.insert("PENDING".to_string());
+        assert_eq!(format_column_filter_predicate("status", &set), "\"status\" IN ('ACTIVE', 'PENDING')");
+
+        let mut num_set = HashSet::new();
+        num_set.insert("10".to_string());
+        num_set.insert("20".to_string());
+        assert_eq!(format_column_filter_predicate("amount", &num_set), "\"amount\" IN (10, 20)");
+
+        let mut null_set = HashSet::new();
+        null_set.insert("null".to_string());
+        assert_eq!(format_column_filter_predicate("status", &null_set), "\"status\" IS NULL");
+
+        null_set.insert("ACTIVE".to_string());
+        assert_eq!(
+            format_column_filter_predicate("status", &null_set),
+            "(\"status\" = 'ACTIVE' OR \"status\" IS NULL)"
+        );
+
+        let empty_set: HashSet<String> = HashSet::new();
+        assert_eq!(format_column_filter_predicate("status", &empty_set), "1 = 0");
+    }
+
+    #[test]
+    fn test_build_query_with_column_filters() {
+        let base_query = "SELECT * FROM \"iceberg\".\"sales\".\"orders\" OFFSET 0 LIMIT 100";
+        let mut filters = HashMap::new();
+        let mut distinct = HashMap::new();
+
+        let mut sel = HashSet::new();
+        sel.insert("ACTIVE".to_string());
+        filters.insert("status".to_string(), sel);
+        distinct.insert("status".to_string(), vec!["ACTIVE".to_string(), "PENDING".to_string()]);
+
+        let sql = build_query_with_column_filters(base_query, &filters, &distinct);
+        assert_eq!(
+            sql,
+            "SELECT * FROM \"iceberg\".\"sales\".\"orders\" WHERE \"status\" = 'ACTIVE' OFFSET 0 LIMIT 100"
+        );
+
+        // When all values selected, no WHERE added
+        let mut all_sel = HashSet::new();
+        all_sel.insert("ACTIVE".to_string());
+        all_sel.insert("PENDING".to_string());
+        filters.insert("status".to_string(), all_sel);
+        let sql_all = build_query_with_column_filters(base_query, &filters, &distinct);
+        assert_eq!(sql_all, base_query);
+
+        // Query with existing WHERE
+        let base_with_where = "SELECT * FROM tbl WHERE date = '2026-08-06' OFFSET 0 LIMIT 100";
+        let mut sel2 = HashSet::new();
+        sel2.insert("ACTIVE".to_string());
+        filters.insert("status".to_string(), sel2);
+        let sql_where = build_query_with_column_filters(base_with_where, &filters, &distinct);
+        assert_eq!(
+            sql_where,
+            "SELECT * FROM tbl WHERE (date = '2026-08-06') AND (\"status\" = 'ACTIVE') OFFSET 0 LIMIT 100"
+        );
     }
 }

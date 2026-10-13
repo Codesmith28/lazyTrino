@@ -494,6 +494,7 @@ mod tests {
             total_count: None,
             total_count_loading: false,
             table_count: None,
+            ..Default::default()
         };
 
         app.clear_mouse_selection();

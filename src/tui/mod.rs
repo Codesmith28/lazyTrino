@@ -32,6 +32,7 @@ mod screens {
     pub mod catalog;
     pub mod connect;
     pub mod drilldown;
+    pub mod filter_modal;
     pub mod help;
     pub mod partition_tree;
     pub mod query_inspector;

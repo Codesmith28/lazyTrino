@@ -385,6 +385,9 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
     }
 
     render_copied_toast(frame, frame.area(), app);
+    if let Some(ref modal) = app.filter_modal {
+        screens::filter_modal::render(frame, frame.area(), modal);
+    }
 }
 
 #[cfg(test)]

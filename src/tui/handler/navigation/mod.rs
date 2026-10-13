@@ -599,6 +599,7 @@ pub mod tests {
             total_count: None,
             total_count_loading: false,
             table_count: None,
+            ..Default::default()
         }
     }
 
@@ -844,6 +845,7 @@ pub mod tests {
                 total_count: None,
                 total_count_loading: false,
                 table_count: None,
+                ..Default::default()
             }),
             ..Default::default()
         }));
@@ -874,4 +876,77 @@ pub mod tests {
             "stale DDL results must be cleared on transition to Table View"
         );
     }
+
+    #[test]
+    fn actions_keys_cell_navigation_and_filter_modal_trigger() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(ResultsState {
+                query_buffer: "SELECT id, status, amount FROM orders".to_string(),
+                query_cursor: 37,
+                columns: vec!["id".to_string(), "status".to_string(), "amount".to_string()],
+                rows: vec![
+                    vec!["1".to_string(), "active".to_string(), "100".to_string()],
+                    vec!["2".to_string(), "pending".to_string(), "200".to_string()],
+                    vec!["3".to_string(), "inactive".to_string(), "300".to_string()],
+                ],
+                scroll_v: 0,
+                scroll_h: 0,
+                selected_row: 0,
+                selected_col: 0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // Move cursor down (row 0 -> 1)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 1);
+
+        // Move cursor right (>: col 0 -> 1)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 1);
+
+        // Move cursor right again (>: col 1 -> 2)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 2);
+
+        // Move cursor left (<: col 2 -> 1)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('<')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 1);
+
+        // Move cursor up (k: row 1 -> 0)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('k')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 0);
+
+        // Press 'F' while selected_col is 1 ("status")
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('F')));
+        assert!(matches!(app.mode, Mode::FilterModal));
+        let modal = app
+            .filter_modal
+            .as_ref()
+            .expect("filter modal should be opened");
+        assert_eq!(modal.column_index, 1);
+        assert_eq!(modal.column_name, "status");
+    }
 }
+

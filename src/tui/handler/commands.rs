@@ -254,6 +254,7 @@ pub fn dispatch_command(
                 total_count: cached_total,
                 total_count_loading: is_paginated && cached_total.is_none(),
                 table_count: cached_table_count,
+                ..Default::default()
             };
 
             if let Screen::Actions(ref mut a) = app.screen {
@@ -667,6 +668,25 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         .map(|r| r.total_count_loading)
                         .unwrap_or(is_paginated && cached_total.is_none());
 
+                    let prev_col = existing_results.map(|r| r.selected_col).unwrap_or(0);
+                    let sel_col = prev_col.min(cols.len().saturating_sub(1));
+                    let base_q = existing_results.and_then(|r| r.base_query.clone());
+                    let col_filts = existing_results
+                        .map(|r| r.column_filters.clone())
+                        .unwrap_or_default();
+                    let distinct_vals = existing_results
+                        .map(|r| r.col_distinct_values.clone())
+                        .unwrap_or_default();
+                    let unfilt = existing_results
+                        .and_then(|r| r.unfiltered_rows.clone())
+                        .or_else(|| {
+                            if col_filts.is_empty() {
+                                Some(rows.clone())
+                            } else {
+                                None
+                            }
+                        });
+
                     let res_state = ResultsState {
                         query_buffer,
                         query_cursor,
@@ -674,6 +694,8 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         rows,
                         scroll_v: 0,
                         scroll_h: 0,
+                        selected_row: 0,
+                        selected_col: sel_col,
                         loading: false,
                         error: None,
                         is_paginated,
@@ -690,6 +712,10 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         total_count: cached_total,
                         total_count_loading: total_loading,
                         table_count: cached_table,
+                        base_query: base_q,
+                        unfiltered_rows: unfilt,
+                        column_filters: col_filts,
+                        col_distinct_values: distinct_vals,
                     };
 
                     let cur_selected = if let Screen::Actions(ref a) = app.screen {
@@ -744,6 +770,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         total_count: None,
                         total_count_loading: false,
                         table_count: None,
+                        ..Default::default()
                     };
 
                     let cur_selected = if let Screen::Actions(ref a) = app.screen {
@@ -1091,6 +1118,7 @@ mod tests {
                 total_count: None,
                 total_count_loading: true,
                 table_count: None,
+                ..Default::default()
             }),
             ..Default::default()
         });
