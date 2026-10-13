@@ -520,6 +520,112 @@ pub fn build_query_with_column_filters(
     )
 }
 
+/// Incrementally updates the `LIMIT` clause in a SQL query to `new_limit`.
+///
+/// Accurately parses top-level SQL, ignoring `LIMIT` inside single-quoted strings,
+/// double-quoted identifiers, parentheses (subqueries), and line comments.
+/// If a top-level `LIMIT <n>` clause is present, it replaces `<n>` with `new_limit`
+/// (preserving case, surrounding spacing, and trailing punctuation like `;`).
+/// If no `LIMIT` clause is present, it appends `LIMIT {new_limit}`.
+pub fn update_query_limit(sql: &str, new_limit: usize) -> String {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let bytes = sql.as_bytes();
+    let len = bytes.len();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut paren_depth: usize = 0;
+
+    let mut last_limit_num_range: Option<(usize, usize)> = None;
+
+    let mut i = 0;
+    while i < len {
+        let b = bytes[i];
+
+        // Line comment: -- until end of line
+        if !in_single_quote && !in_double_quote && b == b'-' && i + 1 < len && bytes[i + 1] == b'-' {
+            i += 2;
+            while i < len && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+
+        if b == b'\'' && !in_double_quote {
+            if in_single_quote && i + 1 < len && bytes[i + 1] == b'\'' {
+                i += 2;
+                continue;
+            }
+            in_single_quote = !in_single_quote;
+            i += 1;
+            continue;
+        }
+        if b == b'"' && !in_single_quote {
+            if in_double_quote && i + 1 < len && bytes[i + 1] == b'"' {
+                i += 2;
+                continue;
+            }
+            in_double_quote = !in_double_quote;
+            i += 1;
+            continue;
+        }
+        if in_single_quote || in_double_quote {
+            i += 1;
+            continue;
+        }
+
+        if b == b'(' {
+            paren_depth += 1;
+            i += 1;
+            continue;
+        }
+        if b == b')' {
+            paren_depth = paren_depth.saturating_sub(1);
+            i += 1;
+            continue;
+        }
+
+        if paren_depth == 0 {
+            let at_word_start =
+                i == 0 || bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b')';
+            if at_word_start && i + 5 <= len && sql[i..i + 5].eq_ignore_ascii_case("LIMIT") {
+                let after_kw = i + 5;
+                if after_kw == len || bytes[after_kw].is_ascii_whitespace() {
+                    let mut j = after_kw;
+                    while j < len && bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    let num_start = j;
+                    while j < len && bytes[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    let num_end = j;
+                    if num_end > num_start {
+                        last_limit_num_range = Some((num_start, num_end));
+                        i = num_end;
+                        continue;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    if let Some((num_start, num_end)) = last_limit_num_range {
+        format!("{}{new_limit}{}", &sql[..num_start], &sql[num_end..])
+    } else {
+        let trimmed_end = sql.trim_end();
+        if let Some(stripped) = trimmed_end.strip_suffix(';') {
+            format!("{} LIMIT {new_limit};", stripped.trim_end())
+        } else {
+            format!("{trimmed_end} LIMIT {new_limit}")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -792,4 +898,58 @@ mod tests {
             "SELECT \"id\", \"status\" FROM orders WHERE \"status\" = 'ACTIVE' OFFSET 0 LIMIT 100"
         );
     }
+
+    #[test]
+    fn test_update_query_limit_replaces_top_level_limit() {
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders OFFSET 0 LIMIT 100", 200),
+            "SELECT * FROM orders OFFSET 0 LIMIT 200"
+        );
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders LIMIT 100", 250),
+            "SELECT * FROM orders LIMIT 250"
+        );
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders limit 100", 300),
+            "SELECT * FROM orders limit 300"
+        );
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders LIMIT 100;", 200),
+            "SELECT * FROM orders LIMIT 200;"
+        );
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders LIMIT   100", 200),
+            "SELECT * FROM orders LIMIT   200"
+        );
+    }
+
+    #[test]
+    fn test_update_query_limit_ignores_quoted_and_subquery_limit() {
+        // Ignores 'LIMIT 50' in string literal
+        let query_with_str = "SELECT * FROM t WHERE comment = 'LIMIT 50' LIMIT 100";
+        assert_eq!(
+            update_query_limit(query_with_str, 200),
+            "SELECT * FROM t WHERE comment = 'LIMIT 50' LIMIT 200"
+        );
+
+        // Ignores inner subquery LIMIT
+        let query_with_sub = "SELECT * FROM (SELECT id FROM t LIMIT 10) AS s LIMIT 100";
+        assert_eq!(
+            update_query_limit(query_with_sub, 200),
+            "SELECT * FROM (SELECT id FROM t LIMIT 10) AS s LIMIT 200"
+        );
+    }
+
+    #[test]
+    fn test_update_query_limit_appends_when_absent() {
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders", 200),
+            "SELECT * FROM orders LIMIT 200"
+        );
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders;", 200),
+            "SELECT * FROM orders LIMIT 200;"
+        );
+    }
 }
+

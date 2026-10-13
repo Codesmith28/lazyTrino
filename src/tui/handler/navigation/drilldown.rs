@@ -55,6 +55,18 @@ pub fn drilldown_drill_into_selected(
         dd.loading = true;
         let next_col = dd.next_column()?.to_string();
         let filters = dd.path.clone();
+        let query = queries::distinct_partition_values(
+            &catalog,
+            &schema,
+            &table,
+            &filters,
+            &next_col,
+            crate::tui::handler::commands::DRILLDOWN_LEVEL_LIMIT,
+        );
+        let query_len = query.len();
+        s.query_buffer = query;
+        s.query_cursor = query_len;
+        s.results = None;
         Some(Command::FetchPartitionLevel {
             catalog,
             schema,
@@ -80,6 +92,18 @@ pub fn drilldown_go_up(s: &mut ActionState) -> Option<Command> {
         dd.error = None;
         dd.truncated = false;
         s.results = None;
+        if let Some(col) = dd.partition_cols.get(dd.depth()) {
+            let query = queries::distinct_partition_values(
+                &s.catalog,
+                &s.schema,
+                &s.table,
+                &dd.path,
+                col,
+                crate::tui::handler::commands::DRILLDOWN_LEVEL_LIMIT,
+            );
+            s.query_cursor = query.len();
+            s.query_buffer = query;
+        }
     }
     None
 }

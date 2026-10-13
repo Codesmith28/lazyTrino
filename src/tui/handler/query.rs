@@ -249,7 +249,11 @@ pub(super) fn active_query_state_mut(app: &mut App) -> Option<&mut ResultsState>
 pub(super) fn active_query_buffer(app: &App) -> Option<String> {
     match &app.screen {
         Screen::Actions(action_state) => {
-            if let Some(ref res) = action_state.results {
+            let is_partitions_or_schema = matches!(
+                crate::app::ACTIONS.get(action_state.selected).map(|(_, _, a)| a),
+                Some(crate::app::Action::Partitions | crate::app::Action::Schema)
+            );
+            if !is_partitions_or_schema && let Some(ref res) = action_state.results {
                 Some(res.query_buffer.clone())
             } else {
                 Some(action_state.query_buffer.clone())

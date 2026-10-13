@@ -677,16 +677,32 @@ impl App {
     }
 
     pub fn is_area_mouse_selected(&self, area_x: u16, area_w: u16, row_y: u16) -> bool {
+        self.is_area_mouse_selected_rect(area_x, area_w, row_y, 1)
+    }
+
+    pub fn is_area_mouse_selected_rect(
+        &self,
+        area_x: u16,
+        area_w: u16,
+        area_y: u16,
+        area_h: u16,
+    ) -> bool {
+        if !self.is_selecting_text {
+            return false;
+        }
         if let (Some((a_x, a_y)), Some((c_x, c_y))) =
             (self.mouse_selection_anchor, self.mouse_selection_current)
         {
+            if a_x == c_x && a_y == c_y {
+                return false;
+            }
             let start_y = a_y.min(c_y);
             let end_y = a_y.max(c_y);
             let start_x = a_x.min(c_x);
             let end_x = a_x.max(c_x);
 
-            let y_match = row_y >= start_y && row_y <= end_y;
-            let x_match = area_x < end_x && area_x.saturating_add(area_w) > start_x;
+            let y_match = area_y <= end_y && area_y.saturating_add(area_h) > start_y;
+            let x_match = area_x <= end_x && area_x.saturating_add(area_w) > start_x;
             y_match && x_match
         } else {
             false

@@ -215,9 +215,10 @@ pub fn get_selected(screen: &Screen) -> Option<usize> {
 pub mod tests {
     use super::drilldown::*;
     use super::*;
-    use crate::app::{ActionState, DrillDownState, Mode, ResultsState, TableRecon};
+    use crate::app::{ACTIONS, ActionState, DrillDownState, Mode, ResultsState, TableRecon};
     use crate::config::ConnectionConfig;
     use crate::trino::client::TrinoClient;
+    use crate::trino::queries;
     use crate::tui::handler::Command;
 
     fn sample_config() -> ConnectionConfig {
@@ -414,7 +415,7 @@ pub mod tests {
             ..drilldown_action_state(vec!["date"])
         }));
 
-        for idx in [7, 8] {
+        for idx in [5, 6] {
             let cmd = trigger_action(&mut app, idx);
             assert!(
                 cmd.is_none(),
@@ -457,6 +458,9 @@ pub mod tests {
             results.rows,
             vec![vec!["CREATE TABLE events (...)".to_string()]]
         );
+        let expected_ddl_query = "SHOW CREATE TABLE \"datalake\".\"tenant\".\"events\"";
+        assert_eq!(state.query_buffer, expected_ddl_query);
+        assert_eq!(results.query_buffer, expected_ddl_query);
     }
 
     #[test]
@@ -545,6 +549,15 @@ pub mod tests {
         );
         assert!(dd.loading);
         assert_eq!(dd.selected, 0);
+        let expected_level_query = queries::distinct_partition_values(
+            "datalake",
+            "tenant",
+            "events",
+            &[("date".to_string(), "2026-08-06".to_string())],
+            "service",
+            200,
+        );
+        assert_eq!(s.query_buffer, expected_level_query);
     }
 
     #[test]
@@ -578,6 +591,7 @@ pub mod tests {
         );
         assert!(query.contains("WHERE date = '2026-08-06'"));
         assert!(s.results.is_none());
+        assert_eq!(s.query_buffer, query);
     }
 
     #[test]
@@ -601,6 +615,15 @@ pub mod tests {
         assert!(dd.path.is_empty());
         assert_eq!(dd.selected, 0);
         assert!(s.results.is_none());
+        let expected_parent_query = queries::distinct_partition_values(
+            "datalake",
+            "tenant",
+            "events",
+            &[],
+            "date",
+            200,
+        );
+        assert_eq!(s.query_buffer, expected_parent_query);
     }
 
     #[test]
@@ -673,6 +696,85 @@ pub mod tests {
         assert!(
             state.results.is_none(),
             "moving menu selection should reset results pane"
+        );
+        assert_eq!(
+            state.query_buffer,
+            "SHOW CREATE TABLE \"iceberg\".\"sales\".\"orders\""
+        );
+    }
+
+    #[test]
+    fn actions_keys_menu_navigation_syncs_query_buffer_for_each_action() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MenuPane);
+
+        for (expected_idx, (_, _, action)) in ACTIONS.iter().enumerate().skip(1) {
+            actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+            let Screen::Actions(state) = &app.screen else {
+                panic!("expected actions screen");
+            };
+            assert_eq!(state.selected, expected_idx);
+            let expected_query = action.build_query("iceberg", "sales", "orders");
+            assert_eq!(state.query_buffer, expected_query);
+        }
+
+        for (expected_idx, (_, _, action)) in ACTIONS.iter().enumerate().take(ACTIONS.len() - 1).rev() {
+            actions_keys(&mut app, KeyEvent::from(KeyCode::Char('k')));
+            let Screen::Actions(state) = &app.screen else {
+                panic!("expected actions screen");
+            };
+            assert_eq!(state.selected, expected_idx);
+            let expected_query = action.build_query("iceberg", "sales", "orders");
+            assert_eq!(state.query_buffer, expected_query);
+        }
+    }
+
+    #[test]
+    fn trigger_action_partitions_and_schema_sync_query_buffer_and_clear_results() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(sample_leaf_results_state()),
+            ..Default::default()
+        }));
+
+        // Trigger Partitions (index 5)
+        let cmd = trigger_action(&mut app, 5);
+        assert!(cmd.is_none());
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.selected, 5);
+        assert!(state.results.is_none());
+        assert_eq!(
+            state.query_buffer,
+            "SHOW CREATE TABLE \"iceberg\".\"sales\".\"orders\""
+        );
+
+        // Put stale results back
+        if let Screen::Actions(ref mut state) = app.screen {
+            state.results = Some(sample_leaf_results_state());
+        }
+
+        // Trigger Schema (index 6)
+        let cmd = trigger_action(&mut app, 6);
+        assert!(cmd.is_none());
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.selected, 6);
+        assert!(state.results.is_none());
+        assert_eq!(
+            state.query_buffer,
+            "DESCRIBE \"iceberg\".\"sales\".\"orders\""
         );
     }
 

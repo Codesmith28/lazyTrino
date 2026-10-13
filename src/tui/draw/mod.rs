@@ -158,11 +158,17 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
 
                 let query_height = if query_active {
                     let total_chars = 7 + match effective_screen {
-                        Screen::Actions(a) => a
-                            .results
-                            .as_ref()
-                            .map(|r| r.query_buffer.len())
-                            .unwrap_or_else(|| a.query_buffer.len()),
+                        Screen::Actions(a) => {
+                            let is_partitions_or_schema = matches!(
+                                crate::app::ACTIONS.get(a.selected).map(|(_, _, act)| act),
+                                Some(crate::app::Action::Partitions | crate::app::Action::Schema)
+                            );
+                            if !is_partitions_or_schema && let Some(ref r) = a.results {
+                                r.query_buffer.len()
+                            } else {
+                                a.query_buffer.len()
+                            }
+                        }
                         _ => 0,
                     };
                     let lines = total_chars.div_ceil(inner_w);
@@ -205,7 +211,7 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
 
                     match action {
                         crate::app::Action::Partitions => {
-                            if app.loading && selected_idx == 6 {
+                            if app.loading {
                                 let title = format!(" Preview — {table_name} (Partitions) ");
                                 let block = Block::default()
                                     .title(title)
@@ -248,7 +254,7 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
                             }
                         }
                         crate::app::Action::Schema => {
-                            if app.loading && selected_idx == 7 {
+                            if app.loading {
                                 let title = format!(" Preview — {table_name} (Schema) ");
                                 let block = Block::default()
                                     .title(title)
@@ -326,7 +332,7 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
                                 }
                                 _ => None,
                             };
-                            if app.loading && selected_idx == 1 {
+                            if app.loading {
                                 let title = format!(" Preview — {table_name} (Table DDL) ");
                                 let block = Block::default()
                                     .title(title)

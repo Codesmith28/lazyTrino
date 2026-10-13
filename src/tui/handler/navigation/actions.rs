@@ -29,9 +29,13 @@ pub fn populate_table_ddl_results(s: &mut ActionState) {
         return;
     };
     let ddl_text = meta.ddl_text.clone();
+    let ddl_query = Action::TableDDL.build_query(&s.catalog, &s.schema, &s.table);
+    let ddl_query_len = ddl_query.len();
+    s.query_buffer = ddl_query.clone();
+    s.query_cursor = ddl_query_len;
     s.results = Some(ResultsState {
-        query_buffer: String::new(),
-        query_cursor: 0,
+        query_buffer: ddl_query,
+        query_cursor: ddl_query_len,
         columns: vec!["Create Table".to_string()],
         rows: vec![vec![ddl_text]],
         scroll_v: std::cell::Cell::new(0),
@@ -65,6 +69,11 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
 
         if s.metadata_loading && matches!(action, Action::Partitions | Action::Schema) {
             s.selected = action_idx;
+            s.results = None;
+            s.drilldown = None;
+            let query = action.build_query(&s.catalog, &s.schema, &s.table);
+            s.query_cursor = query.len();
+            s.query_buffer = query;
             if app.active_panel != ActivePanel::MainViewer {
                 app.mouse_selection_anchor = None;
                 app.mouse_selection_current = None;
@@ -74,6 +83,11 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
         }
         if s.ddl_loading && matches!(action, Action::TableView | Action::TableDDL) {
             s.selected = action_idx;
+            s.results = None;
+            s.drilldown = None;
+            let query = action.build_query(&s.catalog, &s.schema, &s.table);
+            s.query_cursor = query.len();
+            s.query_buffer = query;
             if app.active_panel != ActivePanel::MainViewer {
                 app.mouse_selection_anchor = None;
                 app.mouse_selection_current = None;
@@ -90,7 +104,14 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
         }
         app.active_panel = ActivePanel::MainViewer;
         match action {
-            Action::Partitions | Action::Schema => None,
+            Action::Partitions | Action::Schema => {
+                s.results = None;
+                s.drilldown = None;
+                let query = action.build_query(&s.catalog, &s.schema, &s.table);
+                s.query_cursor = query.len();
+                s.query_buffer = query;
+                None
+            }
             Action::TableView => {
                 let is_same_table_view = prev_selected == action_idx
                     && (s.drilldown.is_some()
@@ -107,6 +128,9 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                     .unwrap_or_default();
                 if partition_cols.is_empty() {
                     let query = action.build_query(&s.catalog, &s.schema, &s.table);
+                    let query_len = query.len();
+                    s.query_buffer = query.clone();
+                    s.query_cursor = query_len;
                     Some(Command::ExecuteQuery {
                         query,
                         is_paginated: true,
@@ -117,6 +141,17 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                     })
                 } else {
                     let first_col = partition_cols[0].clone();
+                    let query = crate::trino::queries::distinct_partition_values(
+                        &s.catalog,
+                        &s.schema,
+                        &s.table,
+                        &[],
+                        &first_col,
+                        crate::tui::handler::commands::DRILLDOWN_LEVEL_LIMIT,
+                    );
+                    let query_len = query.len();
+                    s.query_buffer = query;
+                    s.query_cursor = query_len;
                     s.drilldown = Some(DrillDownState {
                         partition_cols,
                         path: Vec::new(),
@@ -148,6 +183,9 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                 let query = action.build_query(&s.catalog, &s.schema, &s.table);
                 s.results = None;
                 s.drilldown = None;
+                let query_len = query.len();
+                s.query_buffer = query.clone();
+                s.query_cursor = query_len;
                 Some(Command::ExecuteQuery {
                     query,
                     is_paginated: false,
@@ -180,6 +218,10 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                     s.selected = (s.selected + 1) % ACTIONS.len();
                     s.results = None;
                     s.drilldown = None;
+                    let action = &ACTIONS[s.selected].2;
+                    let query = action.build_query(&s.catalog, &s.schema, &s.table);
+                    s.query_cursor = query.len();
+                    s.query_buffer = query;
                     None
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
@@ -190,6 +232,10 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                     };
                     s.results = None;
                     s.drilldown = None;
+                    let action = &ACTIONS[s.selected].2;
+                    let query = action.build_query(&s.catalog, &s.schema, &s.table);
+                    s.query_cursor = query.len();
+                    s.query_buffer = query;
                     None
                 }
                 KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {

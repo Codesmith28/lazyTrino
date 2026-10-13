@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 
 use crate::app::*;
 
@@ -35,8 +36,19 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
     }
 
     let bottom_y = term_height.saturating_sub(7);
-    let border_x = ((term_width as u32 * app.main_panel_pct as u32) / 100) as u16;
     let is_in_table = matches!(app.screen, Screen::Actions(_));
+    let border_pct = if is_in_table {
+        if app.main_panel_pct > 30 {
+            15
+        } else {
+            app.main_panel_pct.clamp(8, 30)
+        }
+    } else if app.main_panel_pct <= 30 {
+        60
+    } else {
+        app.main_panel_pct
+    };
+    let border_x = ((term_width as u32 * border_pct as u32) / 100) as u16;
 
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
@@ -58,7 +70,13 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                         inner_w,
                         &buf,
                     );
-                    app.mode = Mode::QueryInput;
+                    let is_table_view = match &app.screen {
+                        Screen::Actions(a) => a.selected == 0,
+                        _ => false,
+                    };
+                    if is_table_view {
+                        app.mode = Mode::QueryInput;
+                    }
                     app.set_active_panel(ActivePanel::MainViewer);
                     app.is_dragging_query_select = true;
                     app.is_selecting_text = false;
@@ -75,7 +93,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
 
             app.mouse_selection_anchor = Some((mouse.column, mouse.row));
             app.mouse_selection_current = Some((mouse.column, mouse.row));
-            app.is_selecting_text = true;
+            app.is_selecting_text = false;
 
             if mouse.row < bottom_y && (mouse.column as i32 - border_x as i32).abs() <= 1 {
                 app.is_dragging_resizer = true;
@@ -97,6 +115,22 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 } else if mouse.column >= border_x && mouse.row < bottom_y {
                     app.mode = Mode::Normal;
                     app.set_active_panel(ActivePanel::MainViewer);
+
+                    if let Some(inner) = results_table_inner_rect(app, term_width, term_height)
+                        && let Screen::Actions(ref mut a) = app.screen
+                        && let Some(ref mut res) = a.results
+                        && let Some((row_idx, col_idx)) =
+                            crate::tui::screens::results::hit_test_cell(
+                                res,
+                                inner,
+                                mouse.column,
+                                mouse.row,
+                            )
+                    {
+                        res.selected_row = row_idx;
+                        res.selected_col = col_idx;
+                        app.clear_mouse_selection();
+                    }
                 }
             }
         }
@@ -123,7 +157,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 }
                 return None;
             }
-            if app.is_selecting_text {
+            if let Some((a_x, a_y)) = app.mouse_selection_anchor
+                && (mouse.column != a_x || mouse.row != a_y)
+            {
+                app.is_selecting_text = true;
                 app.mouse_selection_current = Some((mouse.column, mouse.row));
             }
             if app.is_dragging_resizer {
@@ -146,6 +183,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 app.is_selecting_text = false;
                 if let (Some(anchor), Some(current)) =
                     (app.mouse_selection_anchor, app.mouse_selection_current)
+                    && anchor != current
                 {
                     let text = extract_selected_text(app, anchor, current);
                     if !text.is_empty() {
@@ -172,10 +210,11 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     Screen::Actions(a) => a.selected,
                     _ => 0,
                 };
-                if selected_idx == 6 {
+                let action = ACTIONS.get(selected_idx).map(|(_, _, a)| a);
+                if matches!(action, Some(Action::Partitions)) {
                     let max_lines = app.partition_tree_lines.len().saturating_sub(1);
                     app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
-                } else if selected_idx == 7 {
+                } else if matches!(action, Some(Action::Schema)) {
                     let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
                     app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
                 } else if let Screen::Actions(ref mut a) = app.screen
@@ -216,9 +255,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     Screen::Actions(a) => a.selected,
                     _ => 0,
                 };
-                if selected_idx == 6 {
+                let action = ACTIONS.get(selected_idx).map(|(_, _, a)| a);
+                if matches!(action, Some(Action::Partitions)) {
                     app.partition_scroll = app.partition_scroll.saturating_sub(1);
-                } else if selected_idx == 7 {
+                } else if matches!(action, Some(Action::Schema)) {
                     app.schema_scroll = app.schema_scroll.saturating_sub(1);
                 } else if let Screen::Actions(ref mut a) = app.screen
                     && let Some(ref mut res) = a.results
@@ -236,6 +276,58 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
         _ => {}
     }
     None
+}
+
+pub fn results_table_inner_rect(
+    app: &App,
+    term_width: u16,
+    term_height: u16,
+) -> Option<Rect> {
+    let bottom_y = term_height.saturating_sub(7);
+    if bottom_y == 0 {
+        return None;
+    }
+    let Screen::Actions(a) = &app.screen else {
+        return None;
+    };
+    a.results.as_ref()?;
+
+    let menu_pct = if app.main_panel_pct > 30 {
+        15
+    } else {
+        app.main_panel_pct.clamp(8, 30)
+    };
+    let border_x = ((term_width as u32 * menu_pct as u32) / 100) as u16;
+    let preview_width = term_width.saturating_sub(border_x);
+    let inner_w = preview_width.saturating_sub(2).max(1) as usize;
+
+    let query_height = if matches!(app.mode, Mode::QueryInput) {
+        let total_chars = 7
+            + a.results
+                .as_ref()
+                .map(|r| r.query_buffer.len())
+                .unwrap_or_else(|| a.query_buffer.len());
+        let lines = total_chars.div_ceil(inner_w);
+        (lines as u16 + 2).clamp(3, 7)
+    } else {
+        3
+    };
+
+    if query_height >= bottom_y {
+        return None;
+    }
+
+    let preview_height = bottom_y.saturating_sub(query_height);
+    if preview_width < 2 || preview_height < 2 {
+        return None;
+    }
+
+    Some(Rect {
+        x: border_x + 1,
+        y: query_height + 1,
+        width: preview_width.saturating_sub(2),
+        height: preview_height.saturating_sub(2),
+    })
 }
 
 pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -> String {
@@ -350,7 +442,7 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
                 .map(|r| r.query_buffer.len())
                 .unwrap_or_else(|| state.query_buffer.len());
             let lines = total_chars.div_ceil(inner_w);
-            (lines as u16 + 2).clamp(3, 4)
+            (lines as u16 + 2).clamp(3, 7)
         } else {
             3
         };
@@ -412,35 +504,100 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
         } else if let Some(ref res) = state.results {
             // Results table view
             let mut lines = Vec::new();
-            let vis_indices: Vec<usize> = res
-                .columns
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| !res.hidden_columns.contains(*c))
-                .map(|(i, _)| i)
-                .collect();
-            for r in start_row..=end_row {
-                if r == preview_inner_y {
-                    // Header line
-                    let header = vis_indices
+            if let Some(inner) = results_table_inner_rect(app, term_width, term_height) {
+                let available_width = inner.width.saturating_sub(4) as usize;
+                let (visible_cols, col_width_sizes, _) =
+                    crate::tui::screens::results::visible_columns_layout(res, available_width);
+
+                let mut sel_cols = Vec::new();
+                let mut cur_col_x = inner.x;
+                for (v_idx, (orig_col_idx, _)) in visible_cols.iter().enumerate() {
+                    let w = col_width_sizes.get(v_idx).copied().unwrap_or(15) as u16;
+                    let next_x = cur_col_x + w + 2;
+                    if cur_col_x <= max_col && next_x > min_col {
+                        sel_cols.push(*orig_col_idx);
+                    }
+                    cur_col_x = next_x;
+                }
+                if sel_cols.is_empty() && !visible_cols.is_empty() {
+                    sel_cols = visible_cols.iter().map(|(orig_idx, _)| *orig_idx).collect();
+                }
+
+                let is_stats = crate::tui::screens::results::is_stats_table(&res.columns);
+                let (stats_total_row_count, stats_total_data_size) = if is_stats {
+                    crate::tui::screens::results::compute_stats_aggregates(&res.columns, &res.rows)
+                } else {
+                    (None, None)
+                };
+                let data_size_col_idx = res
+                    .columns
+                    .iter()
+                    .position(|c| c.eq_ignore_ascii_case("data_size"));
+                let row_count_col_idx = res
+                    .columns
+                    .iter()
+                    .position(|c| c.eq_ignore_ascii_case("row_count"));
+
+                let row_visual_heights: Vec<u16> = res
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        let is_summary = is_stats
+                            && crate::tui::screens::results::is_stats_summary_row(&res.columns, row);
+                        crate::tui::screens::results::compute_row_height(
+                            row,
+                            &visible_cols,
+                            &col_width_sizes,
+                            is_summary,
+                            data_size_col_idx,
+                            stats_total_data_size,
+                            row_count_col_idx,
+                            stats_total_row_count.as_ref(),
+                        )
+                    })
+                    .collect();
+
+                let has_h_scrollbar = res.columns.len() > 1;
+                let table_reserved_rows = if has_h_scrollbar { 3 } else { 2 };
+                let viewport_lines =
+                    (inner.height as usize).saturating_sub(table_reserved_rows).max(1);
+
+                let effective_scroll_v =
+                    crate::tui::screens::results::calculate_effective_scroll_v(
+                        res.scroll_v.get(),
+                        res.selected_row,
+                        viewport_lines,
+                        &row_visual_heights,
+                        res.rows.len(),
+                    );
+
+                if start_row <= inner.y + 1 && end_row >= inner.y {
+                    let header = sel_cols
                         .iter()
-                        .map(|&i| res.columns[i].as_str())
+                        .map(|&i| res.columns.get(i).map(|s| s.as_str()).unwrap_or(""))
                         .collect::<Vec<_>>()
                         .join("\t");
                     lines.push(header);
-                } else if r >= preview_inner_y + 2 {
-                    let idx = (r - (preview_inner_y + 2)) as usize + res.scroll_v.get();
-                    if idx < res.rows.len() {
-                        let row_line = vis_indices
+                }
+
+                let mut cur_y = inner.y + 2;
+                for (row_idx, row) in res.rows.iter().enumerate().skip(effective_scroll_v) {
+                    let h = row_visual_heights.get(row_idx).copied().unwrap_or(1);
+                    if cur_y <= end_row && cur_y + h > start_row {
+                        let row_line = sel_cols
                             .iter()
-                            .map(|&i| res.rows[idx].get(i).map(|s| s.as_str()).unwrap_or(""))
+                            .map(|&i| row.get(i).map(|s| s.as_str()).unwrap_or(""))
                             .collect::<Vec<_>>()
                             .join("\t");
                         lines.push(row_line);
                     }
+                    cur_y += h;
+                    if cur_y >= inner.y + inner.height {
+                        break;
+                    }
                 }
+                return lines.join("\n");
             }
-            return lines.join("\n");
         }
     }
 
@@ -576,5 +733,84 @@ mod tests {
             text,
             " s3a://local-minio-bucket/lakehouse/\n ├── date=2024-01-01/\n └── date=2024-01-02/"
         );
+    }
+
+    #[test]
+    fn test_mouse_click_selects_cell_not_entire_line() {
+        let mut app = sample_app();
+        let res_state = ResultsState {
+            query_buffer: "SELECT * FROM orders".to_string(),
+            query_cursor: 20,
+            columns: vec!["id".to_string(), "status".to_string()],
+            rows: vec![
+                vec!["1".to_string(), "OK".to_string()],
+                vec!["2".to_string(), "PENDING".to_string()],
+                vec!["3".to_string(), "FAILED".to_string()],
+            ],
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
+            selected_row: 0,
+            selected_col: 0,
+            loading: false,
+            error: None,
+            is_paginated: true,
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            offset: 0,
+            page_size: 100,
+            is_fetching_next_page: false,
+            has_more_rows: false,
+            invalid_query_error: None,
+            selection_anchor: None,
+            ..Default::default()
+        };
+
+        app.clear_mouse_selection();
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            query_buffer: "SELECT * FROM orders".to_string(),
+            query_cursor: 20,
+            results: Some(res_state),
+            ..Default::default()
+        });
+
+        let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
+        let inner = results_table_inner_rect(&app, term_width, term_height).expect("inner rect");
+
+        // Row 1 click at (inner.x + 2, inner.y + 3)
+        // Header is at inner.y, bottom margin is inner.y + 1, row 0 is inner.y + 2, row 1 is inner.y + 3
+        let click_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: inner.x + 2,
+            row: inner.y + 3,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        handle_mouse_sync(&mut app, click_event);
+
+        if let Screen::Actions(a) = &app.screen {
+            let res = a.results.as_ref().unwrap();
+            assert_eq!(res.selected_row, 1, "Clicking row 1 must set selected_row to 1");
+            assert_eq!(res.selected_col, 0, "Clicking column 0 must set selected_col to 0");
+        } else {
+            panic!("Expected Screen::Actions");
+        }
+
+        // Must NOT set is_selecting_text (no blue line highlight)
+        assert!(!app.is_selecting_text, "A single click must not start text selection");
+
+        // MouseUp event without drag
+        let up_event = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: inner.x + 2,
+            row: inner.y + 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, up_event);
+        assert!(app.copied_toast.is_none(), "A single click must not copy row to clipboard");
     }
 }

@@ -23,7 +23,7 @@ use super::{AsyncResult, Command};
 
 /// Cap on the number of distinct values fetched per drill-down level, to
 /// protect against extremely high-cardinality partition columns.
-const DRILLDOWN_LEVEL_LIMIT: usize = 200;
+pub const DRILLDOWN_LEVEL_LIMIT: usize = 200;
 
 pub fn dispatch_command(
     app: &mut App,
@@ -258,6 +258,8 @@ pub fn dispatch_command(
             };
 
             if let Screen::Actions(ref mut a) = app.screen {
+                a.query_buffer = query_buffer.clone();
+                a.query_cursor = query_cursor;
                 a.results = Some(res_state);
             } else {
                 app.prev_screen = Some(Box::new(app.screen.clone()));
@@ -343,6 +345,20 @@ pub fn dispatch_command(
                 && let Some(state) = action_state.results.as_mut()
             {
                 state.is_fetching_next_page = true;
+                let new_limit = offset + limit;
+                let updated = queries::update_query_limit(&state.query_buffer, new_limit);
+                let prev_len = state.query_buffer.len();
+                if state.query_cursor == prev_len {
+                    state.query_cursor = updated.len();
+                } else {
+                    state.query_cursor = state.query_cursor.min(updated.len());
+                }
+                state.query_buffer = updated.clone();
+                action_state.query_buffer = updated;
+                action_state.query_cursor = state.query_cursor;
+                if let Some(ref base) = state.base_query {
+                    state.base_query = Some(queries::update_query_limit(base, new_limit));
+                }
             }
 
             if let Some(client) = app.trino_client.clone() {
@@ -392,14 +408,22 @@ pub fn dispatch_command(
             };
 
             if let Screen::Actions(ref mut action_state) = app.screen
-                && let Some(drilldown) = action_state.drilldown.as_mut()
+                && action_state.catalog == catalog
+                && action_state.schema == schema
+                && action_state.table == table
             {
-                drilldown.loading = true;
-                drilldown.error = None;
-                if need_count {
-                    drilldown.current_count_loading = true;
-                    if filters.is_empty() {
-                        drilldown.table_count_loading = true;
+                let query_len = query.len();
+                action_state.query_buffer = query.clone();
+                action_state.query_cursor = query_len;
+                action_state.results = None;
+                if let Some(drilldown) = action_state.drilldown.as_mut() {
+                    drilldown.loading = true;
+                    drilldown.error = None;
+                    if need_count {
+                        drilldown.current_count_loading = true;
+                        if filters.is_empty() {
+                            drilldown.table_count_loading = true;
+                        }
                     }
                 }
             }
@@ -729,6 +753,8 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     };
                     if let Screen::Actions(ref mut a) = app.screen {
                         if a.catalog == catalog && a.schema == schema && a.table == table {
+                            a.query_buffer = res_state.query_buffer.clone();
+                            a.query_cursor = res_state.query_cursor;
                             a.results = Some(res_state);
                         }
                     } else {
@@ -784,6 +810,8 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     };
                     if let Screen::Actions(ref mut a) = app.screen {
                         if a.catalog == catalog && a.schema == schema && a.table == table {
+                            a.query_buffer = res_state.query_buffer.clone();
+                            a.query_cursor = res_state.query_cursor;
                             a.results = Some(res_state);
                         }
                     } else {
@@ -823,11 +851,28 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     && action_state.table == table
                     && let Some(state) = action_state.results.as_mut()
                 {
-                    state.rows.extend(new_rows);
+                    state.rows.extend(new_rows.clone());
+                    if let Some(ref mut unfilt) = state.unfiltered_rows {
+                        unfilt.extend(new_rows);
+                    }
                     state.offset = offset;
                     state.is_fetching_next_page = false;
                     if fetched_count < limit {
                         state.has_more_rows = false;
+                    }
+                    let actual_limit = state.rows.len();
+                    let updated = queries::update_query_limit(&state.query_buffer, actual_limit);
+                    let prev_len = state.query_buffer.len();
+                    if state.query_cursor == prev_len {
+                        state.query_cursor = updated.len();
+                    } else {
+                        state.query_cursor = state.query_cursor.min(updated.len());
+                    }
+                    state.query_buffer = updated.clone();
+                    action_state.query_buffer = updated;
+                    action_state.query_cursor = state.query_cursor;
+                    if let Some(ref base) = state.base_query {
+                        state.base_query = Some(queries::update_query_limit(base, actual_limit));
                     }
                 }
             }
@@ -842,6 +887,20 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 {
                     state.is_fetching_next_page = false;
                     state.has_more_rows = false;
+                    let actual_limit = state.rows.len();
+                    let updated = queries::update_query_limit(&state.query_buffer, actual_limit);
+                    let prev_len = state.query_buffer.len();
+                    if state.query_cursor == prev_len {
+                        state.query_cursor = updated.len();
+                    } else {
+                        state.query_cursor = state.query_cursor.min(updated.len());
+                    }
+                    state.query_buffer = updated.clone();
+                    action_state.query_buffer = updated;
+                    action_state.query_cursor = state.query_cursor;
+                    if let Some(ref base) = state.base_query {
+                        state.base_query = Some(queries::update_query_limit(base, actual_limit));
+                    }
                 }
             }
         },
@@ -1190,5 +1249,180 @@ mod tests {
         let dd = state.drilldown.as_ref().unwrap();
         assert_eq!(dd.table_count, Some(1234567));
         assert!(!dd.table_count_loading);
+    }
+
+    #[test]
+    fn fetch_next_page_incrementally_updates_query_bar_limit() {
+        let mut app = App::new(sample_config(), false);
+        app.clear_mouse_selection();
+
+        let initial_rows: Vec<Vec<String>> = (0..100)
+            .map(|i| vec![i.to_string(), format!("item_{i}")])
+            .collect();
+
+        let initial_query = "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 100".to_string();
+
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            query_buffer: initial_query.clone(),
+            query_cursor: initial_query.len(),
+            results: Some(ResultsState {
+                query_buffer: initial_query.clone(),
+                query_cursor: initial_query.len(),
+                columns: vec!["id".to_string(), "name".to_string()],
+                rows: initial_rows,
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
+                loading: false,
+                error: None,
+                is_paginated: true,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                offset: 0,
+                page_size: 100,
+                is_fetching_next_page: false,
+                has_more_rows: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // 1. Dispatching next page increases the limit incrementally in query bar
+        dispatch_command(
+            &mut app,
+            Command::FetchNextPage {
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                offset: 100,
+                limit: 100,
+                filters: Vec::new(),
+            },
+            &tx,
+        );
+
+        let Screen::Actions(action_state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let res = action_state.results.as_ref().unwrap();
+        assert_eq!(
+            res.query_buffer,
+            "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 200"
+        );
+        assert_eq!(
+            action_state.query_buffer,
+            "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 200"
+        );
+
+        // 2. Full page arrives -> limit stays 200, rows extend to 200
+        let next_100_rows: Vec<Vec<String>> = (100..200)
+            .map(|i| vec![i.to_string(), format!("item_{i}")])
+            .collect();
+        let log_id = app.add_query_log("page 2".to_string());
+        handle_async_result(
+            &mut app,
+            AsyncResult::FetchNextPage {
+                log_id,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                offset: 100,
+                limit: 100,
+                result: Ok(crate::trino::types::QueryResults {
+                    columns: vec![
+                        crate::trino::types::Column {
+                            name: "id".to_string(),
+                        },
+                        crate::trino::types::Column {
+                            name: "name".to_string(),
+                        },
+                    ],
+                    data: next_100_rows,
+                    duration_ms: 40,
+                }),
+            },
+        );
+
+        let Screen::Actions(action_state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let res = action_state.results.as_ref().unwrap();
+        assert_eq!(res.rows.len(), 200);
+        assert_eq!(
+            res.query_buffer,
+            "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 200"
+        );
+
+        // 3. Dispatching page 3 updates limit to 300
+        dispatch_command(
+            &mut app,
+            Command::FetchNextPage {
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                offset: 200,
+                limit: 100,
+                filters: Vec::new(),
+            },
+            &tx,
+        );
+
+        let Screen::Actions(action_state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let res = action_state.results.as_ref().unwrap();
+        assert_eq!(
+            res.query_buffer,
+            "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 300"
+        );
+
+        // 4. End of table (only 35 rows returned) -> refines limit to 235
+        let last_35_rows: Vec<Vec<String>> = (200..235)
+            .map(|i| vec![i.to_string(), format!("item_{i}")])
+            .collect();
+        let log_id2 = app.add_query_log("page 3".to_string());
+        handle_async_result(
+            &mut app,
+            AsyncResult::FetchNextPage {
+                log_id: log_id2,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                offset: 200,
+                limit: 100,
+                result: Ok(crate::trino::types::QueryResults {
+                    columns: vec![
+                        crate::trino::types::Column {
+                            name: "id".to_string(),
+                        },
+                        crate::trino::types::Column {
+                            name: "name".to_string(),
+                        },
+                    ],
+                    data: last_35_rows,
+                    duration_ms: 25,
+                }),
+            },
+        );
+
+        let Screen::Actions(action_state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let res = action_state.results.as_ref().unwrap();
+        assert_eq!(res.rows.len(), 235);
+        assert!(!res.has_more_rows);
+        assert_eq!(
+            res.query_buffer,
+            "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 235"
+        );
+        assert_eq!(
+            action_state.query_buffer,
+            "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 235"
+        );
     }
 }

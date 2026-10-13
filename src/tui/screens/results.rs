@@ -141,6 +141,331 @@ pub fn compute_stats_aggregates(
     )
 }
 
+pub fn visible_columns_layout(
+    state: &ResultsState,
+    available_width: usize,
+) -> (Vec<(usize, String)>, Vec<usize>, usize) {
+    let all_visible_cols = state.visible_columns();
+    let col_count = all_visible_cols.len();
+    if col_count == 0 {
+        return (Vec::new(), Vec::new(), 0);
+    }
+    let sel_vis_idx = all_visible_cols
+        .iter()
+        .position(|(orig_idx, _)| *orig_idx == state.selected_col)
+        .unwrap_or(0);
+
+    let h_margin = 2.min(col_count.saturating_sub(1) / 2);
+    let target_vis_idx = (sel_vis_idx + h_margin).min(col_count.saturating_sub(1));
+
+    let mut effective_scroll_h = state.scroll_h.get().min(col_count.saturating_sub(1));
+    if sel_vis_idx < effective_scroll_h + h_margin {
+        effective_scroll_h = sel_vis_idx.saturating_sub(h_margin);
+    }
+
+    let is_stats = is_stats_table(&state.columns);
+    let compute_col_width = |orig_col_idx: usize, col_name: &str| -> u16 {
+        let max_data = state
+            .rows
+            .iter()
+            .map(|r| {
+                if is_stats && orig_col_idx == 0 && is_stats_summary_row(&state.columns, r) {
+                    "Summary".len()
+                } else {
+                    r.get(orig_col_idx).map(|v| v.len()).unwrap_or(0)
+                }
+            })
+            .max()
+            .unwrap_or(0);
+        let header_len = if state.column_filters.contains_key(col_name) {
+            col_name.len() + 4
+        } else {
+            col_name.len()
+        };
+        let raw_width = (header_len.max(max_data) as u16).max(8);
+        let max_allowed = (available_width / 2).max(15) as u16;
+        raw_width.min(max_allowed)
+    };
+
+    while effective_scroll_h < sel_vis_idx {
+        let mut width = 0;
+        let mut fits = false;
+        for (v_idx, (orig_col_idx, c)) in all_visible_cols.iter().enumerate().skip(effective_scroll_h) {
+            let needed = compute_col_width(*orig_col_idx, c) as usize + 2;
+            if width + needed <= available_width || width == 0 {
+                width += needed;
+                if v_idx == target_vis_idx {
+                    fits = true;
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        if fits {
+            break;
+        }
+        effective_scroll_h += 1;
+    }
+
+    let mut cumulative_width = 0;
+    let mut visible_cols: Vec<(usize, String)> = Vec::new();
+    let mut col_width_sizes: Vec<usize> = Vec::new();
+
+    for (_v_idx, (orig_col_idx, c)) in all_visible_cols.iter().enumerate().skip(effective_scroll_h) {
+        let needed_width = compute_col_width(*orig_col_idx, c);
+
+        if visible_cols.is_empty()
+            || cumulative_width + (needed_width as usize) + 2 <= available_width
+        {
+            cumulative_width += (needed_width as usize) + 2;
+            visible_cols.push((*orig_col_idx, (*c).clone()));
+            col_width_sizes.push(needed_width as usize);
+        } else {
+            break;
+        }
+    }
+
+    if col_width_sizes.is_empty() {
+        col_width_sizes.push(15);
+    }
+
+    (visible_cols, col_width_sizes, effective_scroll_h)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn compute_row_height(
+    row: &[String],
+    visible_cols: &[(usize, String)],
+    col_width_sizes: &[usize],
+    is_summary: bool,
+    data_size_col_idx: Option<usize>,
+    stats_total_data_size: Option<f64>,
+    row_count_col_idx: Option<usize>,
+    stats_total_row_count: Option<&String>,
+) -> u16 {
+    let mut max_row_height: u16 = 1;
+    for (v_idx, (col_idx, _)) in visible_cols.iter().enumerate() {
+        let raw_val = row.get(*col_idx).map(|s| s.as_str()).unwrap_or("");
+        let is_raw_empty = raw_val.is_empty()
+            || raw_val.eq_ignore_ascii_case("null")
+            || raw_val.eq_ignore_ascii_case("none");
+
+        let formatted_val;
+        let display_val: &str = if is_summary && *col_idx == 0 {
+            "Summary"
+        } else if is_summary && Some(*col_idx) == data_size_col_idx && is_raw_empty {
+            if let Some(total_bytes) = stats_total_data_size {
+                formatted_val = format!("{total_bytes:.1}");
+                formatted_val.as_str()
+            } else {
+                "—"
+            }
+        } else if !is_summary && Some(*col_idx) == row_count_col_idx && is_raw_empty {
+            if let Some(total_rows) = stats_total_row_count {
+                total_rows.as_str()
+            } else {
+                "—"
+            }
+        } else if is_summary && is_raw_empty {
+            "—"
+        } else {
+            raw_val
+        };
+
+        let col_w = col_width_sizes.get(v_idx).copied().unwrap_or(15);
+        let wrapped_lines = wrap_text(display_val, col_w);
+        max_row_height = max_row_height.max(wrapped_lines.len() as u16);
+    }
+    let sep = if is_summary { 1 } else { 0 };
+    max_row_height + sep
+}
+
+pub fn calculate_effective_scroll_v(
+    current_scroll_v: usize,
+    sel_row: usize,
+    viewport_lines: usize,
+    row_visual_heights: &[u16],
+    total_rows: usize,
+) -> usize {
+    if total_rows == 0 {
+        return 0;
+    }
+    let sel_row = sel_row.min(total_rows - 1);
+    let current_scroll_v = current_scroll_v.min(total_rows - 1);
+
+    // Count how many rows fit starting at current_scroll_v
+    let mut used_lines: usize = 0;
+    let mut visible_count: usize = 0;
+    for &h in &row_visual_heights[current_scroll_v..] {
+        if used_lines + h as usize <= viewport_lines || visible_count == 0 {
+            used_lines += h as usize;
+            visible_count += 1;
+        } else {
+            break;
+        }
+    }
+
+    let v_margin = 4.min(visible_count.saturating_sub(1) / 2);
+    let mut scroll_v = current_scroll_v;
+
+    if sel_row < scroll_v + v_margin {
+        scroll_v = sel_row.saturating_sub(v_margin);
+    } else {
+        let target_bottom = (sel_row + v_margin).min(total_rows - 1);
+        while scroll_v < sel_row {
+            let lines_needed: usize = row_visual_heights[scroll_v..=target_bottom]
+                .iter()
+                .map(|&h| h as usize)
+                .sum();
+            if lines_needed <= viewport_lines {
+                break;
+            }
+            scroll_v += 1;
+        }
+    }
+
+    // Ensure sel_row is always within the viewport:
+    // If lines from scroll_v to sel_row exceed viewport_lines, advance scroll_v.
+    while scroll_v < sel_row {
+        let lines_to_sel: usize = row_visual_heights[scroll_v..=sel_row]
+            .iter()
+            .map(|&h| h as usize)
+            .sum();
+        if lines_to_sel <= viewport_lines {
+            break;
+        }
+        scroll_v += 1;
+    }
+
+    // Compute max_scroll_v from bottom up so viewport is filled if scrolled to the end
+    let mut max_scroll_v = total_rows.saturating_sub(1);
+    let mut lines_from_bottom = 0;
+    for r in (0..total_rows).rev() {
+        let h = row_visual_heights[r] as usize;
+        if lines_from_bottom + h <= viewport_lines || r == total_rows - 1 {
+            lines_from_bottom += h;
+            max_scroll_v = r;
+        } else {
+            break;
+        }
+    }
+
+    if scroll_v > max_scroll_v && sel_row <= max_scroll_v {
+        scroll_v = max_scroll_v;
+    }
+
+    scroll_v.min(total_rows.saturating_sub(1))
+}
+
+pub fn hit_test_cell(
+    state: &ResultsState,
+    inner: Rect,
+    mouse_col: u16,
+    mouse_row: u16,
+) -> Option<(usize, usize)> {
+    if state.rows.is_empty() || state.columns.is_empty() {
+        return None;
+    }
+    if mouse_col < inner.x
+        || mouse_col >= inner.x.saturating_add(inner.width)
+        || mouse_row < inner.y
+        || mouse_row >= inner.y.saturating_add(inner.height)
+    {
+        return None;
+    }
+
+    let available_width = inner.width.saturating_sub(4) as usize;
+    let (visible_cols, col_width_sizes, _) =
+        visible_columns_layout(state, available_width);
+    if visible_cols.is_empty() {
+        return None;
+    }
+
+    // 1. Column hit test
+    let mut cur_x = inner.x;
+    let mut clicked_col = visible_cols[0].0;
+    for (v_idx, (orig_col_idx, _)) in visible_cols.iter().enumerate() {
+        let w = col_width_sizes.get(v_idx).copied().unwrap_or(15) as u16;
+        let next_x = cur_x + w + 2;
+        if mouse_col >= cur_x && mouse_col < next_x {
+            clicked_col = *orig_col_idx;
+            break;
+        }
+        if mouse_col >= cur_x {
+            clicked_col = *orig_col_idx;
+        }
+        cur_x = next_x;
+    }
+
+    // 2. Row hit test
+    if mouse_row <= inner.y + 1 {
+        // Click on header
+        return Some((state.selected_row.min(state.rows.len() - 1), clicked_col));
+    }
+
+    let is_stats = is_stats_table(&state.columns);
+    let (stats_total_row_count, stats_total_data_size) = if is_stats {
+        compute_stats_aggregates(&state.columns, &state.rows)
+    } else {
+        (None, None)
+    };
+    let data_size_col_idx = state
+        .columns
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("data_size"));
+    let row_count_col_idx = state
+        .columns
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("row_count"));
+
+    let row_visual_heights: Vec<u16> = state
+        .rows
+        .iter()
+        .map(|row| {
+            let is_summary = is_stats && is_stats_summary_row(&state.columns, row);
+            compute_row_height(
+                row,
+                &visible_cols,
+                &col_width_sizes,
+                is_summary,
+                data_size_col_idx,
+                stats_total_data_size,
+                row_count_col_idx,
+                stats_total_row_count.as_ref(),
+            )
+        })
+        .collect();
+
+    let has_h_scrollbar = state.columns.len() > 1;
+    let table_reserved_rows = if has_h_scrollbar { 3 } else { 2 };
+    let viewport_lines = (inner.height as usize).saturating_sub(table_reserved_rows).max(1);
+
+    let effective_scroll_v = calculate_effective_scroll_v(
+        state.scroll_v.get(),
+        state.selected_row,
+        viewport_lines,
+        &row_visual_heights,
+        state.rows.len(),
+    );
+
+    let mut cur_y = inner.y + 2;
+    let mut clicked_row = None;
+    for (row_idx, _) in state.rows.iter().enumerate().skip(effective_scroll_v) {
+        let h = row_visual_heights.get(row_idx).copied().unwrap_or(1);
+        if mouse_row >= cur_y && mouse_row < cur_y + h {
+            clicked_row = Some(row_idx);
+            break;
+        }
+        cur_y += h;
+        if cur_y >= inner.y + inner.height {
+            break;
+        }
+    }
+
+    clicked_row.map(|r| (r, clicked_col))
+}
+
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -296,6 +621,15 @@ pub fn render(
 
     let available_width = inner.width.saturating_sub(4) as usize;
 
+    let (visible_cols, col_width_sizes, effective_scroll_h) =
+        visible_columns_layout(state, available_width);
+    state.scroll_h.set(effective_scroll_h);
+
+    let col_widths: Vec<Constraint> = col_width_sizes
+        .iter()
+        .map(|&w| Constraint::Length(w as u16))
+        .collect();
+
     let is_stats = is_stats_table(&state.columns);
     let (stats_total_row_count, stats_total_data_size) = if is_stats {
         compute_stats_aggregates(&state.columns, &state.rows)
@@ -312,96 +646,42 @@ pub fn render(
         .iter()
         .position(|c| c.eq_ignore_ascii_case("row_count"));
 
-    let all_visible_cols = state.visible_columns();
-    let col_count = all_visible_cols.len();
-    let sel_vis_idx = all_visible_cols
+    let row_visual_heights: Vec<u16> = state
+        .rows
         .iter()
-        .position(|(orig_idx, _)| *orig_idx == state.selected_col)
-        .unwrap_or(0);
+        .map(|row| {
+            let is_summary = is_stats && is_stats_summary_row(&state.columns, row);
+            compute_row_height(
+                row,
+                &visible_cols,
+                &col_width_sizes,
+                is_summary,
+                data_size_col_idx,
+                stats_total_data_size,
+                row_count_col_idx,
+                stats_total_row_count.as_ref(),
+            )
+        })
+        .collect();
 
-    let h_margin = 2.min(col_count.saturating_sub(1) / 2);
-    let target_vis_idx = (sel_vis_idx + h_margin).min(col_count.saturating_sub(1));
+    let has_h_scrollbar = state.columns.len() > 1;
+    let table_reserved_rows = if has_h_scrollbar { 3 } else { 2 };
+    let viewport_lines = (inner.height as usize).saturating_sub(table_reserved_rows).max(1);
 
-    let mut effective_scroll_h = state.scroll_h.get().min(col_count.saturating_sub(1));
-    if sel_vis_idx < effective_scroll_h + h_margin {
-        effective_scroll_h = sel_vis_idx.saturating_sub(h_margin);
-    }
-
-    let compute_col_width = |orig_col_idx: usize, col_name: &String| -> u16 {
-        let max_data = state
-            .rows
-            .iter()
-            .map(|r| {
-                if is_stats && orig_col_idx == 0 && is_stats_summary_row(&state.columns, r) {
-                    "Summary".len()
-                } else {
-                    r.get(orig_col_idx).map(|v| v.len()).unwrap_or(0)
-                }
-            })
-            .max()
-            .unwrap_or(0);
-        let header_len = if state.column_filters.contains_key(col_name) {
-            col_name.len() + 4
-        } else {
-            col_name.len()
-        };
-        let raw_width = (header_len.max(max_data) as u16).max(8);
-        let max_allowed = (available_width / 2).max(15) as u16;
-        raw_width.min(max_allowed)
-    };
-
-    while effective_scroll_h < sel_vis_idx {
-        let mut width = 0;
-        let mut fits = false;
-        for (v_idx, (orig_col_idx, c)) in all_visible_cols.iter().enumerate().skip(effective_scroll_h) {
-            let needed = compute_col_width(*orig_col_idx, c) as usize + 2;
-            if width + needed <= available_width || width == 0 {
-                width += needed;
-                if v_idx == target_vis_idx {
-                    fits = true;
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-        if fits {
-            break;
-        }
-        effective_scroll_h += 1;
-    }
-    state.scroll_h.set(effective_scroll_h);
-
-    let mut cumulative_width = 0;
-    let mut visible_cols: Vec<(usize, &String)> = Vec::new();
-    let mut col_widths: Vec<Constraint> = Vec::new();
-    let mut col_width_sizes: Vec<usize> = Vec::new();
-
-    for (_v_idx, (orig_col_idx, c)) in all_visible_cols.iter().enumerate().skip(effective_scroll_h) {
-        let needed_width = compute_col_width(*orig_col_idx, c);
-
-        if visible_cols.is_empty()
-            || cumulative_width + (needed_width as usize) + 2 <= available_width
-        {
-            cumulative_width += (needed_width as usize) + 2;
-            visible_cols.push((*orig_col_idx, c));
-            col_widths.push(Constraint::Length(needed_width));
-            col_width_sizes.push(needed_width as usize);
-        } else {
-            break;
-        }
-    }
-
-    if col_widths.is_empty() {
-        col_widths.push(Constraint::Length(15));
-        col_width_sizes.push(15);
-    }
+    let effective_scroll_v = calculate_effective_scroll_v(
+        state.scroll_v.get(),
+        state.selected_row,
+        viewport_lines,
+        &row_visual_heights,
+        state.rows.len(),
+    );
+    state.scroll_v.set(effective_scroll_v);
 
     let header_cells: Vec<Cell> = visible_cols
         .iter()
         .map(|(orig_col_idx, c)| {
             let is_selected_col = *orig_col_idx == state.selected_col;
-            let has_filter = state.column_filters.contains_key(*c);
+            let has_filter = state.column_filters.contains_key(c);
             let display_name = if has_filter {
                 format!("{c} [F]")
             } else {
@@ -421,34 +701,27 @@ pub fn render(
         .collect();
     let header = Row::new(header_cells).bottom_margin(1);
 
-    let has_h_scrollbar = state.columns.len() > 1;
-    let table_reserved_rows = if has_h_scrollbar { 3 } else { 2 };
-    let take_rows = (inner.height as usize).saturating_sub(table_reserved_rows).max(1);
-    let mut effective_scroll_v = state.scroll_v.get();
-    if !state.rows.is_empty() {
-        let sel_row = state.selected_row.min(state.rows.len() - 1);
-        let v_margin = 4.min(take_rows.saturating_sub(1) / 2);
-        let max_scroll_v = state.rows.len().saturating_sub(take_rows);
-
-        if sel_row + v_margin >= effective_scroll_v + take_rows {
-            effective_scroll_v = (sel_row + v_margin + 1).saturating_sub(take_rows);
-        } else if sel_row < effective_scroll_v + v_margin {
-            effective_scroll_v = sel_row.saturating_sub(v_margin);
-        }
-        effective_scroll_v = effective_scroll_v.min(max_scroll_v);
+    let mut col_x_offsets = Vec::with_capacity(visible_cols.len());
+    let mut current_col_x = inner.x;
+    for &w in &col_width_sizes {
+        col_x_offsets.push(current_col_x);
+        current_col_x += (w as u16) + 2;
     }
-    state.scroll_v.set(effective_scroll_v);
 
     let mut current_row_y = inner.y + 2; // header line + bottom margin 1
     let mut visible_rows: Vec<Row> = Vec::new();
+    let mut total_rendered_lines: usize = 0;
 
     for (row_idx, row) in state
         .rows
         .iter()
         .enumerate()
         .skip(effective_scroll_v)
-        .take(take_rows)
     {
+        if total_rendered_lines >= viewport_lines && !visible_rows.is_empty() {
+            break;
+        }
+
         let is_summary = is_stats && is_stats_summary_row(&state.columns, row);
 
         if is_summary {
@@ -462,6 +735,7 @@ pub fn render(
                 })
                 .collect();
             current_row_y += 1;
+            total_rendered_lines += 1;
             visible_rows.push(Row::new(border_cells).height(1));
         }
 
@@ -499,11 +773,13 @@ pub fn render(
                 };
 
                 let col_w = col_width_sizes.get(v_idx).copied().unwrap_or(15);
+                let col_x = col_x_offsets.get(v_idx).copied().unwrap_or(inner.x);
                 let wrapped_lines = wrap_text(display_val, col_w);
-                max_row_height = max_row_height.max(wrapped_lines.len() as u16);
-                // See actions.rs for why this must be gated by pane focus.
-                let is_mouse_sel =
-                    is_active && app.is_area_mouse_selected(inner.x, inner.width, row_y);
+                let cell_h = wrapped_lines.len() as u16;
+                max_row_height = max_row_height.max(cell_h);
+
+                let is_mouse_sel = is_active
+                    && app.is_area_mouse_selected_rect(col_x, col_w as u16, row_y, cell_h.max(1));
                 let is_cell_selected =
                     row_idx == state.selected_row && *col_idx == state.selected_col;
                 let style = if is_mouse_sel {
@@ -525,6 +801,7 @@ pub fn render(
             })
             .collect();
         current_row_y += max_row_height;
+        total_rendered_lines += max_row_height as usize;
         visible_rows.push(Row::new(cells).height(max_row_height));
     }
 
@@ -566,6 +843,7 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
     fn test_is_stats_table_identifies_trino_show_stats_headers() {
@@ -918,5 +1196,117 @@ mod tests {
             })
             .unwrap();
         assert_eq!(state.scroll_v.get(), 0, "Moving to top should scroll back to 0");
+    }
+
+    #[test]
+    fn test_wrapped_rows_incremental_viewport_scrolling() {
+        // Rows with long text in column 1 that wrap into 3 lines each
+        let rows: Vec<Vec<String>> = (0..20)
+            .map(|i| {
+                vec![
+                    format!("id_{i}"),
+                    "This is a very long description text that definitely wraps into several lines".to_string(),
+                ]
+            })
+            .collect();
+
+        let mut state = ResultsState {
+            query_buffer: "SELECT id, desc FROM items".to_string(),
+            query_cursor: 26,
+            columns: vec!["id".to_string(), "description".to_string()],
+            rows,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
+            selected_row: 0,
+            selected_col: 0,
+            ..Default::default()
+        };
+
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Initial render: row 0 selected, scroll_v = 0
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert_eq!(state.scroll_v.get(), 0);
+
+        // Move cursor down to row 5: because each row is ~3 lines tall, 5 rows exceed the viewport (17 lines).
+        // Therefore, scroll_v must advance so row 5 is visible!
+        state.selected_row = 5;
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert!(
+            state.scroll_v.get() > 0,
+            "When rows wrap and occupy more visual lines, scroll_v must scroll earlier to keep cursor visible. Got: {}",
+            state.scroll_v.get()
+        );
+
+        // Move cursor down to row 10: scroll_v must advance further
+        state.selected_row = 10;
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+        assert!(
+            state.scroll_v.get() >= 5,
+            "scroll_v must advance as cursor moves down tall wrapped rows. Got: {}",
+            state.scroll_v.get()
+        );
+        assert!(
+            state.scroll_v.get() <= 10,
+            "scroll_v must never scroll past the selected row"
+        );
+    }
+
+    #[test]
+    fn test_hit_test_cell_mapping() {
+        let rows = vec![
+            vec!["1".to_string(), "Alice".to_string()],
+            vec!["2".to_string(), "Bob".to_string()],
+            vec!["3".to_string(), "Charlie".to_string()],
+        ];
+        let state = ResultsState {
+            query_buffer: "SELECT * FROM users".to_string(),
+            query_cursor: 19,
+            columns: vec!["id".to_string(), "name".to_string()],
+            rows,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
+            selected_row: 0,
+            selected_col: 0,
+            ..Default::default()
+        };
+
+        let inner = Rect::new(10, 5, 60, 20);
+
+        // Click outside bounds should return None
+        assert_eq!(hit_test_cell(&state, inner, 5, 5), None);
+        assert_eq!(hit_test_cell(&state, inner, 15, 30), None);
+
+        // Header click at y = 5, column 0
+        let res = hit_test_cell(&state, inner, 12, 5);
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().1, 0, "Should hit column 0 ('id')");
+
+        // Row 0 click at y = 7 (header is 5, separator is 6, first data row is 7)
+        let res = hit_test_cell(&state, inner, 12, 7);
+        assert_eq!(res, Some((0, 0)), "Should hit row 0, col 0");
+
+        // Row 1 click at y = 8
+        let res = hit_test_cell(&state, inner, 12, 8);
+        assert_eq!(res, Some((1, 0)), "Should hit row 1, col 0");
+
+        // Click on column 1 ("name") at row 1
+        // col 0 width is 8 + 2 spacing = 10, so x = 22 is in col 1
+        let res = hit_test_cell(&state, inner, 22, 8);
+        assert_eq!(res, Some((1, 1)), "Should hit row 1, col 1");
     }
 }
