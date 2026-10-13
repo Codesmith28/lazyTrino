@@ -253,10 +253,10 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
-                        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+                        KeyCode::Char('>') | KeyCode::Enter | KeyCode::Right => {
                             drilldown_drill_into_selected(s, &safe_columns)
                         }
-                        KeyCode::Char('h') | KeyCode::Left => {
+                        KeyCode::Char('<') | KeyCode::Left => {
                             drilldown_go_up(s);
                             None
                         }
@@ -305,15 +305,14 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
-                        KeyCode::Char('l') | KeyCode::Right => None,
-                        KeyCode::Char('<') => {
+                        KeyCode::Char('h') | KeyCode::Left => {
                             if let Some(ref mut res) = s.results {
                                 res.selected_col = res.prev_visible_col();
                                 res.scroll_h = res.scroll_h.saturating_sub(1);
                             }
                             None
                         }
-                        KeyCode::Char('>') => {
+                        KeyCode::Char('l') | KeyCode::Right => {
                             if let Some(ref mut res) = s.results
                                 && !res.columns.is_empty()
                             {
@@ -323,12 +322,13 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
-                        KeyCode::Char('h') | KeyCode::Left => {
+                        KeyCode::Char('<') => {
                             if at_leaf {
                                 drilldown_go_up(s);
                             }
                             None
                         }
+                        KeyCode::Char('>') => None,
                         KeyCode::Esc => {
                             app.set_active_panel(ActivePanel::MenuPane);
                             None
