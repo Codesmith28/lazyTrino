@@ -117,8 +117,8 @@ pub fn render_placeholder_preview(
         Line::from(""),
         Line::from(Span::styled(" Menu Shortcuts:", theme::muted_style())),
         Line::from("   [v] Table View Mode       [c] Table DDL            [i] Info Schema"),
-        Line::from("   [s] Show Stats            [n] Row Count            [p] Sample (20 rows)"),
-        Line::from("   [P] Partition Tree        [S] Vertical Schema"),
+        Line::from("   [s] Show Stats            [p] Sample (20 rows)     [P] Partition Tree"),
+        Line::from("   [S] Vertical Schema"),
     ];
     let info_p = Paragraph::new(info_lines).alignment(Alignment::Center);
     frame.render_widget(info_p, inner);

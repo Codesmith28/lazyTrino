@@ -473,6 +473,7 @@ pub mod tests {
             loading: false,
             error: None,
             truncated: false,
+            ..Default::default()
         });
 
         let cmd = drilldown_drill_into_selected(&mut s, &[]);
@@ -508,6 +509,7 @@ pub mod tests {
             loading: false,
             error: None,
             truncated: false,
+            ..Default::default()
         });
 
         let cmd = drilldown_drill_into_selected(&mut s, &[]);
@@ -540,6 +542,7 @@ pub mod tests {
             loading: false,
             error: None,
             truncated: false,
+            ..Default::default()
         });
         s.results = Some(sample_leaf_results_state());
 
@@ -562,6 +565,7 @@ pub mod tests {
             loading: false,
             error: None,
             truncated: false,
+            ..Default::default()
         });
 
         drilldown_go_up(&mut s);
@@ -592,6 +596,9 @@ pub mod tests {
             invalid_query_error: None,
             selection_anchor: None,
             filters: vec![("date".to_string(), "2026-08-06".to_string())],
+            total_count: None,
+            total_count_loading: false,
+            table_count: None,
         }
     }
 
@@ -704,6 +711,7 @@ pub mod tests {
                 loading: false,
                 error: None,
                 truncated: false,
+                ..Default::default()
             }),
             results: Some(sample_leaf_results_state()),
             ..drilldown_action_state(vec!["date"])
@@ -833,6 +841,9 @@ pub mod tests {
                 invalid_query_error: None,
                 selection_anchor: None,
                 filters: Vec::new(),
+                total_count: None,
+                total_count_loading: false,
+                table_count: None,
             }),
             ..Default::default()
         }));

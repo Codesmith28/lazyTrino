@@ -198,6 +198,10 @@ pub struct DrillDownState {
     pub loading: bool,
     pub error: Option<String>,
     pub truncated: bool,
+    pub table_count: Option<usize>,
+    pub table_count_loading: bool,
+    pub counts_cache: HashMap<Vec<(String, String)>, usize>,
+    pub current_count_loading: bool,
 }
 
 impl DrillDownState {
@@ -218,6 +222,25 @@ impl DrillDownState {
     /// levels remain.
     pub fn next_column(&self) -> Option<&str> {
         self.partition_cols.get(self.path.len()).map(|s| s.as_str())
+    }
+
+    /// Gets the cached count for the current partition path (or table count if path is empty).
+    pub fn current_count(&self) -> Option<usize> {
+        self.counts_cache
+            .get(&self.path)
+            .copied()
+            .or(if self.path.is_empty() { self.table_count } else { None })
+    }
+
+    /// Gets the cached count for a specific prefix of the path up to `depth`.
+    pub fn count_at_depth(&self, depth: usize) -> Option<usize> {
+        if depth == 0 {
+            self.table_count
+                .or_else(|| self.counts_cache.get(&vec![]).copied())
+        } else {
+            let prefix: Vec<(String, String)> = self.path[..depth.min(self.path.len())].to_vec();
+            self.counts_cache.get(&prefix).copied()
+        }
     }
 }
 
@@ -267,6 +290,23 @@ pub struct ResultsState {
     /// through to `FetchNextPage` so infinite scroll keeps the same
     /// predicate on subsequent pages.
     pub filters: Vec<(String, String)>,
+    pub total_count: Option<usize>,
+    pub total_count_loading: bool,
+    pub table_count: Option<usize>,
+}
+
+pub fn format_count(n: usize) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    for (i, c) in chars.iter().enumerate() {
+        if i > 0 && (len - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(*c);
+    }
+    result
 }
 
 impl ResultsState {
@@ -333,7 +373,6 @@ pub enum Action {
     TableDDL,
     InfoSchema,
     ShowStats,
-    Count,
     Sample,
     Partitions,
     Schema,
@@ -344,7 +383,6 @@ pub const ACTIONS: &[(char, &str, Action)] = &[
     ('c', "Table DDL", Action::TableDDL),
     ('i', "Info Schema", Action::InfoSchema),
     ('s', "Show Stats", Action::ShowStats),
-    ('n', "Count", Action::Count),
     ('p', "Sample Mode (20 rows)", Action::Sample),
     ('P', "Partitions", Action::Partitions),
     ('S', "Schema", Action::Schema),
@@ -359,7 +397,6 @@ impl Action {
                 crate::trino::queries::info_schema_columns(catalog, schema, table)
             }
             Action::ShowStats => crate::trino::queries::show_stats(catalog, schema, table),
-            Action::Count => crate::trino::queries::count(catalog, schema, table),
             Action::Sample => crate::trino::queries::sample(catalog, schema, table),
             Action::Partitions => crate::trino::queries::show_create(catalog, schema, table),
             Action::Schema => crate::trino::queries::describe(catalog, schema, table),
@@ -627,7 +664,6 @@ mod tests {
                 Action::ShowStats,
                 queries::show_stats(catalog, schema, table),
             ),
-            (Action::Count, queries::count(catalog, schema, table)),
             (Action::Sample, queries::sample(catalog, schema, table)),
             (
                 Action::Partitions,
@@ -639,6 +675,14 @@ mod tests {
         for (action, expected) in cases {
             assert_eq!(action.build_query(catalog, schema, table), expected);
         }
+    }
+
+    #[test]
+    fn format_count_adds_comma_separators() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(1000), "1,000");
+        assert_eq!(format_count(1234567), "1,234,567");
     }
 
     fn vcol(name: &str, data_type: &str) -> VerticalColumn {

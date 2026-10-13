@@ -56,9 +56,15 @@ pub fn copy_active_pane_content(app: &mut App) {
                         .collect::<Vec<_>>()
                         .join("\n");
                 } else if app.active_panel == ActivePanel::MainViewer {
-                    if s.selected == 6 {
+                    if matches!(
+                        ACTIONS.get(s.selected).map(|(_, _, a)| a),
+                        Some(crate::app::Action::Partitions)
+                    ) {
                         text_to_copy = app.partition_tree_lines.join("\n");
-                    } else if s.selected == 7 {
+                    } else if matches!(
+                        ACTIONS.get(s.selected).map(|(_, _, a)| a),
+                        Some(crate::app::Action::Schema)
+                    ) {
                         text_to_copy = app
                             .vertical_schema_cols
                             .iter()

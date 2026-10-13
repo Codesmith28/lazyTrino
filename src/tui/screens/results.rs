@@ -152,23 +152,41 @@ pub fn render(
     let main_title = if state.invalid_query_error.is_some() {
         format!("{title_prefix}Invalid Query ")
     } else if state.is_paginated {
+        let total_str = if let Some(tot) = state.total_count {
+            format!(" of {} total", crate::app::format_count(tot))
+        } else if state.total_count_loading {
+            " (counting total...)".to_string()
+        } else {
+            String::new()
+        };
+        let partition_str = if !state.filters.is_empty() {
+            let breadcrumb = state
+                .filters
+                .iter()
+                .map(|(c, v)| format!("{c}={v}"))
+                .collect::<Vec<_>>()
+                .join(" › ");
+            format!(" [{breadcrumb}]")
+        } else {
+            String::new()
+        };
         if state.is_fetching_next_page {
             format!(
-                "{title_prefix}Table View — Infinite Scroll ({} rows loaded, col {}/{}) [Fetching page...] ",
+                "{title_prefix}Table View — Infinite Scroll{partition_str} ({} rows loaded{total_str}, col {}/{}) [Fetching page...] ",
                 state.rows.len(),
                 state.scroll_h + 1,
                 state.columns.len().max(1)
             )
         } else if !state.has_more_rows {
             format!(
-                "{title_prefix}Table View — Infinite Scroll (All {} rows loaded, col {}/{}) ",
+                "{title_prefix}Table View — Infinite Scroll{partition_str} (All {} rows loaded{total_str}, col {}/{}) ",
                 state.rows.len(),
                 state.scroll_h + 1,
                 state.columns.len().max(1)
             )
         } else {
             format!(
-                "{title_prefix}Table View — Infinite Scroll ({} rows loaded, col {}/{}) ",
+                "{title_prefix}Table View — Infinite Scroll{partition_str} ({} rows loaded{total_str}, col {}/{}) ",
                 state.rows.len(),
                 state.scroll_h + 1,
                 state.columns.len().max(1)
@@ -562,5 +580,66 @@ mod tests {
         let (total_rows, total_data_size) = compute_stats_aggregates(&stats_cols, &rows);
         assert_eq!(total_rows.as_deref(), Some("6001215.0"));
         assert_eq!(total_data_size, Some(1361361.0 + 125281177.0));
+    }
+
+    #[test]
+    fn test_render_paginated_with_total_count_and_filters() {
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+        let state = ResultsState {
+            query_buffer: "SELECT * FROM orders".to_string(),
+            query_cursor: 20,
+            columns: vec!["id".to_string(), "status".to_string()],
+            rows: vec![
+                vec!["1".to_string(), "OK".to_string()],
+                vec!["2".to_string(), "PENDING".to_string()],
+            ],
+            scroll_v: 0,
+            scroll_h: 0,
+            loading: false,
+            error: None,
+            is_paginated: true,
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            offset: 0,
+            page_size: 100,
+            is_fetching_next_page: false,
+            has_more_rows: false,
+            invalid_query_error: None,
+            selection_anchor: None,
+            filters: vec![("date".to_string(), "2026-08-06".to_string())],
+            total_count: Some(45120),
+            total_count_loading: false,
+            table_count: Some(1234567),
+        };
+
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        let backend = TestBackend::new(140, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 140, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut content = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                content.push_str(buffer.cell((x, y)).unwrap().symbol());
+            }
+            content.push('\n');
+        }
+
+        assert!(
+            content.contains("[date=2026-08-06]"),
+            "Title should contain partition filter: {content}"
+        );
+        assert!(
+            content.contains("of 45,120 total"),
+            "Title should contain total rows: {content}"
+        );
     }
 }

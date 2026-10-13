@@ -478,6 +478,9 @@ mod tests {
             invalid_query_error: None,
             selection_anchor: None,
             filters: Vec::new(),
+            total_count: None,
+            total_count_loading: false,
+            table_count: None,
         }
     }
 

@@ -49,6 +49,9 @@ pub fn populate_table_ddl_results(s: &mut ActionState) {
         invalid_query_error: None,
         selection_anchor: None,
         filters: Vec::new(),
+        total_count: None,
+        total_count_loading: false,
+        table_count: None,
     });
 }
 
@@ -121,6 +124,10 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                         loading: true,
                         error: None,
                         truncated: false,
+                        table_count: None,
+                        table_count_loading: true,
+                        counts_cache: std::collections::HashMap::new(),
+                        current_count_loading: true,
                     });
                     Some(Command::FetchPartitionLevel {
                         catalog: s.catalog.clone(),
@@ -253,12 +260,20 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         _ => None,
                     }
                 } else {
+                    let is_partitions = matches!(
+                        ACTIONS.get(s.selected).map(|(_, _, a)| a),
+                        Some(Action::Partitions)
+                    );
+                    let is_schema = matches!(
+                        ACTIONS.get(s.selected).map(|(_, _, a)| a),
+                        Some(Action::Schema)
+                    );
                     match code {
                         KeyCode::Char('j') | KeyCode::Down => {
-                            if s.selected == 6 {
+                            if is_partitions {
                                 let max_lines = app.partition_tree_lines.len().saturating_sub(1);
                                 app.partition_scroll = (app.partition_scroll + 1).min(max_lines);
-                            } else if s.selected == 7 {
+                            } else if is_schema {
                                 let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
                                 app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
                             } else if let Some(ref mut res) = s.results {
@@ -271,9 +286,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('k') | KeyCode::Up => {
-                            if s.selected == 6 {
+                            if is_partitions {
                                 app.partition_scroll = app.partition_scroll.saturating_sub(1);
-                            } else if s.selected == 7 {
+                            } else if is_schema {
                                 app.schema_scroll = app.schema_scroll.saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {
                                 res.scroll_v = res.scroll_v.saturating_sub(1);
@@ -307,9 +322,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('g') => {
-                            if s.selected == 6 {
+                            if is_partitions {
                                 app.partition_scroll = 0;
-                            } else if s.selected == 7 {
+                            } else if is_schema {
                                 app.schema_scroll = 0;
                             } else if let Some(ref mut res) = s.results {
                                 res.scroll_v = 0;
@@ -318,10 +333,10 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('G') => {
-                            if s.selected == 6 {
+                            if is_partitions {
                                 app.partition_scroll =
                                     app.partition_tree_lines.len().saturating_sub(1);
-                            } else if s.selected == 7 {
+                            } else if is_schema {
                                 app.schema_scroll =
                                     app.vertical_schema_cols.len().saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {

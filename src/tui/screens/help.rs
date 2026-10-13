@@ -77,7 +77,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         )),
         Line::from("  v                              Table View Mode (Infinite Scroll grid)"),
         Line::from("  c / i                          Table DDL / Info Schema"),
-        Line::from("  s / n / p                      Show Stats / Row Count / Sample (20 rows)"),
+        Line::from("  s / p                          Show Stats / Sample (20 rows)"),
         Line::from("  P / S                          Partitions Tree / Vertical Schema Inspector"),
         Line::from(""),
         Line::from(Span::styled(

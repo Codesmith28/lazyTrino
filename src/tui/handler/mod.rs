@@ -199,6 +199,14 @@ pub enum AsyncResult {
         column: String,
         result: Result<crate::trino::types::QueryResults, TrinoClientError>,
     },
+    FetchPartitionCount {
+        log_id: usize,
+        catalog: String,
+        schema: String,
+        table: String,
+        filters: Vec<(String, String)>,
+        result: Result<crate::trino::types::QueryResults, TrinoClientError>,
+    },
 }
 
 pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {

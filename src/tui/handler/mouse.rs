@@ -364,7 +364,10 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
         // Right Main Viewer Pane
         let preview_inner_y = search_height + query_height + 1;
 
-        if state.selected == 6 {
+        if matches!(
+            ACTIONS.get(state.selected).map(|(_, _, a)| a),
+            Some(crate::app::Action::Partitions)
+        ) {
             // Action::Partitions
             let mut lines = Vec::new();
             for r in start_row..=end_row {
@@ -376,7 +379,10 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
                 }
             }
             return lines.join("\n");
-        } else if state.selected == 7 {
+        } else if matches!(
+            ACTIONS.get(state.selected).map(|(_, _, a)| a),
+            Some(crate::app::Action::Schema)
+        ) {
             // Action::Schema
             let mut lines = Vec::new();
             for r in start_row..=end_row {
@@ -485,6 +491,9 @@ mod tests {
             invalid_query_error: None,
             selection_anchor: None,
             filters: Vec::new(),
+            total_count: None,
+            total_count_loading: false,
+            table_count: None,
         };
 
         app.clear_mouse_selection();
@@ -520,7 +529,10 @@ mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 6, // Partitions action
+            selected: ACTIONS
+                .iter()
+                .position(|(_, _, a)| *a == crate::app::Action::Partitions)
+                .unwrap(),
             query_buffer: "".to_string(),
             query_cursor: 0,
             results: None,

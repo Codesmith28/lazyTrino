@@ -57,13 +57,25 @@ pub fn show_stats(catalog: &str, schema: &str, table: &str) -> String {
     format!("SHOW STATS FOR {}.{}.{}", q(catalog), q(schema), q(table))
 }
 
-pub fn count(catalog: &str, schema: &str, table: &str) -> String {
+pub fn filtered_count(
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    filters: &[(String, String)],
+) -> String {
+    let where_clause = build_where_clause(filters)
+        .map(|c| format!(" WHERE {c}"))
+        .unwrap_or_default();
     format!(
-        "SELECT COUNT(*) AS total_records FROM {}.{}.{}",
+        "SELECT COUNT(*) AS total_records FROM {}.{}.{}{where_clause}",
         q(catalog),
         q(schema),
         q(table)
     )
+}
+
+pub fn count(catalog: &str, schema: &str, table: &str) -> String {
+    filtered_count(catalog, schema, table, &[])
 }
 
 pub fn sample(catalog: &str, schema: &str, table: &str) -> String {
@@ -263,6 +275,11 @@ mod tests {
         assert_eq!(
             count(catalog, schema, table),
             "SELECT COUNT(*) AS total_records FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\""
+        );
+        let filters = vec![("date".to_string(), "2026-08-06".to_string())];
+        assert_eq!(
+            filtered_count(catalog, schema, table, &filters),
+            "SELECT COUNT(*) AS total_records FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\" WHERE date = '2026-08-06'"
         );
         assert_eq!(
             sample(catalog, schema, table),
