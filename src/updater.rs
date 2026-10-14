@@ -127,17 +127,17 @@ pub fn match_release_asset<'a>(
     })
 }
 
+pub const LOGO_BANNER: &str = r#"  _                      _____     _             
+ | |                    |_   _|   (_)            
+ | | __ _ _____   _ ______| | _ __ _ _ __   ___  
+ | |/ _` |_  / | | |______| || '__| | '_ \ / _ \ 
+ | | (_| |/ /| |_| |      | || |  | | | | | (_) |
+ |_|\__,_/___|\__, |      \_/|_|  |_|_| |_|\___/ 
+               __/ |                             
+              |___/                              "#;
+
 fn print_logo() {
-    println!(
-        "\x1b[1;36m  _                      _____     _             \n \
-         | |                    |_   _|   (_)            \n \
-         | | __ _ _____   _ ______| | _ __ _ _ __   ___  \n \
-         | |/ _` |_  / | | |______| || '__| | '_ \\ / _ \\ \n \
-         | | (_| |/ /| |_| |      | || |  | | | | | (_) |\n \
-         |_|\\__,_/___|\\__, |      \\_/|_|  |_|_| |_|\\___/ \n \
-                       __/ |                             \n \
-                      |___/                              \x1b[0m\n"
-    );
+    print!("\x1b[1;36m{}\x1b[0m\n\n", LOGO_BANNER);
 }
 
 /// Atomically replaces the current binary with the newly downloaded binary.
@@ -487,5 +487,31 @@ mod tests {
         let tag_part = url_with_query.split("/releases/tag/").nth(1).unwrap();
         let cleaned = tag_part.split(['?', '#']).next().unwrap();
         assert_eq!(cleaned, "v1.0.0");
+    }
+
+    #[test]
+    fn test_logo_banner_alignment() {
+        let lines: Vec<&str> = LOGO_BANNER.lines().collect();
+        assert_eq!(lines.len(), 8, "Banner must have exactly 8 lines");
+        assert!(
+            lines[0].starts_with("  _"),
+            "Line 1 must start with 2 spaces"
+        );
+        assert!(
+            lines[1].starts_with(" | |"),
+            "Line 2 must start with 1 space"
+        );
+        assert!(
+            lines[5].starts_with(" |_|"),
+            "Line 6 must start with 1 space"
+        );
+        assert!(
+            lines[6].starts_with("               __/ |"),
+            "Line 7 must preserve leading indentation under y"
+        );
+        assert!(
+            lines[7].starts_with("              |___/"),
+            "Line 8 must preserve leading indentation under y"
+        );
     }
 }
