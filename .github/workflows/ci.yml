@@ -10,8 +10,8 @@ on:
 # Environment optimizations for Rust CI builds
 env:
   CARGO_TERM_COLOR: always
-  # Disable incremental compilation in CI to reduce compiler overhead and prevent cache bloat
-  CARGO_INCREMENTAL: "0"
+  # Enable incremental compilation with rust-cache so only changed code is recompiled
+  CARGO_INCREMENTAL: "1"
 
 permissions:
   contents: write
@@ -231,6 +231,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # ⚡ Cache crates and compiled dependency artifacts keyed by Cargo.lock
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
       - name: Build and Upload Rust Binary
         uses: taiki-e/upload-rust-binary-action@v1
         with:
@@ -249,9 +255,13 @@ jobs:
     if: needs.prepare-release.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
       - name: Transition draft release to published
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release edit "${{ needs.prepare-release.outputs.tag }}" --draft=false --latest
           echo "Release ${{ needs.prepare-release.outputs.tag }} published successfully!"
@@ -265,8 +275,12 @@ jobs:
     if: needs.prepare-release.outputs.should_release == 'true' && failure()
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
       - name: Delete draft release and tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release delete "${{ needs.prepare-release.outputs.tag }}" --yes --cleanup-tag || true
