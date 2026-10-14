@@ -3,8 +3,6 @@ name: CI/CD
 on:
   push:
     branches: [ "main", "master" ]
-    tags:
-      - 'v*'
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
@@ -17,14 +15,21 @@ env:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
+  # ==========================================================================
+  # 1. PULL REQUEST CHECKS
+  #    - Runs on PRs only (never re-runs on push to main after merge)
+  #    - Convention:
+  #        • doc     => docs only: fast-passes in ~2s (skips compiler/test suite)
+  #        • Release => big release: verifies += 0.1.x minor bump & runs full tests
+  #        • none    => patch release: default, verifies += 0.0.1 bump (if bumped) & runs full tests
+  # ==========================================================================
   check-and-test:
     name: Check & Test
     if: >-
-      !contains(github.event.head_commit.message, '[skip ci]') &&
-      !contains(github.event.head_commit.message, '[ci skip]') &&
-      !contains(github.event.head_commit.message, '[no ci]') &&
+      (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') &&
       !contains(github.event.pull_request.title, '[skip ci]') &&
       !contains(github.event.pull_request.title, '[ci skip]') &&
       !contains(github.event.pull_request.title, '[no ci]') &&
@@ -33,78 +38,177 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # ⚡ Inspect PR title convention: doc | Release | none (patch)
+      - name: Inspect PR title convention
+        id: pr-intent
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          LOWER_TITLE=$(echo "$PR_TITLE" | tr '[:upper:]' '[:lower:]')
+          echo "Inspecting PR Title: $PR_TITLE"
+
+          if echo "$LOWER_TITLE" | grep -qE '(^|\s|\[)(doc|docs)(:|\s|\])'; then
+            echo "Convention detected: doc (documentation only)"
+            echo "kind=doc" >> "$GITHUB_OUTPUT"
+          elif echo "$LOWER_TITLE" | grep -qE '(\b|\[)release(\b|\]|:)'; then
+            echo "Convention detected: Release (big release)"
+            echo "kind=release" >> "$GITHUB_OUTPUT"
+          else
+            echo "Convention detected: none (patch release default)"
+            echo "kind=patch" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 🏷️ Validate version bump against convention
+      - name: Validate version bump
+        if: steps.pr-intent.outputs.kind != 'doc'
+        run: |
+          BASE_REF="origin/${{ github.base_ref || 'main' }}"
+          git fetch origin "${{ github.base_ref || 'main' }}" --depth=1 || true
+
+          BASE_VERSION=$(git show "${BASE_REF}:Cargo.toml" 2>/dev/null | grep '^version =' | head -n1 | cut -d'"' -f2 || true)
+          PR_VERSION=$(grep '^version =' Cargo.toml | head -n1 | cut -d'"' -f2)
+
+          echo "Base branch version: ${BASE_VERSION:-unknown}"
+          echo "PR branch version:   $PR_VERSION"
+
+          if [ -z "$BASE_VERSION" ]; then
+            echo "Could not resolve base version from $BASE_REF, skipping check."
+            exit 0
+          fi
+
+          IFS='.' read -r B_MAJ B_MIN B_PAT <<< "$BASE_VERSION"
+          IFS='.' read -r P_MAJ P_MIN P_PAT <<< "$PR_VERSION"
+
+          EXPECTED_PATCH="${B_MAJ}.${B_MIN}.$((B_PAT + 1))"
+          EXPECTED_MINOR="${B_MAJ}.$((B_MIN + 1)).0"
+          EXPECTED_MAJOR="$((B_MAJ + 1)).0.0"
+
+          KIND="${{ steps.pr-intent.outputs.kind }}"
+
+          if [ "$KIND" = "release" ]; then
+            # Release tag => big release (+= 0.1.0 or += 1.0.0)
+            echo "Validating big release bump..."
+            if [ "$PR_VERSION" != "$EXPECTED_MINOR" ] && [ "$PR_VERSION" != "$EXPECTED_MAJOR" ]; then
+              echo "::error::PR is tagged 'Release' (big release), but Cargo.toml version ($PR_VERSION) is not bumped to $EXPECTED_MINOR from base $BASE_VERSION."
+              exit 1
+            fi
+            echo "✅ Valid big release bump: $PR_VERSION"
+          elif [ "$KIND" = "patch" ]; then
+            # none tag => patch release (+= 0.0.1 if version was bumped)
+            if [ "$PR_VERSION" != "$BASE_VERSION" ]; then
+              echo "Version change detected. Validating patch bump..."
+              if [ "$PR_VERSION" != "$EXPECTED_PATCH" ]; then
+                echo "::error::Default PRs are patch releases (+0.0.1). Expected $EXPECTED_PATCH, got $PR_VERSION. If this is a big release, include 'Release' in the PR title."
+                exit 1
+              fi
+              echo "✅ Valid patch bump: $PR_VERSION"
+            else
+              echo "No version bump in Cargo.toml. Standard PR passing without release bump."
+            fi
+          fi
 
       - name: Install Rust toolchain
+        if: steps.pr-intent.outputs.kind != 'doc'
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
-      # ⚡ Fail fast on code formatting errors in ~3 seconds BEFORE downloading/restoring dependency caches
       - name: Check code formatting
+        if: steps.pr-intent.outputs.kind != 'doc'
         run: cargo fmt --check
 
-      # 📦 Cache cargo registry, index, and compiled build artifacts for fast subsequent runs (~20-40s)
       - name: Rust cache
+        if: steps.pr-intent.outputs.kind != 'doc'
         uses: Swatinem/rust-cache@v2
 
       - name: Run clippy
+        if: steps.pr-intent.outputs.kind != 'doc'
         run: cargo clippy -- -D warnings
 
       - name: Run unit tests
+        if: steps.pr-intent.outputs.kind != 'doc'
         run: cargo test --all
 
-  create-release:
-    name: Create GitHub Release
-    needs: check-and-test
-    if: github.event_name != 'pull_request'
+  # ==========================================================================
+  # 2. RELEASE PIPELINE
+  #    - Runs only on push to main (when a PR is merged)
+  #    - Skips doc PRs
+  #    - Releases when Cargo.toml version tag does not exist yet on origin
+  #    - Uses merged PR description as Release Notes
+  #    - Creates a DRAFT release (invisible to public users & install scripts)
+  # ==========================================================================
+  prepare-release:
+    name: Prepare Draft Release
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.tag-info.outputs.tag }}
-      should_release: ${{ steps.tag-info.outputs.should_release }}
+      should_release: ${{ steps.inspect.outputs.should_release }}
+      tag: ${{ steps.inspect.outputs.tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Determine tag and release eligibility
-        id: tag-info
+      - name: Inspect release eligibility
+        id: inspect
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            TAG="${{ github.ref_name }}"
-            echo "Workflow triggered by tag push: $TAG"
-            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-          else
-            VERSION=$(grep '^version =' Cargo.toml | head -n1 | cut -d'"' -f2)
-            TAG="v${VERSION}"
-            echo "Resolved release tag from Cargo.toml: $TAG"
-            if git rev-parse "$TAG" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-              echo "Tag $TAG already exists on origin. Skipping release creation."
-              echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-              echo "should_release=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "Tag $TAG does not exist. Creating and pushing tag to trigger release..."
-              git config user.name "github-actions[bot]"
-              git config user.email "github-actions[bot]@users.noreply.github.com"
-              git tag "$TAG"
-              git push origin "$TAG"
-              echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-              echo "should_release=true" >> "$GITHUB_OUTPUT"
-            fi
+          # 1. Fetch merged PR title and body for the commit
+          PR_JSON=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0] // empty' || true)
+          PR_TITLE=$(echo "$PR_JSON" | jq -r '.title // empty')
+          PR_BODY=$(echo "$PR_JSON" | jq -r '.body // empty')
+          LOWER_TITLE=$(echo "$PR_TITLE" | tr '[:upper:]' '[:lower:]')
+
+          echo "Merged PR title: $PR_TITLE"
+
+          # 2. Skip if doc PR
+          if echo "$LOWER_TITLE" | grep -qE '(^|\s|\[)(doc|docs)(:|\s|\])'; then
+            echo "PR was a doc PR. Skipping release pipeline."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-      - name: Create Release
-        if: steps.tag-info.outputs.should_release == 'true'
-        uses: taiki-e/create-gh-release-action@v1
-        with:
-          ref: refs/tags/${{ steps.tag-info.outputs.tag }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # 3. Resolve version from Cargo.toml
+          VERSION=$(grep '^version =' Cargo.toml | head -n1 | cut -d'"' -f2)
+          TAG="v${VERSION}"
+          echo "Resolved release tag: $TAG"
 
+          # 4. Check if tag already exists on remote (skip if already released)
+          if git rev-parse "$TAG" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists on remote. No new version bump. Skipping release creation."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "New release version detected: $TAG"
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # 5. Create git tag on remote
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+          # 6. Create DRAFT release with PR body as release notes
+          if [ -n "$PR_BODY" ]; then
+            echo "$PR_BODY" > /tmp/release_notes.md
+            gh release create "$TAG" --draft --title "$TAG" -F /tmp/release_notes.md
+          else
+            gh release create "$TAG" --draft --title "$TAG" --generate-notes
+          fi
+
+  # ==========================================================================
+  # 3. BUILD BINARIES & ATTACH TO DRAFT RELEASE
+  # ==========================================================================
   upload-assets:
     name: Build & Upload Release Binaries
-    needs: create-release
-    if: needs.create-release.outputs.should_release == 'true'
+    needs: prepare-release
+    if: needs.prepare-release.outputs.should_release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -133,5 +237,36 @@ jobs:
           bin: lazyTrino
           target: ${{ matrix.target }}
           archive: $bin-$tag-$target
-          ref: refs/tags/${{ needs.create-release.outputs.tag }}
+          ref: refs/tags/${{ needs.prepare-release.outputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ==========================================================================
+  # 4. PUBLISH RELEASE (Atomic: only when all 4 binaries succeed)
+  # ==========================================================================
+  publish-release:
+    name: Publish GitHub Release
+    needs: [prepare-release, upload-assets]
+    if: needs.prepare-release.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Transition draft release to published
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ needs.prepare-release.outputs.tag }}" --draft=false --latest
+          echo "Release ${{ needs.prepare-release.outputs.tag }} published successfully!"
+
+  # ==========================================================================
+  # 5. CLEANUP ON FAILURE
+  # ==========================================================================
+  cleanup-draft-on-failure:
+    name: Cleanup Failed Draft Release
+    needs: [prepare-release, upload-assets]
+    if: needs.prepare-release.outputs.should_release == 'true' && failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete draft release and tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete "${{ needs.prepare-release.outputs.tag }}" --yes --cleanup-tag || true
