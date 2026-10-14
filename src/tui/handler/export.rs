@@ -51,12 +51,23 @@ pub(super) fn copy_results_to_clipboard(app: &mut App) {
         match active_results_state(app).and_then(validate_exportable_state) {
             Ok(state) => {
                 let (cols, rows) = export_visible_data(state);
-                let tsv = rows_to_tsv(&cols, &rows);
-                copy_to_clipboard(&tsv);
-                if state.rows.is_empty() {
-                    "Copied headers to clipboard (TSV)".to_string()
+                let csv = if cols.len() <= 1 {
+                    let mut lines = Vec::with_capacity(rows.len() + 1);
+                    if let Some(c) = cols.first() {
+                        lines.push(c.clone());
+                    }
+                    for r in &rows {
+                        lines.push(r.first().cloned().unwrap_or_default());
+                    }
+                    lines.join("\n")
                 } else {
-                    format!("Copied {} rows to clipboard (TSV)", state.rows.len())
+                    rows_to_csv(&cols, &rows)
+                };
+                copy_to_clipboard(&csv);
+                if state.rows.is_empty() {
+                    "Copied headers to clipboard (CSV)".to_string()
+                } else {
+                    format!("Copied {} rows to clipboard (CSV)", state.rows.len())
                 }
             }
             Err(message) => message,
@@ -130,10 +141,6 @@ fn validate_exportable_state(state: &ResultsState) -> Result<&ResultsState, Stri
 
 pub(crate) fn rows_to_csv(columns: &[String], rows: &[Vec<String>]) -> String {
     rows_to_delimited(columns, rows, ',')
-}
-
-fn rows_to_tsv(columns: &[String], rows: &[Vec<String>]) -> String {
-    rows_to_delimited(columns, rows, '\t')
 }
 
 fn rows_to_delimited(columns: &[String], rows: &[Vec<String>], delimiter: char) -> String {

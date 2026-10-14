@@ -776,6 +776,7 @@ pub enum Mode {
     ColumnModal,
     HelpModal,
     SavedViewsModal,
+    SaveViewPrompt,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1038,12 +1039,19 @@ pub struct HelpModalState {
     pub scroll: usize,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct SaveViewPromptState {
+    pub name_input: String,
+    pub view: crate::saved_views::SavedView,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SavedViewsModalState {
     pub views: Vec<crate::saved_views::SavedView>,
     pub selected: usize,
     pub scroll: usize,
-    pub pending_delete: Option<String>,
+    pub selected_ids: std::collections::HashSet<String>,
+    pub pending_delete_ids: Vec<String>,
 }
 
 impl SavedViewsModalState {
@@ -1053,7 +1061,8 @@ impl SavedViewsModalState {
             views,
             selected: 0,
             scroll: 0,
-            pending_delete: None,
+            selected_ids: std::collections::HashSet::new(),
+            pending_delete_ids: Vec::new(),
         }
     }
 }
@@ -1126,6 +1135,7 @@ pub struct App {
     pub help_modal: Option<HelpModalState>,
     pub help_scroll: usize,
     pub saved_views_modal: Option<SavedViewsModalState>,
+    pub save_view_prompt: Option<SaveViewPromptState>,
 }
 
 impl App {
@@ -1173,6 +1183,7 @@ impl App {
             help_modal: None,
             help_scroll: 0,
             saved_views_modal: None,
+            save_view_prompt: None,
         }
     }
 

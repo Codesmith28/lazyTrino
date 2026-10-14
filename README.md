@@ -178,7 +178,7 @@ When a table is selected, press the corresponding action hotkey:
 | `j` / `k` or `↓` / `↑` | Scroll result table vertically |
 | `<` / `>` | Scroll result table horizontally |
 | `g` / `G` | Jump to top / bottom of loaded results |
-| `y` | Copy current results to clipboard as TSV |
+| `y` | Copy current results to clipboard as CSV |
 | `Y` | Export current results to a CSV file |
 | `q` or `:` | Focus Interactive SQL Query Bar |
 | `Enter` *(Query Bar)* | Execute SQL query |

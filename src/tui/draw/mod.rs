@@ -442,6 +442,9 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
     if let Some(ref modal) = app.saved_views_modal {
         screens::saved_views_modal::render(frame, frame.area(), modal);
     }
+    if let Some(ref prompt) = app.save_view_prompt {
+        screens::saved_views_modal::render_save_prompt(frame, frame.area(), prompt);
+    }
 }
 
 #[cfg(test)]

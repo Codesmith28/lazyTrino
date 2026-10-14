@@ -1546,7 +1546,7 @@ pub mod tests {
         let res = state.results.as_ref().unwrap();
         assert_eq!(res.visual_mode, crate::app::VisualMode::None);
         let toast = app.copied_toast.as_ref().unwrap().0.clone();
-        assert!(toast.contains("2 selected row(s) (TSV)"));
+        assert!(toast.contains("2 selected row(s) (CSV)"));
     }
 
     #[test]
@@ -1642,7 +1642,7 @@ pub mod tests {
         // 'Y' yanks the whole visible row 1
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('Y')));
         let toast = app.copied_toast.as_ref().unwrap().0.clone();
-        assert!(toast.contains("1 visible row(s) (TSV)"));
+        assert!(toast.contains("1 visible row(s) (CSV)"));
     }
 
     #[test]

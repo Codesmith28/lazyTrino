@@ -17,6 +17,27 @@ use crate::tui::handler::{mouse, query};
 
 use super::list::filter_items;
 
+pub fn format_csv_cell(val: &str) -> String {
+    if val.contains(',') || val.contains('"') || val.contains('\n') || val.contains('\r') {
+        format!("\"{}\"", val.replace('"', "\"\""))
+    } else {
+        val.to_string()
+    }
+}
+
+pub fn format_csv_row<'a>(cells: impl IntoIterator<Item = &'a str>) -> String {
+    let cells: Vec<&str> = cells.into_iter().collect();
+    if cells.len() <= 1 {
+        cells.first().copied().unwrap_or("").to_string()
+    } else {
+        cells
+            .into_iter()
+            .map(format_csv_cell)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
 pub fn copy_active_pane_content(app: &mut App) {
     let mut text_to_copy = String::new();
 
@@ -69,14 +90,13 @@ pub fn copy_active_pane_content(app: &mut App) {
                             .vertical_schema_cols
                             .iter()
                             .map(|col| {
-                                format!(
-                                    "{}\t{}\t{}\t{}\t{}",
-                                    col.name,
-                                    col.data_type,
-                                    col.is_nullable,
-                                    col.key_meta,
-                                    col.description
-                                )
+                                format_csv_row([
+                                    col.name.as_str(),
+                                    col.data_type.as_str(),
+                                    col.is_nullable.as_str(),
+                                    col.key_meta.as_str(),
+                                    col.description.as_str(),
+                                ])
                             })
                             .collect::<Vec<_>>()
                             .join("\n");
@@ -118,11 +138,11 @@ pub fn copy_results_selection_or_cell(app: &mut App) {
             let mut lines = Vec::new();
             for r in min_r..=max_r {
                 if let Some(row) = res.rows.get(r) {
-                    let line = vis_cols
-                        .iter()
-                        .map(|(c, _)| row.get(*c).map(|s| s.as_str()).unwrap_or(""))
-                        .collect::<Vec<_>>()
-                        .join("\t");
+                    let line = format_csv_row(
+                        vis_cols
+                            .iter()
+                            .map(|(c, _)| row.get(*c).map(|s| s.as_str()).unwrap_or("")),
+                    );
                     lines.push(line);
                 }
             }
@@ -130,7 +150,7 @@ pub fn copy_results_selection_or_cell(app: &mut App) {
             query::copy_to_clipboard(&text);
             let count = max_r.saturating_sub(min_r) + 1;
             app.copied_toast = Some((
-                format!("Copied {count} selected row(s) (TSV)"),
+                format!("Copied {count} selected row(s) (CSV)"),
                 std::time::Instant::now(),
             ));
             res.exit_visual_mode();
@@ -153,11 +173,11 @@ pub fn copy_results_selection_or_cell(app: &mut App) {
             let mut lines = Vec::new();
             for r in min_r..=max_r {
                 if let Some(row) = res.rows.get(r) {
-                    let line = vis_cols
-                        .iter()
-                        .map(|(c, _)| row.get(*c).map(|s| s.as_str()).unwrap_or(""))
-                        .collect::<Vec<_>>()
-                        .join("\t");
+                    let line = format_csv_row(
+                        vis_cols
+                            .iter()
+                            .map(|(c, _)| row.get(*c).map(|s| s.as_str()).unwrap_or("")),
+                    );
                     lines.push(line);
                 }
             }
@@ -166,7 +186,7 @@ pub fn copy_results_selection_or_cell(app: &mut App) {
             let r_count = max_r.saturating_sub(min_r) + 1;
             let c_count = vis_cols.len();
             app.copied_toast = Some((
-                format!("Copied {r_count}x{c_count} cell block (TSV)"),
+                format!("Copied {r_count}x{c_count} cell block (CSV)"),
                 std::time::Instant::now(),
             ));
             res.exit_visual_mode();
@@ -216,11 +236,11 @@ pub fn yank_whole_row(app: &mut App) {
     let mut lines = Vec::new();
     for r in min_r..=max_r {
         if let Some(row) = res.rows.get(r) {
-            let line = vis_cols
-                .iter()
-                .map(|(c, _)| row.get(*c).map(|s| s.as_str()).unwrap_or(""))
-                .collect::<Vec<_>>()
-                .join("\t");
+            let line = format_csv_row(
+                vis_cols
+                    .iter()
+                    .map(|(c, _)| row.get(*c).map(|s| s.as_str()).unwrap_or("")),
+            );
             lines.push(line);
         }
     }
@@ -228,7 +248,7 @@ pub fn yank_whole_row(app: &mut App) {
     query::copy_to_clipboard(&text);
     let count = max_r.saturating_sub(min_r) + 1;
     app.copied_toast = Some((
-        format!("Copied {count} visible row(s) (TSV)"),
+        format!("Copied {count} visible row(s) (CSV)"),
         std::time::Instant::now(),
     ));
     res.exit_visual_mode();
@@ -240,5 +260,26 @@ pub fn toast_summary(text: &str) -> String {
         format!("{line_count} lines")
     } else {
         text.chars().take(40).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_csv_row_single_col_is_raw() {
+        assert_eq!(format_csv_row(["simple"]), "simple");
+        // Even if single cell has a comma or quotes, single column stays raw as is
+        assert_eq!(format_csv_row(["has, comma"]), "has, comma");
+        assert_eq!(format_csv_row(["\"quotes\""]), "\"quotes\"");
+    }
+
+    #[test]
+    fn test_format_csv_row_multi_col_escapes_commas_and_quotes() {
+        assert_eq!(format_csv_row(["col1", "col2"]), "col1,col2");
+        assert_eq!(format_csv_row(["hello, world", "normal"]), "\"hello, world\",normal");
+        assert_eq!(format_csv_row(["he said \"hi\"", "bye"]), "\"he said \"\"hi\"\"\",bye");
+        assert_eq!(format_csv_row(["line1\nline2", "ok"]), "\"line1\nline2\",ok");
     }
 }

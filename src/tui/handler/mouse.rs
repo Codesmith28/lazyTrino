@@ -20,8 +20,8 @@ use crate::app::*;
 use super::{
     Command,
     navigation::{
-        check_trigger_infinite_scroll, extract_list_labels, get_selected, mod_list_selected,
-        trigger_action,
+        check_trigger_infinite_scroll, clipboard::format_csv_row, extract_list_labels,
+        get_selected, mod_list_selected, trigger_action,
     },
     query::{
         active_query_buffer, active_query_state_mut, copy_to_clipboard, query_bar_layout,
@@ -46,6 +46,14 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
     }
     if app.saved_views_modal.is_some() {
         return crate::tui::handler::saved_views_modal::handle_saved_views_modal_mouse(
+            app,
+            mouse,
+            term_width,
+            term_height,
+        );
+    }
+    if app.save_view_prompt.is_some() {
+        return crate::tui::handler::saved_views_modal::handle_save_view_prompt_mouse(
             app,
             mouse,
             term_width,
@@ -771,14 +779,13 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
                     let idx = (r - (preview_inner_y + 2)) as usize + app.schema_scroll;
                     if idx < app.vertical_schema_cols.len() {
                         let col = &app.vertical_schema_cols[idx];
-                        lines.push(format!(
-                            "{}\t{}\t{}\t{}\t{}",
-                            col.name,
-                            col.data_type,
-                            col.is_nullable,
-                            col.key_meta,
-                            col.description
-                        ));
+                        lines.push(format_csv_row([
+                            col.name.as_str(),
+                            col.data_type.as_str(),
+                            col.is_nullable.as_str(),
+                            col.key_meta.as_str(),
+                            col.description.as_str(),
+                        ]));
                     }
                 }
             }
@@ -855,11 +862,11 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
                     );
 
                 if start_row <= inner.y + 1 && end_row >= inner.y {
-                    let header = sel_cols
-                        .iter()
-                        .map(|&i| res.columns.get(i).map(|s| s.as_str()).unwrap_or(""))
-                        .collect::<Vec<_>>()
-                        .join("\t");
+                    let header = format_csv_row(
+                        sel_cols
+                            .iter()
+                            .map(|&i| res.columns.get(i).map(|s| s.as_str()).unwrap_or("")),
+                    );
                     lines.push(header);
                 }
 
@@ -867,11 +874,11 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
                 for (row_idx, row) in res.rows.iter().enumerate().skip(effective_scroll_v) {
                     let h = row_visual_heights.get(row_idx).copied().unwrap_or(1);
                     if cur_y <= end_row && cur_y + h > start_row {
-                        let row_line = sel_cols
-                            .iter()
-                            .map(|&i| row.get(i).map(|s| s.as_str()).unwrap_or(""))
-                            .collect::<Vec<_>>()
-                            .join("\t");
+                        let row_line = format_csv_row(
+                            sel_cols
+                                .iter()
+                                .map(|&i| row.get(i).map(|s| s.as_str()).unwrap_or("")),
+                        );
                         lines.push(row_line);
                     }
                     cur_y += h;
@@ -1236,7 +1243,7 @@ mod tests {
 
         // Header line (inner.y = 7) and first row (inner.y + 2 = 9)
         let text = extract_selected_text(&app, (menu_x, 7), (menu_x, 9));
-        assert_eq!(text, "id\tstatus\n1\tOK");
+        assert_eq!(text, "id,status\n1,OK");
     }
 
     #[test]
@@ -1778,6 +1785,6 @@ mod tests {
         };
         handle_mouse_sync(&mut app, right_click);
         let toast = app.copied_toast.as_ref().unwrap().0.clone();
-        assert!(toast.contains("cell block (TSV)"));
+        assert!(toast.contains("cell block (CSV)"));
     }
 }
