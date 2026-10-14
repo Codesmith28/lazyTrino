@@ -174,6 +174,9 @@ pub fn handle_pane_focus_keys(app: &mut App, key: KeyEvent) -> bool {
     let is_in_table = matches!(app.screen, Screen::Actions(_));
 
     if is_in_table {
+        if app.active_panel == ActivePanel::MainViewer && (is_h || is_l || is_left || is_right) {
+            return false;
+        }
         if is_h || is_left {
             app.set_active_panel(ActivePanel::MenuPane);
             return true;
@@ -1283,6 +1286,109 @@ pub mod tests {
         actions_keys(&mut app, ctrl_u);
         let Screen::Actions(state) = &app.screen else { panic!() };
         assert_eq!(state.results.as_ref().unwrap().selected_row, 15);
+    }
+
+    #[test]
+    fn test_actions_keys_horizontal_navigation_in_table_view() {
+        let cols: Vec<String> = (0..20).map(|i| format!("col_{i}")).collect();
+        let mut app = sample_app(Screen::Actions(ActionState {
+            selected: 0,
+            results: Some(ResultsState {
+                rows: vec![vec!["val".to_string()]],
+                columns: cols,
+                selected_row: 0,
+                selected_col: 0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        app.active_panel = ActivePanel::MainViewer;
+
+        // 1. Ctrl+Right moves 5 columns right
+        let ctrl_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_right);
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
+
+        // 2. Ctrl+l moves 5 columns right
+        let ctrl_l = KeyEvent::new(KeyCode::Char('l'), crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_l);
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 10);
+
+        // 3. Ctrl+Left moves 5 columns left
+        let ctrl_left = KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_left);
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
+
+        // 4. End jumps to last column (19)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::End));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 19);
+
+        // 5. Home jumps to first column (0)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Home));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+
+        // 6. '$' jumps to last column
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('$')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 19);
+
+        // 7. '0' jumps to first column
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('0')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+
+        // 8. Shift+Right moves 5 columns right
+        let shift_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::SHIFT);
+        actions_keys(&mut app, shift_right);
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
+
+        // 9. 'L' moves 5 columns right
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('L')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 10);
+
+        // 10. 'H' moves 5 columns left
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('H')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
+
+        // 11. Shift+Left moves 5 columns left
+        let shift_left = KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::SHIFT);
+        actions_keys(&mut app, shift_left);
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+
+        // 12. ']' moves 1 column right and '[' moves 1 column left
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char(']')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 1);
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('[')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+
+        // 13. '>' moves 5 columns right and '<' moves 5 columns left
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('<')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+
+        // 14. Test global handle_key_sync with '0' when number_buffer is empty
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>'))); // col 5
+        assert!(app.number_buffer.is_empty());
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('0')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0, "'0' with empty buffer must jump to column 0");
+        assert!(app.number_buffer.is_empty(), "number_buffer must remain empty when '0' is pressed alone");
     }
 }
 

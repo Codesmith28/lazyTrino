@@ -300,7 +300,7 @@ pub struct ResultsState {
     pub table_count: Option<usize>,
     pub base_query: Option<String>,
     pub unfiltered_rows: Option<Vec<Vec<String>>>,
-    pub column_filters: HashMap<String, HashSet<String>>,
+    pub column_filters: HashMap<String, ColumnFilter>,
     pub col_distinct_values: HashMap<String, Vec<String>>,
     pub hidden_columns: HashSet<String>,
 }
@@ -443,22 +443,162 @@ pub enum Mode {
     HelpModal,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumericOp {
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    Eq,
+}
+
+impl NumericOp {
+    pub const ALL: [NumericOp; 5] = [
+        NumericOp::Lt,
+        NumericOp::Lte,
+        NumericOp::Gt,
+        NumericOp::Gte,
+        NumericOp::Eq,
+    ];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NumericOp::Lt => "<",
+            NumericOp::Lte => "<=",
+            NumericOp::Gt => ">",
+            NumericOp::Gte => ">=",
+            NumericOp::Eq => "=",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            NumericOp::Lt => "Less than (<)",
+            NumericOp::Lte => "Less than or equal (<=)",
+            NumericOp::Gt => "Greater than (>)",
+            NumericOp::Gte => "Greater than or equal (>=)",
+            NumericOp::Eq => "Equal (=)",
+        }
+    }
+
+    pub fn matches(&self, val: f64, target: f64) -> bool {
+        match self {
+            NumericOp::Lt => val < target,
+            NumericOp::Lte => val <= target,
+            NumericOp::Gt => val > target,
+            NumericOp::Gte => val >= target,
+            NumericOp::Eq => (val - target).abs() < 1e-9 || val == target,
+        }
+    }
+
+    pub fn from_str_prefix(s: &str) -> Option<(NumericOp, &str)> {
+        let s = s.trim_start();
+        if let Some(rest) = s.strip_prefix("<=") {
+            Some((NumericOp::Lte, rest.trim()))
+        } else if let Some(rest) = s.strip_prefix(">=") {
+            Some((NumericOp::Gte, rest.trim()))
+        } else if let Some(rest) = s.strip_prefix("<") {
+            Some((NumericOp::Lt, rest.trim()))
+        } else if let Some(rest) = s.strip_prefix(">") {
+            Some((NumericOp::Gt, rest.trim()))
+        } else if let Some(rest) = s.strip_prefix("==") {
+            Some((NumericOp::Eq, rest.trim()))
+        } else if let Some(rest) = s.strip_prefix("=") {
+            Some((NumericOp::Eq, rest.trim()))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumericFilter {
+    pub op: NumericOp,
+    pub value: f64,
+    pub raw_value: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ColumnFilter {
+    Values(HashSet<String>),
+    Numeric(NumericFilter),
+}
+
+impl From<HashSet<String>> for ColumnFilter {
+    fn from(s: HashSet<String>) -> Self {
+        ColumnFilter::Values(s)
+    }
+}
+
+impl ColumnFilter {
+    pub fn matches(&self, cell_value: &str) -> bool {
+        match self {
+            ColumnFilter::Values(selected) => selected.contains(cell_value),
+            ColumnFilter::Numeric(num) => {
+                let s = cell_value.trim();
+                if s.is_empty() || s.eq_ignore_ascii_case("null") {
+                    return false;
+                }
+                if let Ok(v) = s.parse::<f64>() {
+                    num.op.matches(v, num.value)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilterMode {
+    Values,
+    Numeric,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumericFocus {
+    Operator,
+    Value,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilterModalState {
     pub column_index: usize,
     pub column_name: String,
+    pub is_numeric_col: bool,
+    pub mode: FilterMode,
     pub values: Vec<String>,
     pub selected_values: HashSet<String>,
     pub cursor: usize,
     pub scroll: usize,
     pub search_query: String,
     pub is_searching: bool,
+    pub numeric_op: NumericOp,
+    pub numeric_input: String,
+    pub numeric_focus: NumericFocus,
+    pub numeric_error: Option<String>,
+    pub last_op_char: Option<char>,
 }
 
 impl FilterModalState {
     pub fn filtered_indices(&self) -> Vec<usize> {
         if self.search_query.is_empty() {
             (0..self.values.len()).collect()
+        } else if self.is_numeric_col
+            && let Some((op, target_str)) = NumericOp::from_str_prefix(&self.search_query)
+            && let Ok(target) = target_str.parse::<f64>()
+        {
+            self.values
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| {
+                    v.trim()
+                        .parse::<f64>()
+                        .map(|num| op.matches(num, target))
+                        .unwrap_or(false)
+                })
+                .map(|(i, _)| i)
+                .collect()
         } else {
             let q = self.search_query.to_lowercase();
             self.values
@@ -467,6 +607,50 @@ impl FilterModalState {
                 .filter(|(_, v)| v.to_lowercase().contains(&q))
                 .map(|(i, _)| i)
                 .collect()
+        }
+    }
+
+    pub fn parse_numeric_filter(&self) -> Result<Option<(NumericOp, f64, String)>, String> {
+        let trimmed = self.numeric_input.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        if let Some((op, rest)) = NumericOp::from_str_prefix(trimmed) {
+            let rest_trimmed = rest.trim();
+            if rest_trimmed.is_empty() {
+                return Err("Enter a number after operator (e.g. >= 50)".to_string());
+            }
+            match rest_trimmed.parse::<f64>() {
+                Ok(val) => Ok(Some((op, val, rest_trimmed.to_string()))),
+                Err(_) => Err(format!("Invalid number: '{rest_trimmed}'")),
+            }
+        } else {
+            match trimmed.parse::<f64>() {
+                Ok(val) => Ok(Some((self.numeric_op, val, trimmed.to_string()))),
+                Err(_) => Err(format!("Invalid number: '{trimmed}'")),
+            }
+        }
+    }
+
+    pub fn numeric_matching_count(&self) -> Option<(usize, usize)> {
+        if let Ok(Some((op, target, _))) = self.parse_numeric_filter() {
+            let mut matching = 0;
+            let mut total = 0;
+            for v in &self.values {
+                let s = v.trim();
+                if !s.is_empty()
+                    && !s.eq_ignore_ascii_case("null")
+                    && let Ok(num) = s.parse::<f64>()
+                {
+                    total += 1;
+                    if op.matches(num, target) {
+                        matching += 1;
+                    }
+                }
+            }
+            Some((matching, total))
+        } else {
+            None
         }
     }
 }
@@ -566,6 +750,7 @@ pub struct App {
     pub control_panel_split_pct: u16,
     pub is_dragging_resizer: bool,
     pub is_dragging_query_select: bool,
+    pub is_dragging_h_scrollbar: bool,
     pub query_inspector_scroll: usize,
     pub mouse_selection_anchor: Option<(u16, u16)>,
     pub mouse_selection_current: Option<(u16, u16)>,
@@ -611,6 +796,7 @@ impl App {
             control_panel_split_pct: 40,
             is_dragging_resizer: false,
             is_dragging_query_select: false,
+            is_dragging_h_scrollbar: false,
             query_inspector_scroll: 0,
             mouse_selection_anchor: None,
             mouse_selection_current: None,

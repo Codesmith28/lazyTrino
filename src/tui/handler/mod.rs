@@ -214,6 +214,28 @@ pub enum AsyncResult {
 
 pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     preserve_public_api_symbols();
+
+    // Guard against mode desynchronization: if any modal is currently visible,
+    // key events MUST be handled by that modal and never leak to background panes.
+    if app.filter_modal.is_some() {
+        if app.mode != Mode::FilterModal {
+            app.mode = Mode::FilterModal;
+        }
+        return filter_modal::handle_filter_modal_key(app, key);
+    }
+    if app.column_modal.is_some() {
+        if app.mode != Mode::ColumnModal {
+            app.mode = Mode::ColumnModal;
+        }
+        return column_modal::handle_column_modal_key(app, key);
+    }
+    if app.help_modal.is_some() {
+        if app.mode != Mode::HelpModal {
+            app.mode = Mode::HelpModal;
+        }
+        return help_modal::handle_help_modal_key(app, key);
+    }
+
     match app.mode {
         Mode::HelpModal => return help_modal::handle_help_modal_key(app, key),
         Mode::FilterModal => return filter_modal::handle_filter_modal_key(app, key),
@@ -282,7 +304,7 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     }
 
     if let KeyCode::Char(c) = code
-        && c.is_ascii_digit()
+        && ((c.is_ascii_digit() && c != '0') || (c == '0' && !app.number_buffer.is_empty()))
         && matches!(app.active_panel, ActivePanel::MainViewer)
     {
         navigation::update_number_buffer(app, c);

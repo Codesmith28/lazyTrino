@@ -22,14 +22,19 @@ use ratatui::{
     },
 };
 
-use crate::app::FilterModalState;
+use crate::app::{FilterModalState, FilterMode, NumericOp};
 use crate::tui::theme;
 
 pub fn render(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
-    let modal_width = (area.width * 60 / 100).clamp(40, 80).min(area.width);
-    let max_height = area.height.saturating_sub(4).max(10);
-    let needed_height = (modal.values.len() as u16 + 8).min(max_height);
-    let modal_height = needed_height.clamp(11, 24).min(area.height);
+    let modal_width = (area.width * 60 / 100).clamp(45, 80).min(area.width);
+    let modal_height = match modal.mode {
+        FilterMode::Numeric => 16.min(area.height),
+        FilterMode::Values => {
+            let max_height = area.height.saturating_sub(4).max(10);
+            let needed_height = (modal.values.len() as u16 + if modal.is_numeric_col { 9 } else { 8 }).min(max_height);
+            needed_height.clamp(12, 24).min(area.height)
+        }
+    };
 
     let popup_area = Rect {
         x: area.x + (area.width.saturating_sub(modal_width)) / 2,
@@ -40,12 +45,15 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
 
     frame.render_widget(Clear, popup_area);
 
-    let num_selected = modal.selected_values.len();
-    let num_total = modal.values.len();
-    let title = format!(
-        " Filter Column: {} ({} of {} selected) ",
-        modal.column_name, num_selected, num_total
-    );
+    let title = match modal.mode {
+        FilterMode::Numeric => format!(" Filter Column: {} (Numeric Filter) ", modal.column_name),
+        FilterMode::Values => format!(
+            " Filter Column: {} ({} of {} selected) ",
+            modal.column_name,
+            modal.selected_values.len(),
+            modal.values.len()
+        ),
+    };
 
     let block = Block::default()
         .title(title)
@@ -59,16 +67,194 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
         return;
     }
 
+    match modal.mode {
+        FilterMode::Numeric => render_numeric_mode(frame, inner, modal),
+        FilterMode::Values => render_values_mode(frame, inner, modal),
+    }
+}
+
+fn render_numeric_mode(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
     let chunks = Layout::vertical([
-        Constraint::Length(3), // Dedicated search box
-        Constraint::Min(0),    // Values list
+        Constraint::Length(1), // Tab row
+        Constraint::Length(1), // Spacer
+        Constraint::Length(2), // Operator selector bar
+        Constraint::Length(3), // Value input row
+        Constraint::Length(1), // SQL preview
+        Constraint::Length(1), // Matching statistics
+        Constraint::Min(0),    // Space
         Constraint::Length(1), // Hint area
     ])
-    .split(inner);
+    .split(area);
 
-    let search_area = chunks[0];
-    let list_area = chunks[1];
-    let hint_area = chunks[2];
+    let tab_area = chunks[0];
+    let op_area = chunks[2];
+    let val_area = chunks[3];
+    let preview_area = chunks[4];
+    let stats_area = chunks[5];
+    let hint_area = chunks[7];
+
+    // Tab row
+    let tab_line = Line::from(vec![
+        Span::styled(" [ 1: Distinct Values ] ", theme::muted_style()),
+        Span::styled(" [● 2: Numeric Comparator (<, <=, >, >=, =)] ", theme::warning_bold_style()),
+        Span::styled("  (Tab to switch)", theme::muted_style()),
+    ]);
+    frame.render_widget(Paragraph::new(tab_line), tab_area);
+
+    // Operator row
+    let mut op_spans = vec![
+        Span::styled(" Operator:  ", theme::bold_text_style()),
+    ];
+    for (idx, op) in NumericOp::ALL.iter().enumerate() {
+        if idx > 0 {
+            op_spans.push(Span::raw("  "));
+        }
+        let is_selected = *op == modal.numeric_op;
+        if is_selected {
+            op_spans.push(Span::styled(format!("▶[ {} ]◀", op.as_str()), theme::selection_style()));
+        } else {
+            op_spans.push(Span::styled(format!("[ {} ]", op.as_str()), theme::muted_style()));
+        }
+    }
+    let op_line1 = Line::from(op_spans);
+    let op_line2 = Line::from(vec![
+        Span::styled(" Active:    ", theme::muted_style()),
+        Span::styled(modal.numeric_op.label(), theme::warning_bold_style()),
+        Span::styled("  (←/→ or type operator to change)", theme::muted_style()),
+    ]);
+    frame.render_widget(Paragraph::new(vec![op_line1, op_line2]), op_area);
+
+    // Value input row
+    let val_block = Block::default()
+        .title(" Filter Value / Condition ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::border_style(true));
+    let val_inner = val_block.inner(val_area);
+    frame.render_widget(val_block, val_area);
+
+    let val_line = if modal.numeric_input.is_empty() {
+        Line::from(vec![
+            Span::styled(format!(" [ {} ] ", modal.numeric_op.as_str()), theme::warning_bold_style()),
+            Span::styled("Type number (e.g. 100, 25.5, -5) or condition (e.g. >= 50)... ", theme::muted_style()),
+            Span::styled("█", theme::warning_bold_style()),
+        ])
+    } else {
+        let has_typed_op = NumericOp::from_str_prefix(&modal.numeric_input).is_some();
+        let mut spans = Vec::new();
+        if !has_typed_op {
+            spans.push(Span::styled(format!(" [ {} ] ", modal.numeric_op.as_str()), theme::warning_bold_style()));
+        }
+        spans.push(Span::styled(&modal.numeric_input, theme::bold_text_style()));
+        spans.push(Span::styled("█", theme::warning_bold_style()));
+        Line::from(spans)
+    };
+    frame.render_widget(Paragraph::new(val_line), val_inner);
+
+    // SQL Preview row
+    let preview_line = if let Some(ref err) = modal.numeric_error {
+        Line::from(vec![
+            Span::styled(" ⚠ ", theme::error_bold_style()),
+            Span::styled(err, theme::error_style()),
+        ])
+    } else {
+        match modal.parse_numeric_filter() {
+            Ok(Some((op, _val, raw))) => {
+                Line::from(vec![
+                    Span::styled(" SQL Filter: ", theme::muted_style()),
+                    Span::styled(
+                        format!("\"{}\" {} {}", modal.column_name, op.as_str(), raw),
+                        theme::warning_bold_style(),
+                    ),
+                ])
+            }
+            Ok(None) => {
+                Line::from(vec![
+                    Span::styled(" SQL Filter: ", theme::muted_style()),
+                    Span::styled("(no filter — shows all rows; press Enter to clear)", theme::muted_style()),
+                ])
+            }
+            Err(err) => {
+                Line::from(vec![
+                    Span::styled(" ⚠ ", theme::error_bold_style()),
+                    Span::styled(err, theme::error_style()),
+                ])
+            }
+        }
+    };
+    frame.render_widget(Paragraph::new(preview_line), preview_area);
+
+    // Matching stats row
+    if let Some((matching, total)) = modal.numeric_matching_count() {
+        let pct = if total > 0 {
+            (matching as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+        let stats_line = if matching > 0 {
+            Line::from(vec![
+                Span::styled(" ✔ Matches: ", theme::success_bold_style()),
+                Span::styled(
+                    format!("{matching} of {total} distinct values in loaded rows ({pct:.1}%)"),
+                    theme::success_style(),
+                ),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled(" ⚠ Matches: ", theme::warning_bold_style()),
+                Span::styled(
+                    format!("0 of {total} distinct values in loaded rows (no matching rows)"),
+                    theme::warning_style(),
+                ),
+            ])
+        };
+        frame.render_widget(Paragraph::new(stats_line), stats_area);
+    }
+
+    // Hint area
+    let hint_line = Line::from(vec![
+        Span::styled(" [Enter] ", theme::bold_text_style()),
+        Span::styled("Apply  ", theme::muted_style()),
+        Span::styled(" [Tab] ", theme::bold_text_style()),
+        Span::styled("Values Tab  ", theme::muted_style()),
+        Span::styled(" [←/→] ", theme::bold_text_style()),
+        Span::styled("Operator  ", theme::muted_style()),
+        Span::styled(" [c] ", theme::bold_text_style()),
+        Span::styled("Clear  ", theme::muted_style()),
+        Span::styled(" [Esc] ", theme::bold_text_style()),
+        Span::styled("Cancel", theme::muted_style()),
+    ]);
+    frame.render_widget(Paragraph::new(hint_line), hint_area);
+}
+
+fn render_values_mode(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
+    let (tab_area, search_area, list_area, hint_area) = if modal.is_numeric_col {
+        let chunks = Layout::vertical([
+            Constraint::Length(1), // Tab header
+            Constraint::Length(3), // Dedicated search box
+            Constraint::Min(0),    // Values list
+            Constraint::Length(1), // Hint area
+        ])
+        .split(area);
+        (Some(chunks[0]), chunks[1], chunks[2], chunks[3])
+    } else {
+        let chunks = Layout::vertical([
+            Constraint::Length(3), // Dedicated search box
+            Constraint::Min(0),    // Values list
+            Constraint::Length(1), // Hint area
+        ])
+        .split(area);
+        (None, chunks[0], chunks[1], chunks[2])
+    };
+
+    if let Some(t_area) = tab_area {
+        let tab_line = Line::from(vec![
+            Span::styled(" [● 1: Distinct Values] ", theme::warning_bold_style()),
+            Span::styled(" [ 2: Numeric Comparator (<, <=, >, >=, =) ] ", theme::muted_style()),
+            Span::styled("  (Tab to switch)", theme::muted_style()),
+        ]);
+        frame.render_widget(Paragraph::new(tab_line), t_area);
+    }
 
     let search_title = if modal.is_searching {
         " Search [/] [Typing — Enter/Esc to finish] "
@@ -92,7 +278,14 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
         } else {
             Line::from(vec![
                 Span::styled("/ ", theme::muted_style()),
-                Span::styled("Type / to search values...", theme::muted_style()),
+                Span::styled(
+                    if modal.is_numeric_col {
+                        "Type / to search values or filter (<, <=, >, >=, =)..."
+                    } else {
+                        "Type / to search values..."
+                    },
+                    theme::muted_style(),
+                ),
             ])
         }
     } else {
@@ -102,6 +295,15 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
         ];
         if modal.is_searching {
             spans.push(Span::styled("█", theme::warning_bold_style()));
+        }
+        if modal.is_numeric_col
+            && let Some((op, num_str)) = NumericOp::from_str_prefix(&modal.search_query)
+            && num_str.parse::<f64>().is_ok()
+        {
+            spans.push(Span::styled(
+                format!("  [Filter: {} {} - Enter to apply]", op.as_str(), num_str),
+                theme::warning_bold_style(),
+            ));
         }
         Line::from(spans)
     };
@@ -177,15 +379,95 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
     }
 
     let hint = if modal.is_searching {
-        Line::from(Span::styled(
-            "Type:filter • Enter:done • Esc:cancel • Bksp:del",
-            theme::muted_style(),
-        ))
+        Line::from(vec![
+            Span::styled(" [Typing] ", theme::warning_bold_style()),
+            Span::styled("Enter:done/apply • Esc:clear search • Bksp:del", theme::muted_style()),
+        ])
+    } else if modal.is_numeric_col {
+        Line::from(vec![
+            Span::styled(" [Space] ", theme::bold_text_style()),
+            Span::styled("Toggle  ", theme::muted_style()),
+            Span::styled(" [a] ", theme::bold_text_style()),
+            Span::styled("All/None  ", theme::muted_style()),
+            Span::styled(" [Tab] ", theme::bold_text_style()),
+            Span::styled("Numeric Tab  ", theme::muted_style()),
+            Span::styled(" [/] ", theme::bold_text_style()),
+            Span::styled("Search  ", theme::muted_style()),
+            Span::styled(" [Enter] ", theme::bold_text_style()),
+            Span::styled("Apply  ", theme::muted_style()),
+            Span::styled(" [Esc] ", theme::bold_text_style()),
+            Span::styled("Cancel", theme::muted_style()),
+        ])
     } else {
-        Line::from(Span::styled(
-            "Space:toggle • a:all/none • /:search • Enter:apply • Esc:cancel",
-            theme::muted_style(),
-        ))
+        Line::from(vec![
+            Span::styled(" [Space] ", theme::bold_text_style()),
+            Span::styled("Toggle  ", theme::muted_style()),
+            Span::styled(" [a] ", theme::bold_text_style()),
+            Span::styled("All/None  ", theme::muted_style()),
+            Span::styled(" [/] ", theme::bold_text_style()),
+            Span::styled("Search  ", theme::muted_style()),
+            Span::styled(" [Enter] ", theme::bold_text_style()),
+            Span::styled("Apply  ", theme::muted_style()),
+            Span::styled(" [Esc] ", theme::bold_text_style()),
+            Span::styled("Cancel", theme::muted_style()),
+        ])
     };
     frame.render_widget(Paragraph::new(hint), hint_area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::NumericFocus;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_render_numeric_mode() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let modal = FilterModalState {
+            column_index: 0,
+            column_name: "amount".to_string(),
+            is_numeric_col: true,
+            mode: FilterMode::Numeric,
+            values: vec!["10".to_string(), "20".to_string(), "50".to_string()],
+            selected_values: HashSet::new(),
+            cursor: 0,
+            scroll: 0,
+            search_query: String::new(),
+            is_searching: false,
+            numeric_op: NumericOp::Lt,
+            numeric_input: "25".to_string(),
+            numeric_focus: NumericFocus::Value,
+            numeric_error: None,
+            last_op_char: None,
+        };
+        terminal.draw(|f| render(f, f.area(), &modal)).unwrap();
+    }
+
+    #[test]
+    fn test_render_values_mode_numeric_col() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let modal = FilterModalState {
+            column_index: 0,
+            column_name: "amount".to_string(),
+            is_numeric_col: true,
+            mode: FilterMode::Values,
+            values: vec!["10".to_string(), "20".to_string(), "50".to_string()],
+            selected_values: ["10".to_string()].into_iter().collect(),
+            cursor: 0,
+            scroll: 0,
+            search_query: "< 25".to_string(),
+            is_searching: false,
+            numeric_op: NumericOp::Lt,
+            numeric_input: String::new(),
+            numeric_focus: NumericFocus::Value,
+            numeric_error: None,
+            last_op_char: None,
+        };
+        terminal.draw(|f| render(f, f.area(), &modal)).unwrap();
+    }
 }

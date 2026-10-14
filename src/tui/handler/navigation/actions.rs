@@ -204,6 +204,8 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
 pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
     let code = normalize_key_code(key.code);
     let is_ctrl = key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL);
+    let is_shift = key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT);
+    let is_alt = key.modifiers.contains(crossterm::event::KeyModifiers::ALT);
 
     if !is_ctrl
         && let KeyCode::Char(c) = code
@@ -308,13 +310,13 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
-                        KeyCode::Char('g') => {
+                        KeyCode::Char('g') | KeyCode::Home | KeyCode::Char('0') => {
                             if let Some(dd) = s.drilldown.as_mut() {
                                 dd.selected = 0;
                             }
                             None
                         }
-                        KeyCode::Char('G') => {
+                        KeyCode::Char('G') | KeyCode::End | KeyCode::Char('$') => {
                             if let Some(dd) = s.drilldown.as_mut() {
                                 let depth = dd.depth();
                                 if let Some(items) = dd.levels_cache.get(depth) {
@@ -402,13 +404,41 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
-                        KeyCode::Char('h') | KeyCode::Left => {
+                        KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Left => {
+                            if let Some(ref mut res) = s.results {
+                                let step = if is_ctrl || is_shift || is_alt || code == KeyCode::Char('H') {
+                                    5
+                                } else {
+                                    1
+                                };
+                                for _ in 0..step {
+                                    res.selected_col = res.prev_visible_col();
+                                }
+                            }
+                            None
+                        }
+                        KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Right => {
+                            if let Some(ref mut res) = s.results
+                                && !res.columns.is_empty()
+                            {
+                                let step = if is_ctrl || is_shift || is_alt || code == KeyCode::Char('L') {
+                                    5
+                                } else {
+                                    1
+                                };
+                                for _ in 0..step {
+                                    res.selected_col = res.next_visible_col();
+                                }
+                            }
+                            None
+                        }
+                        KeyCode::Char('[') | KeyCode::Char(',') => {
                             if let Some(ref mut res) = s.results {
                                 res.selected_col = res.prev_visible_col();
                             }
                             None
                         }
-                        KeyCode::Char('l') | KeyCode::Right => {
+                        KeyCode::Char(']') | KeyCode::Char('.') => {
                             if let Some(ref mut res) = s.results
                                 && !res.columns.is_empty()
                             {
@@ -416,13 +446,49 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
-                        KeyCode::Char('<') => {
-                            if at_leaf {
-                                drilldown_go_up(s);
+                        KeyCode::Home | KeyCode::Char('0') => {
+                            if is_partitions {
+                                app.partition_scroll = 0;
+                            } else if is_schema {
+                                app.schema_scroll = 0;
+                            } else if let Some(ref mut res) = s.results {
+                                res.selected_col = res.first_visible_col();
+                                res.scroll_h.set(0);
                             }
                             None
                         }
-                        KeyCode::Char('>') => None,
+                        KeyCode::End | KeyCode::Char('$') => {
+                            if is_partitions {
+                                app.partition_scroll =
+                                    app.partition_tree_lines.len().saturating_sub(1);
+                            } else if is_schema {
+                                app.schema_scroll =
+                                    app.vertical_schema_cols.len().saturating_sub(1);
+                            } else if let Some(ref mut res) = s.results {
+                                res.selected_col = res.last_visible_col();
+                            }
+                            None
+                        }
+                        KeyCode::Char('<') => {
+                            if at_leaf {
+                                drilldown_go_up(s);
+                            } else if let Some(ref mut res) = s.results {
+                                for _ in 0..5 {
+                                    res.selected_col = res.prev_visible_col();
+                                }
+                            }
+                            None
+                        }
+                        KeyCode::Char('>') => {
+                            if let Some(ref mut res) = s.results
+                                && !res.columns.is_empty()
+                            {
+                                for _ in 0..5 {
+                                    res.selected_col = res.next_visible_col();
+                                }
+                            }
+                            None
+                        }
                         KeyCode::Esc => {
                             app.set_active_panel(ActivePanel::MenuPane);
                             None

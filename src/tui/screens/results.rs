@@ -141,6 +141,145 @@ pub fn compute_stats_aggregates(
     )
 }
 
+pub fn compute_column_width(
+    state: &ResultsState,
+    orig_col_idx: usize,
+    col_name: &str,
+    available_width: usize,
+) -> usize {
+    let is_stats = is_stats_table(&state.columns);
+    let max_data = state
+        .rows
+        .iter()
+        .map(|r| {
+            if is_stats && orig_col_idx == 0 && is_stats_summary_row(&state.columns, r) {
+                "Summary".len()
+            } else {
+                r.get(orig_col_idx).map(|v| v.len()).unwrap_or(0)
+            }
+        })
+        .max()
+        .unwrap_or(0);
+    let header_len = if state.column_filters.contains_key(col_name) {
+        col_name.len() + 4
+    } else {
+        col_name.len()
+    };
+    let raw_width = (header_len.max(max_data) as u16).max(8);
+    let max_allowed = (available_width / 2).max(15) as u16;
+    raw_width.min(max_allowed) as usize
+}
+
+pub fn compute_max_scroll_h(state: &ResultsState, available_width: usize) -> usize {
+    let all_vis = state.visible_columns();
+    let col_count = all_vis.len();
+    if col_count == 0 {
+        return 0;
+    }
+    let mut max_scroll_h = col_count.saturating_sub(1);
+    let mut width_from_right = 0;
+    for v_idx in (0..col_count).rev() {
+        let (orig_col_idx, c) = &all_vis[v_idx];
+        let needed = compute_column_width(state, *orig_col_idx, c, available_width) + 2;
+        if width_from_right + needed <= available_width || v_idx == col_count - 1 {
+            width_from_right += needed;
+            max_scroll_h = v_idx;
+        } else {
+            break;
+        }
+    }
+    max_scroll_h
+}
+
+pub fn visible_col_range_indices(
+    state: &ResultsState,
+    available_width: usize,
+    scroll_h: usize,
+) -> (usize, usize) {
+    let all_vis = state.visible_columns();
+    if all_vis.is_empty() {
+        return (0, 0);
+    }
+    let first_vis = scroll_h.min(all_vis.len().saturating_sub(1));
+    let mut cumulative_width = 0;
+    let mut last_vis = first_vis;
+    for (v_idx, (orig_col_idx, c)) in all_vis.iter().enumerate().skip(first_vis) {
+        let needed = compute_column_width(state, *orig_col_idx, c, available_width) + 2;
+        if v_idx == first_vis || cumulative_width + needed <= available_width {
+            cumulative_width += needed;
+            last_vis = v_idx;
+        } else {
+            break;
+        }
+    }
+    (first_vis, last_vis)
+}
+
+pub fn scroll_table_horizontal_right(res: &mut ResultsState, avail_width: usize) {
+    let all_vis = res.visible_columns();
+    if all_vis.is_empty() {
+        return;
+    }
+    let max_scroll_h = compute_max_scroll_h(res, avail_width);
+    let new_scroll_h = (res.scroll_h.get() + 1).min(max_scroll_h);
+    res.scroll_h.set(new_scroll_h);
+
+    let (first_vis_idx, _last_vis_idx) =
+        visible_col_range_indices(res, avail_width, new_scroll_h);
+    let sel_vis_idx = all_vis
+        .iter()
+        .position(|(orig_idx, _)| *orig_idx == res.selected_col)
+        .unwrap_or(0);
+    if sel_vis_idx < first_vis_idx {
+        res.selected_col = all_vis[first_vis_idx].0;
+        res.last_selected_col.set(res.selected_col);
+    }
+}
+
+pub fn scroll_table_horizontal_left(res: &mut ResultsState, avail_width: usize) {
+    let all_vis = res.visible_columns();
+    if all_vis.is_empty() {
+        return;
+    }
+    let new_scroll_h = res.scroll_h.get().saturating_sub(1);
+    res.scroll_h.set(new_scroll_h);
+
+    let (_first_vis_idx, last_vis_idx) =
+        visible_col_range_indices(res, avail_width, new_scroll_h);
+    let sel_vis_idx = all_vis
+        .iter()
+        .position(|(orig_idx, _)| *orig_idx == res.selected_col)
+        .unwrap_or(0);
+    if sel_vis_idx > last_vis_idx {
+        res.selected_col = all_vis[last_vis_idx].0;
+        res.last_selected_col.set(res.selected_col);
+    }
+}
+
+pub fn scroll_table_horizontal_to(res: &mut ResultsState, avail_width: usize, target_scroll_h: usize) {
+    let all_vis = res.visible_columns();
+    if all_vis.is_empty() {
+        return;
+    }
+    let max_scroll_h = compute_max_scroll_h(res, avail_width);
+    let new_scroll_h = target_scroll_h.min(max_scroll_h);
+    res.scroll_h.set(new_scroll_h);
+
+    let (first_vis_idx, last_vis_idx) =
+        visible_col_range_indices(res, avail_width, new_scroll_h);
+    let sel_vis_idx = all_vis
+        .iter()
+        .position(|(orig_idx, _)| *orig_idx == res.selected_col)
+        .unwrap_or(0);
+    if sel_vis_idx < first_vis_idx {
+        res.selected_col = all_vis[first_vis_idx].0;
+        res.last_selected_col.set(res.selected_col);
+    } else if sel_vis_idx > last_vis_idx {
+        res.selected_col = all_vis[last_vis_idx].0;
+        res.last_selected_col.set(res.selected_col);
+    }
+}
+
 pub fn visible_columns_layout(
     state: &ResultsState,
     available_width: usize,
@@ -160,64 +299,39 @@ pub fn visible_columns_layout(
         .unwrap_or(sel_vis_idx);
 
     let h_margin = 2.min(col_count.saturating_sub(1) / 2);
-    let target_vis_idx = if sel_vis_idx > last_sel_vis_idx {
-        (sel_vis_idx + h_margin).min(col_count.saturating_sub(1))
-    } else {
-        sel_vis_idx
-    };
-
     let mut effective_scroll_h = state.scroll_h.get().min(col_count.saturating_sub(1));
-    if sel_vis_idx < last_sel_vis_idx {
-        if sel_vis_idx < effective_scroll_h + h_margin {
-            effective_scroll_h = sel_vis_idx.saturating_sub(h_margin);
-        }
-    } else if sel_vis_idx == last_sel_vis_idx && sel_vis_idx < effective_scroll_h {
-        effective_scroll_h = sel_vis_idx;
-    }
 
-    let is_stats = is_stats_table(&state.columns);
-    let compute_col_width = |orig_col_idx: usize, col_name: &str| -> u16 {
-        let max_data = state
-            .rows
-            .iter()
-            .map(|r| {
-                if is_stats && orig_col_idx == 0 && is_stats_summary_row(&state.columns, r) {
-                    "Summary".len()
+    if sel_vis_idx > last_sel_vis_idx {
+        let target_vis_idx = (sel_vis_idx + h_margin).min(col_count.saturating_sub(1));
+        while effective_scroll_h < sel_vis_idx {
+            let mut width = 0;
+            let mut fits = false;
+            for (v_idx, (orig_col_idx, c)) in all_visible_cols.iter().enumerate().skip(effective_scroll_h) {
+                let needed = compute_column_width(state, *orig_col_idx, c, available_width) + 2;
+                if width + needed <= available_width || width == 0 {
+                    width += needed;
+                    if v_idx == target_vis_idx {
+                        fits = true;
+                        break;
+                    }
                 } else {
-                    r.get(orig_col_idx).map(|v| v.len()).unwrap_or(0)
-                }
-            })
-            .max()
-            .unwrap_or(0);
-        let header_len = if state.column_filters.contains_key(col_name) {
-            col_name.len() + 4
-        } else {
-            col_name.len()
-        };
-        let raw_width = (header_len.max(max_data) as u16).max(8);
-        let max_allowed = (available_width / 2).max(15) as u16;
-        raw_width.min(max_allowed)
-    };
-
-    while effective_scroll_h < sel_vis_idx {
-        let mut width = 0;
-        let mut fits = false;
-        for (v_idx, (orig_col_idx, c)) in all_visible_cols.iter().enumerate().skip(effective_scroll_h) {
-            let needed = compute_col_width(*orig_col_idx, c) as usize + 2;
-            if width + needed <= available_width || width == 0 {
-                width += needed;
-                if v_idx == target_vis_idx {
-                    fits = true;
                     break;
                 }
-            } else {
+            }
+            if fits {
                 break;
             }
+            effective_scroll_h += 1;
         }
-        if fits {
-            break;
-        }
-        effective_scroll_h += 1;
+    } else if sel_vis_idx < last_sel_vis_idx
+        && sel_vis_idx < effective_scroll_h + h_margin
+    {
+        effective_scroll_h = sel_vis_idx.saturating_sub(h_margin);
+    }
+
+    let max_scroll_h = compute_max_scroll_h(state, available_width);
+    if effective_scroll_h > max_scroll_h {
+        effective_scroll_h = max_scroll_h;
     }
 
     let mut cumulative_width = 0;
@@ -225,14 +339,14 @@ pub fn visible_columns_layout(
     let mut col_width_sizes: Vec<usize> = Vec::new();
 
     for (_v_idx, (orig_col_idx, c)) in all_visible_cols.iter().enumerate().skip(effective_scroll_h) {
-        let needed_width = compute_col_width(*orig_col_idx, c);
+        let needed_width = compute_column_width(state, *orig_col_idx, c, available_width);
 
         if visible_cols.is_empty()
-            || cumulative_width + (needed_width as usize) + 2 <= available_width
+            || cumulative_width + needed_width + 2 <= available_width
         {
-            cumulative_width += (needed_width as usize) + 2;
+            cumulative_width += needed_width + 2;
             visible_cols.push((*orig_col_idx, (*c).clone()));
-            col_width_sizes.push(needed_width as usize);
+            col_width_sizes.push(needed_width);
         } else {
             break;
         }
@@ -458,7 +572,10 @@ pub fn hit_test_cell(
         })
         .collect();
 
-    let has_h_scrollbar = state.columns.len() > 1;
+    let has_h_scrollbar = state.visible_columns().len() > 1;
+    if has_h_scrollbar && mouse_row >= inner.y + inner.height.saturating_sub(1) {
+        return None;
+    }
     let table_reserved_rows = if has_h_scrollbar { 3 } else { 2 };
     let viewport_lines = (inner.height as usize).saturating_sub(table_reserved_rows).max(1);
 
@@ -851,9 +968,10 @@ pub fn render(
         );
     }
 
-    if state.columns.len() > 1 {
+    let all_vis_len = state.visible_columns().len();
+    if all_vis_len > 1 {
         let mut h_scroll_state =
-            ScrollbarState::new(state.columns.len().saturating_sub(1)).position(effective_scroll_h);
+            ScrollbarState::new(all_vis_len.saturating_sub(1)).position(effective_scroll_h);
         frame.render_stateful_widget(
             Scrollbar::default()
                 .orientation(ScrollbarOrientation::HorizontalBottom)
@@ -1424,5 +1542,89 @@ mod tests {
             "Horizontal scroll to col 5 must remain at col 5"
         );
         assert_eq!(vis_cols.first().map(|(idx, _)| *idx), Some(5));
+    }
+
+    #[test]
+    fn test_horizontal_scroll_helpers_right_and_left() {
+        let cols: Vec<String> = (0..20).map(|i| format!("column_{i}")).collect();
+        let rows = vec![(0..20).map(|i| format!("value_{i}")).collect()];
+
+        let mut state = ResultsState {
+            columns: cols,
+            rows,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
+            selected_col: 0,
+            selected_row: 0,
+            ..Default::default()
+        };
+
+        let avail_width = 80;
+        let max_scroll = compute_max_scroll_h(&state, avail_width);
+        assert!(max_scroll > 0, "20 columns should require scrolling across 80 width");
+
+        // Scroll right 3 times
+        scroll_table_horizontal_right(&mut state, avail_width);
+        assert_eq!(state.scroll_h.get(), 1);
+        assert_eq!(state.selected_col, 1);
+
+        scroll_table_horizontal_right(&mut state, avail_width);
+        assert_eq!(state.scroll_h.get(), 2);
+        assert_eq!(state.selected_col, 2);
+
+        scroll_table_horizontal_right(&mut state, avail_width);
+        assert_eq!(state.scroll_h.get(), 3);
+        assert_eq!(state.selected_col, 3);
+
+        // Layout rendered at scroll_h = 3 should keep effective_scroll_h at 3
+        let (vis, _, eff_h) = visible_columns_layout(&state, avail_width);
+        assert_eq!(eff_h, 3);
+        assert_eq!(vis.first().map(|(idx, _)| *idx), Some(3));
+
+        // Scroll left 2 times
+        scroll_table_horizontal_left(&mut state, avail_width);
+        assert_eq!(state.scroll_h.get(), 2);
+
+        scroll_table_horizontal_left(&mut state, avail_width);
+        assert_eq!(state.scroll_h.get(), 1);
+
+        let (vis2, _, eff_h2) = visible_columns_layout(&state, avail_width);
+        assert_eq!(eff_h2, 1);
+        assert_eq!(vis2.first().map(|(idx, _)| *idx), Some(1));
+    }
+
+    #[test]
+    fn test_scroll_table_horizontal_to() {
+        let cols: Vec<String> = (0..20).map(|i| format!("column_{i}")).collect();
+        let rows = vec![(0..20).map(|i| format!("value_{i}")).collect()];
+
+        let mut state = ResultsState {
+            columns: cols,
+            rows,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
+            selected_col: 0,
+            selected_row: 0,
+            ..Default::default()
+        };
+
+        let avail_width = 80;
+        let max_scroll = compute_max_scroll_h(&state, avail_width);
+
+        // Jump to index 5
+        scroll_table_horizontal_to(&mut state, avail_width, 5);
+        assert_eq!(state.scroll_h.get(), 5);
+        assert_eq!(state.selected_col, 5);
+
+        // Jump beyond max_scroll_h
+        scroll_table_horizontal_to(&mut state, avail_width, 999);
+        assert_eq!(state.scroll_h.get(), max_scroll);
+        assert!(state.selected_col >= max_scroll);
+
+        // Jump back to 0
+        scroll_table_horizontal_to(&mut state, avail_width, 0);
+        assert_eq!(state.scroll_h.get(), 0);
+        let (_first, last) = visible_col_range_indices(&state, avail_width, 0);
+        assert!(state.selected_col <= last);
     }
 }

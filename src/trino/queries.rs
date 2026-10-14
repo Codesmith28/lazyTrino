@@ -14,6 +14,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::app::ColumnFilter;
+
 fn q(id: &str) -> String {
     format!("\"{}\"", id.trim().replace('"', "\"\""))
 }
@@ -242,7 +244,25 @@ pub fn partitions(catalog: &str, schema: &str, table: &str) -> String {
     )
 }
 
-pub fn format_column_filter_predicate(col: &str, selected_values: &HashSet<String>) -> String {
+pub fn format_column_filter_predicate(col: &str, filter: &ColumnFilter) -> String {
+    let col = col.trim();
+    let col_ref = if col.starts_with('"') || col.contains('(') {
+        col.to_string()
+    } else {
+        q(col)
+    };
+
+    match filter {
+        ColumnFilter::Numeric(num) => {
+            format!("{col_ref} {} {}", num.op.as_str(), num.raw_value)
+        }
+        ColumnFilter::Values(selected_values) => {
+            format_column_filter_values_predicate(col, selected_values)
+        }
+    }
+}
+
+pub fn format_column_filter_values_predicate(col: &str, selected_values: &HashSet<String>) -> String {
     let col = col.trim();
     let col_ref = if col.starts_with('"') || col.contains('(') {
         col.to_string()
@@ -452,7 +472,7 @@ pub fn build_query_with_all_filters(
     base_query: &str,
     all_columns: &[String],
     hidden_columns: &HashSet<String>,
-    column_filters: &HashMap<String, HashSet<String>>,
+    column_filters: &HashMap<String, ColumnFilter>,
     col_distinct_values: &HashMap<String, Vec<String>>,
 ) -> String {
     let mut predicates = Vec::new();
@@ -460,13 +480,20 @@ pub fn build_query_with_all_filters(
     cols.sort();
 
     for col in cols {
-        let selected = &column_filters[col];
-        if let Some(distinct) = col_distinct_values.get(col)
-            && selected.len() == distinct.len()
-        {
-            continue;
+        let filter = &column_filters[col];
+        match filter {
+            ColumnFilter::Values(selected) => {
+                if let Some(distinct) = col_distinct_values.get(col)
+                    && selected.len() == distinct.len()
+                {
+                    continue;
+                }
+                predicates.push(format_column_filter_predicate(col, filter));
+            }
+            ColumnFilter::Numeric(_) => {
+                predicates.push(format_column_filter_predicate(col, filter));
+            }
         }
-        predicates.push(format_column_filter_predicate(col, selected));
     }
 
     let (head, existing_where, tail) = split_sql_clauses(base_query);
@@ -508,7 +535,7 @@ pub fn build_query_with_all_filters(
 
 pub fn build_query_with_column_filters(
     base_query: &str,
-    column_filters: &HashMap<String, HashSet<String>>,
+    column_filters: &HashMap<String, ColumnFilter>,
     col_distinct_values: &HashMap<String, Vec<String>>,
 ) -> String {
     build_query_with_all_filters(
@@ -804,39 +831,77 @@ mod tests {
     fn test_format_column_filter_predicate() {
         let mut set = HashSet::new();
         set.insert("ACTIVE".to_string());
-        assert_eq!(format_column_filter_predicate("status", &set), "\"status\" = 'ACTIVE'");
+        assert_eq!(format_column_filter_predicate("status", &ColumnFilter::Values(set.clone())), "\"status\" = 'ACTIVE'");
 
         set.insert("PENDING".to_string());
-        assert_eq!(format_column_filter_predicate("status", &set), "\"status\" IN ('ACTIVE', 'PENDING')");
+        assert_eq!(format_column_filter_predicate("status", &ColumnFilter::Values(set)), "\"status\" IN ('ACTIVE', 'PENDING')");
 
         let mut num_set = HashSet::new();
         num_set.insert("10".to_string());
         num_set.insert("20".to_string());
-        assert_eq!(format_column_filter_predicate("amount", &num_set), "\"amount\" IN (10, 20)");
+        assert_eq!(format_column_filter_predicate("amount", &ColumnFilter::Values(num_set)), "\"amount\" IN (10, 20)");
 
         let mut null_set = HashSet::new();
         null_set.insert("null".to_string());
-        assert_eq!(format_column_filter_predicate("status", &null_set), "\"status\" IS NULL");
+        assert_eq!(format_column_filter_predicate("status", &ColumnFilter::Values(null_set.clone())), "\"status\" IS NULL");
 
         null_set.insert("ACTIVE".to_string());
         assert_eq!(
-            format_column_filter_predicate("status", &null_set),
+            format_column_filter_predicate("status", &ColumnFilter::Values(null_set)),
             "(\"status\" = 'ACTIVE' OR \"status\" IS NULL)"
         );
 
         let empty_set: HashSet<String> = HashSet::new();
-        assert_eq!(format_column_filter_predicate("status", &empty_set), "1 = 0");
+        assert_eq!(format_column_filter_predicate("status", &ColumnFilter::Values(empty_set)), "1 = 0");
+
+        // Numeric operators: <, <=, >, >=, =
+        use crate::app::{NumericFilter, NumericOp};
+        let lt = ColumnFilter::Numeric(NumericFilter {
+            op: NumericOp::Lt,
+            value: 100.0,
+            raw_value: "100".to_string(),
+        });
+        assert_eq!(format_column_filter_predicate("amount", &lt), "\"amount\" < 100");
+
+        let lte = ColumnFilter::Numeric(NumericFilter {
+            op: NumericOp::Lte,
+            value: 50.5,
+            raw_value: "50.5".to_string(),
+        });
+        assert_eq!(format_column_filter_predicate("amount", &lte), "\"amount\" <= 50.5");
+
+        let gt = ColumnFilter::Numeric(NumericFilter {
+            op: NumericOp::Gt,
+            value: 0.0,
+            raw_value: "0".to_string(),
+        });
+        assert_eq!(format_column_filter_predicate("amount", &gt), "\"amount\" > 0");
+
+        let gte = ColumnFilter::Numeric(NumericFilter {
+            op: NumericOp::Gte,
+            value: 10.0,
+            raw_value: "10".to_string(),
+        });
+        assert_eq!(format_column_filter_predicate("amount", &gte), "\"amount\" >= 10");
+
+        let eq = ColumnFilter::Numeric(NumericFilter {
+            op: NumericOp::Eq,
+            value: 42.0,
+            raw_value: "42".to_string(),
+        });
+        assert_eq!(format_column_filter_predicate("amount", &eq), "\"amount\" = 42");
     }
 
     #[test]
     fn test_build_query_with_column_filters() {
+        use crate::app::{NumericFilter, NumericOp};
         let base_query = "SELECT * FROM \"iceberg\".\"sales\".\"orders\" OFFSET 0 LIMIT 100";
         let mut filters = HashMap::new();
         let mut distinct = HashMap::new();
 
         let mut sel = HashSet::new();
         sel.insert("ACTIVE".to_string());
-        filters.insert("status".to_string(), sel);
+        filters.insert("status".to_string(), ColumnFilter::Values(sel));
         distinct.insert("status".to_string(), vec!["ACTIVE".to_string(), "PENDING".to_string()]);
 
         let sql = build_query_with_column_filters(base_query, &filters, &distinct);
@@ -849,19 +914,25 @@ mod tests {
         let mut all_sel = HashSet::new();
         all_sel.insert("ACTIVE".to_string());
         all_sel.insert("PENDING".to_string());
-        filters.insert("status".to_string(), all_sel);
+        filters.insert("status".to_string(), ColumnFilter::Values(all_sel));
         let sql_all = build_query_with_column_filters(base_query, &filters, &distinct);
         assert_eq!(sql_all, base_query);
 
-        // Query with existing WHERE
+        // Query with existing WHERE and numeric filter
         let base_with_where = "SELECT * FROM tbl WHERE date = '2026-08-06' OFFSET 0 LIMIT 100";
-        let mut sel2 = HashSet::new();
-        sel2.insert("ACTIVE".to_string());
-        filters.insert("status".to_string(), sel2);
-        let sql_where = build_query_with_column_filters(base_with_where, &filters, &distinct);
+        let mut filters2 = HashMap::new();
+        filters2.insert(
+            "amount".to_string(),
+            ColumnFilter::Numeric(NumericFilter {
+                op: NumericOp::Gte,
+                value: 50.0,
+                raw_value: "50".to_string(),
+            }),
+        );
+        let sql_where = build_query_with_column_filters(base_with_where, &filters2, &distinct);
         assert_eq!(
             sql_where,
-            "SELECT * FROM tbl WHERE (date = '2026-08-06') AND (\"status\" = 'ACTIVE') OFFSET 0 LIMIT 100"
+            "SELECT * FROM tbl WHERE (date = '2026-08-06') AND (\"amount\" >= 50) OFFSET 0 LIMIT 100"
         );
     }
 
@@ -889,7 +960,7 @@ mod tests {
         let mut distinct = HashMap::new();
         let mut sel = HashSet::new();
         sel.insert("ACTIVE".to_string());
-        filters.insert("status".to_string(), sel);
+        filters.insert("status".to_string(), ColumnFilter::Values(sel));
         distinct.insert("status".to_string(), vec!["ACTIVE".to_string(), "PENDING".to_string()]);
 
         let sql = build_query_with_all_filters(base_query, &all_cols, &hidden, &filters, &distinct);

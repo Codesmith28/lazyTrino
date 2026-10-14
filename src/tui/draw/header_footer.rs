@@ -57,10 +57,10 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
                         ),
                         ActivePanel::MainViewer => match selected_action {
                             Some(Action::TableView) if state.results.is_some() && state.drilldown.is_some() => Some(
-                                " hjkl:cells  <:up  C:cols  F:filter  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
+                                " hjkl/←→:cells  <:up  C:cols  F:filter  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
                             ),
                             Some(Action::TableView) if state.results.is_some() => Some(
-                                " hjkl:cells  C:cols  F:filter  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
+                                " hjkl/←→:cells  C:cols  F:filter  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
                             ),
                             Some(Action::Partitions) if !app.partition_tree_lines.is_empty() => Some(
                                 " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
@@ -69,7 +69,7 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
                                 " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
                             ),
                             _ if state.results.is_some() => Some(
-                                " hjkl:cells  C:cols  F:filter  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
+                                " hjkl/←→:cells  C:cols  F:filter  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",
                             ),
                             Some(Action::TableView) if state.drilldown.is_some() => Some(
                                 " j/k:move  >/Enter:drill  <:up  Esc:menu  Tab:pane  v/c/i/s/p/P/S:action  ?:help  Ctrl+C:quit ",

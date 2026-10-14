@@ -35,6 +35,19 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
         return None;
     }
 
+    if app.filter_modal.is_some() {
+        return handle_filter_modal_mouse(app, mouse, term_width, term_height);
+    }
+    if app.column_modal.is_some() {
+        return handle_column_modal_mouse(app, mouse, term_width, term_height);
+    }
+    if app.help_modal.is_some() {
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            crate::tui::handler::help_modal::close_help_modal(app);
+        }
+        return None;
+    }
+
     let bottom_y = term_height.saturating_sub(7);
     let is_in_table = matches!(app.screen, Screen::Actions(_));
     let border_pct = if is_in_table {
@@ -95,7 +108,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             app.mouse_selection_current = Some((mouse.column, mouse.row));
             app.is_selecting_text = false;
 
-            if mouse.row < bottom_y && (mouse.column as i32 - border_x as i32).abs() <= 1 {
+            if mouse.row < bottom_y && mouse.column == border_x {
                 app.is_dragging_resizer = true;
             } else {
                 app.is_dragging_resizer = false;
@@ -119,24 +132,88 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     if let Some(inner) = results_table_inner_rect(app, term_width, term_height)
                         && let Screen::Actions(ref mut a) = app.screen
                         && let Some(ref mut res) = a.results
-                        && let Some((row_idx, col_idx)) =
+                    {
+                        let has_h_scrollbar = res.visible_columns().len() > 1;
+                        let is_on_h_scrollbar = has_h_scrollbar
+                            && mouse.row >= inner.y + inner.height.saturating_sub(1)
+                            && mouse.row <= inner.y + inner.height
+                            && mouse.column >= inner.x
+                            && mouse.column < inner.x + inner.width;
+
+                        if is_on_h_scrollbar {
+                            let avail_width = (inner.width as usize).saturating_sub(4).max(1);
+                            let max_scroll_h =
+                                crate::tui::screens::results::compute_max_scroll_h(res, avail_width);
+
+                            if mouse.column <= inner.x + 1 {
+                                crate::tui::screens::results::scroll_table_horizontal_left(
+                                    res,
+                                    avail_width,
+                                );
+                            } else if mouse.column >= inner.x + inner.width.saturating_sub(2) {
+                                crate::tui::screens::results::scroll_table_horizontal_right(
+                                    res,
+                                    avail_width,
+                                );
+                            } else {
+                                let track_start = inner.x + 1;
+                                let track_width = (inner.width as usize).saturating_sub(2).max(1);
+                                let offset = (mouse.column.saturating_sub(track_start) as usize)
+                                    .min(track_width.saturating_sub(1));
+                                let target = (offset * (max_scroll_h + 1)) / track_width;
+                                crate::tui::screens::results::scroll_table_horizontal_to(
+                                    res,
+                                    avail_width,
+                                    target.min(max_scroll_h),
+                                );
+                            }
+                            app.is_dragging_h_scrollbar = true;
+                            app.is_selecting_text = false;
+                            app.mouse_selection_anchor = None;
+                            app.mouse_selection_current = None;
+                        } else if let Some((row_idx, col_idx)) =
                             crate::tui::screens::results::hit_test_cell(
                                 res,
                                 inner,
                                 mouse.column,
                                 mouse.row,
                             )
-                    {
-                        res.selected_row = row_idx;
-                        res.selected_col = col_idx;
-                        res.last_selected_row.set(row_idx);
-                        res.last_selected_col.set(col_idx);
-                        app.clear_mouse_selection();
+                        {
+                            res.selected_row = row_idx;
+                            res.selected_col = col_idx;
+                            res.last_selected_row.set(row_idx);
+                            res.last_selected_col.set(col_idx);
+                            app.clear_mouse_selection();
+                        }
                     }
                 }
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
+            if app.is_dragging_h_scrollbar {
+                if let Some(inner) = results_table_inner_rect(app, term_width, term_height)
+                    && let Screen::Actions(ref mut a) = app.screen
+                    && let Some(ref mut res) = a.results
+                {
+                    let all_vis = res.visible_columns();
+                    if all_vis.len() > 1 {
+                        let avail_width = (inner.width as usize).saturating_sub(4).max(1);
+                        let max_scroll_h =
+                            crate::tui::screens::results::compute_max_scroll_h(res, avail_width);
+                        let track_start = inner.x + 1;
+                        let track_width = (inner.width as usize).saturating_sub(2).max(1);
+                        let offset = (mouse.column.saturating_sub(track_start) as usize)
+                            .min(track_width.saturating_sub(1));
+                        let target = (offset * (max_scroll_h + 1)) / track_width;
+                        crate::tui::screens::results::scroll_table_horizontal_to(
+                            res,
+                            avail_width,
+                            target.min(max_scroll_h),
+                        );
+                    }
+                }
+                return None;
+            }
             if app.is_dragging_query_select {
                 if let Some((query_x, query_y, _, _, inner_w)) =
                     query_bar_layout(app, term_width, term_height)
@@ -172,6 +249,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
         }
         MouseEventKind::Up(MouseButton::Left) => {
             app.is_dragging_resizer = false;
+            app.is_dragging_h_scrollbar = false;
             if app.is_dragging_query_select {
                 app.is_dragging_query_select = false;
                 if let Some(state) = active_query_state_mut(app)
@@ -207,6 +285,32 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 return None;
             }
             let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
+            let alt = mouse.modifiers.contains(KeyModifiers::ALT);
+            let ctrl = mouse.modifiers.contains(KeyModifiers::CONTROL);
+            let table_rect = results_table_inner_rect(app, term_width, term_height);
+            let avail_width = table_rect
+                .map(|r| (r.width as usize).saturating_sub(4).max(1))
+                .unwrap_or(80);
+
+            let is_on_h_scrollbar = table_rect
+                .map(|inner| {
+                    mouse.row >= inner.y + inner.height.saturating_sub(2)
+                        && mouse.row <= inner.y + inner.height
+                        && mouse.column >= inner.x
+                        && mouse.column < inner.x + inner.width
+                })
+                .unwrap_or(false);
+
+            let is_on_header = table_rect
+                .map(|inner| {
+                    mouse.row <= inner.y + 1
+                        && mouse.column >= inner.x
+                        && mouse.column < inner.x + inner.width
+                })
+                .unwrap_or(false);
+
+            let is_horizontal = shift || alt || ctrl || is_on_h_scrollbar || is_on_header;
+
             if is_in_table {
                 let selected_idx = match &app.screen {
                     Screen::Actions(a) => a.selected,
@@ -232,15 +336,8 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 } else if let Screen::Actions(ref mut a) = app.screen
                     && let Some(ref mut res) = a.results
                 {
-                    if shift {
-                        if !res.columns.is_empty() {
-                            let new_h = (res.scroll_h.get() + 1).min(res.columns.len().saturating_sub(1));
-                            res.scroll_h.set(new_h);
-                            if res.selected_col < new_h {
-                                res.selected_col = new_h;
-                                res.last_selected_col.set(new_h);
-                            }
-                        }
+                    if is_horizontal {
+                        crate::tui::screens::results::scroll_table_horizontal_right(res, avail_width);
                     } else if !res.rows.is_empty() {
                         let delta = 3;
                         let new_scroll_v = (res.scroll_v.get() + delta).min(res.rows.len().saturating_sub(1));
@@ -270,9 +367,35 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 return None;
             }
             let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
-            let view_rows = results_table_inner_rect(app, term_width, term_height)
+            let alt = mouse.modifiers.contains(KeyModifiers::ALT);
+            let ctrl = mouse.modifiers.contains(KeyModifiers::CONTROL);
+            let table_rect = results_table_inner_rect(app, term_width, term_height);
+            let view_rows = table_rect
                 .map(|r| (r.height as usize).saturating_sub(3).max(1))
                 .unwrap_or(15);
+            let avail_width = table_rect
+                .map(|r| (r.width as usize).saturating_sub(4).max(1))
+                .unwrap_or(80);
+
+            let is_on_h_scrollbar = table_rect
+                .map(|inner| {
+                    mouse.row >= inner.y + inner.height.saturating_sub(2)
+                        && mouse.row <= inner.y + inner.height
+                        && mouse.column >= inner.x
+                        && mouse.column < inner.x + inner.width
+                })
+                .unwrap_or(false);
+
+            let is_on_header = table_rect
+                .map(|inner| {
+                    mouse.row <= inner.y + 1
+                        && mouse.column >= inner.x
+                        && mouse.column < inner.x + inner.width
+                })
+                .unwrap_or(false);
+
+            let is_horizontal = shift || alt || ctrl || is_on_h_scrollbar || is_on_header;
+
             if is_in_table {
                 let selected_idx = match &app.screen {
                     Screen::Actions(a) => a.selected,
@@ -291,8 +414,8 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 } else if let Screen::Actions(ref mut a) = app.screen
                     && let Some(ref mut res) = a.results
                 {
-                    if shift {
-                        res.scroll_h.set(res.scroll_h.get().saturating_sub(1));
+                    if is_horizontal {
+                        crate::tui::screens::results::scroll_table_horizontal_left(res, avail_width);
                     } else {
                         let delta = 3;
                         let new_scroll_v = res.scroll_v.get().saturating_sub(delta);
@@ -306,6 +429,28 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 }
             } else if let Some(s) = get_selected(&app.screen) {
                 mod_list_selected(&mut app.screen, s.saturating_sub(1));
+            }
+        }
+        MouseEventKind::ScrollRight => {
+            let avail_width = results_table_inner_rect(app, term_width, term_height)
+                .map(|r| (r.width as usize).saturating_sub(4).max(1))
+                .unwrap_or(80);
+            if is_in_table
+                && let Screen::Actions(ref mut a) = app.screen
+                && let Some(ref mut res) = a.results
+            {
+                crate::tui::screens::results::scroll_table_horizontal_right(res, avail_width);
+            }
+        }
+        MouseEventKind::ScrollLeft => {
+            let avail_width = results_table_inner_rect(app, term_width, term_height)
+                .map(|r| (r.width as usize).saturating_sub(4).max(1))
+                .unwrap_or(80);
+            if is_in_table
+                && let Screen::Actions(ref mut a) = app.screen
+                && let Some(ref mut res) = a.results
+            {
+                crate::tui::screens::results::scroll_table_horizontal_left(res, avail_width);
             }
         }
         _ => {}
@@ -640,6 +785,175 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
     String::new()
 }
 
+fn handle_filter_modal_mouse(
+    app: &mut App,
+    mouse: MouseEvent,
+    term_width: u16,
+    term_height: u16,
+) -> Option<Command> {
+    let modal = app.filter_modal.as_ref()?;
+    let modal_width = (term_width * 60 / 100).clamp(45, 80).min(term_width);
+    let modal_height = match modal.mode {
+        FilterMode::Numeric => 15.min(term_height),
+        FilterMode::Values => {
+            let max_height = term_height.saturating_sub(4).max(10);
+            let needed_height = (modal.values.len() as u16 + if modal.is_numeric_col { 9 } else { 8 }).min(max_height);
+            needed_height.clamp(12, 24).min(term_height)
+        }
+    };
+    let popup_area = Rect {
+        x: (term_width.saturating_sub(modal_width)) / 2,
+        y: (term_height.saturating_sub(modal_height)) / 2,
+        width: modal_width,
+        height: modal_height,
+    };
+
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            if mouse.column < popup_area.x
+                || mouse.column >= popup_area.x + popup_area.width
+                || mouse.row < popup_area.y
+                || mouse.row >= popup_area.y + popup_area.height
+            {
+                // Click outside modal dismisses it cleanly
+                app.filter_modal = None;
+                app.mode = Mode::Normal;
+                return None;
+            }
+
+            // Click inside modal: guarantee mode remains FilterModal
+            app.mode = Mode::FilterModal;
+            let rel_x = mouse.column.saturating_sub(popup_area.x);
+            let rel_y = mouse.row.saturating_sub(popup_area.y);
+
+            let modal = app.filter_modal.as_mut()?;
+            // Tab row: row 1
+            if rel_y == 1 && modal.is_numeric_col {
+                if rel_x < popup_area.width / 2 {
+                    modal.mode = FilterMode::Values;
+                } else {
+                    modal.mode = FilterMode::Numeric;
+                }
+                return None;
+            }
+
+            // Footer row: apply or cancel
+            if rel_y >= popup_area.height.saturating_sub(2) {
+                if rel_x < 15 {
+                    return crate::tui::handler::filter_modal::apply_filter_modal(app);
+                } else if rel_x >= popup_area.width.saturating_sub(15) {
+                    app.filter_modal = None;
+                    app.mode = Mode::Normal;
+                    return None;
+                }
+            }
+
+            if modal.mode == FilterMode::Numeric {
+                // Operator row is at rel_y == 3
+                if rel_y == 3 {
+                    let ops = NumericOp::ALL;
+                    if (12..18).contains(&rel_x) {
+                        modal.numeric_op = ops[0];
+                    } else if (18..26).contains(&rel_x) {
+                        modal.numeric_op = ops[1];
+                    } else if (26..34).contains(&rel_x) {
+                        modal.numeric_op = ops[2];
+                    } else if (34..42).contains(&rel_x) {
+                        modal.numeric_op = ops[3];
+                    } else if (42..50).contains(&rel_x) {
+                        modal.numeric_op = ops[4];
+                    }
+                    modal.numeric_focus = NumericFocus::Value;
+                } else if (4..=6).contains(&rel_y) {
+                    modal.numeric_focus = NumericFocus::Value;
+                }
+            } else if modal.mode == FilterMode::Values {
+                let search_box_y = if modal.is_numeric_col { 2 } else { 1 };
+                if rel_y >= search_box_y && rel_y <= search_box_y + 2 {
+                    modal.is_searching = true;
+                } else {
+                    let list_start_y = search_box_y + 3;
+                    if rel_y >= list_start_y && rel_y < popup_area.height.saturating_sub(2) {
+                        let item_offset = (rel_y - list_start_y) as usize;
+                        let matched = modal.filtered_indices();
+                        let target_idx = modal.scroll + item_offset;
+                        if target_idx < matched.len() {
+                            modal.cursor = target_idx;
+                            let orig_idx = matched[target_idx];
+                            if let Some(val) = modal.values.get(orig_idx).cloned() {
+                                if modal.selected_values.contains(&val) {
+                                    modal.selected_values.remove(&val);
+                                } else {
+                                    modal.selected_values.insert(val);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        }
+        MouseEventKind::ScrollUp => {
+            if let Some(ref mut m) = app.filter_modal
+                && m.mode == FilterMode::Values
+            {
+                m.cursor = m.cursor.saturating_sub(1);
+                if m.cursor < m.scroll {
+                    m.scroll = m.cursor;
+                }
+            }
+            None
+        }
+        MouseEventKind::ScrollDown => {
+            if let Some(ref mut m) = app.filter_modal
+                && m.mode == FilterMode::Values
+            {
+                let matched_len = m.filtered_indices().len();
+                if matched_len > 0 {
+                    m.cursor = (m.cursor + 1).min(matched_len - 1);
+                    if m.cursor >= m.scroll + 10 {
+                        m.scroll = m.cursor.saturating_sub(9);
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn handle_column_modal_mouse(
+    app: &mut App,
+    mouse: MouseEvent,
+    term_width: u16,
+    term_height: u16,
+) -> Option<Command> {
+    let modal_width = (term_width * 60 / 100).clamp(45, 80).min(term_width);
+    let modal_height = 20.min(term_height);
+    let popup_area = Rect {
+        x: (term_width.saturating_sub(modal_width)) / 2,
+        y: (term_height.saturating_sub(modal_height)) / 2,
+        width: modal_width,
+        height: modal_height,
+    };
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            if mouse.column < popup_area.x
+                || mouse.column >= popup_area.x + popup_area.width
+                || mouse.row < popup_area.y
+                || mouse.row >= popup_area.y + popup_area.height
+            {
+                app.column_modal = None;
+                app.mode = Mode::Normal;
+                return None;
+            }
+            app.mode = Mode::ColumnModal;
+            None
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -960,6 +1274,158 @@ mod tests {
         if let Screen::Actions(a) = &app.screen {
             let dd = a.drilldown.as_ref().unwrap();
             assert_eq!(dd.selected, 0, "ScrollUp in drilldown must retreat selected by 3");
+        }
+    }
+
+    #[test]
+    fn test_mouse_horizontal_scroll_in_table_view() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        let cols: Vec<String> = (0..20).map(|i| format!("column_{i}")).collect();
+        let rows = vec![(0..20).map(|i| format!("val_{i}")).collect()];
+
+        app.screen = Screen::Actions(ActionState {
+            catalog: "system".to_string(),
+            schema: "runtime".to_string(),
+            table: "nodes".to_string(),
+            selected: 0,
+            drilldown: None,
+            results: Some(ResultsState {
+                columns: cols,
+                rows,
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
+                selected_col: 0,
+                selected_row: 0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        // 1. Shift + ScrollDown moves right
+        let shift_scroll_down = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::SHIFT,
+        };
+        handle_mouse_sync(&mut app, shift_scroll_down);
+
+        if let Screen::Actions(a) = &app.screen {
+            let res = a.results.as_ref().unwrap();
+            assert_eq!(res.scroll_h.get(), 1, "Shift+ScrollDown should advance scroll_h to 1");
+            assert_eq!(res.selected_col, 1);
+        }
+
+        // 2. ScrollRight moves right
+        let scroll_right = MouseEvent {
+            kind: MouseEventKind::ScrollRight,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, scroll_right);
+
+        if let Screen::Actions(a) = &app.screen {
+            let res = a.results.as_ref().unwrap();
+            assert_eq!(res.scroll_h.get(), 2, "ScrollRight should advance scroll_h to 2");
+            assert_eq!(res.selected_col, 2);
+        }
+
+        // 3. Shift + ScrollUp moves left
+        let shift_scroll_up = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::SHIFT,
+        };
+        handle_mouse_sync(&mut app, shift_scroll_up);
+
+        if let Screen::Actions(a) = &app.screen {
+            let res = a.results.as_ref().unwrap();
+            assert_eq!(res.scroll_h.get(), 1, "Shift+ScrollUp should retreat scroll_h to 1");
+        }
+
+        // 4. ScrollLeft moves left
+        let scroll_left = MouseEvent {
+            kind: MouseEventKind::ScrollLeft,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, scroll_left);
+
+        if let Screen::Actions(a) = &app.screen {
+            let res = a.results.as_ref().unwrap();
+            assert_eq!(res.scroll_h.get(), 0, "ScrollLeft should retreat scroll_h to 0");
+        }
+
+        let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
+        if let Some(inner) = results_table_inner_rect(&app, term_w, term_h) {
+            let scrollbar_row = inner.y + inner.height - 1;
+
+            // 5. Mouse wheel scroll over bottom scrollbar row (without Shift modifier) scrolls horizontally
+            let wheel_on_scrollbar = MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: inner.x + 5,
+                row: scrollbar_row,
+                modifiers: KeyModifiers::NONE,
+            };
+            handle_mouse_sync(&mut app, wheel_on_scrollbar);
+            if let Screen::Actions(a) = &app.screen {
+                let res = a.results.as_ref().unwrap();
+                assert_eq!(res.scroll_h.get(), 1, "Wheel over scrollbar row must scroll right");
+            }
+
+            // 6. Mouse wheel scroll over header row (without Shift modifier) scrolls horizontally
+            let wheel_on_header = MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: inner.x + 5,
+                row: inner.y,
+                modifiers: KeyModifiers::NONE,
+            };
+            handle_mouse_sync(&mut app, wheel_on_header);
+            if let Screen::Actions(a) = &app.screen {
+                let res = a.results.as_ref().unwrap();
+                assert_eq!(res.scroll_h.get(), 2, "Wheel over header row must scroll right");
+            }
+
+            // 7. Clicking right arrow ► on horizontal scrollbar
+            let click_right_arrow = MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: inner.x + inner.width - 1,
+                row: scrollbar_row,
+                modifiers: KeyModifiers::NONE,
+            };
+            handle_mouse_sync(&mut app, click_right_arrow);
+            assert!(app.is_dragging_h_scrollbar);
+            if let Screen::Actions(a) = &app.screen {
+                let res = a.results.as_ref().unwrap();
+                assert_eq!(res.scroll_h.get(), 3, "Clicking ► must advance scroll_h");
+            }
+
+            // 8. Clicking left arrow ◄ on horizontal scrollbar
+            let click_left_arrow = MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: inner.x,
+                row: scrollbar_row,
+                modifiers: KeyModifiers::NONE,
+            };
+            handle_mouse_sync(&mut app, click_left_arrow);
+            assert!(app.is_dragging_h_scrollbar);
+            if let Screen::Actions(a) = &app.screen {
+                let res = a.results.as_ref().unwrap();
+                assert_eq!(res.scroll_h.get(), 2, "Clicking ◄ must retreat scroll_h");
+            }
+
+            // 9. Mouse up releases scrollbar dragging
+            let mouse_up = MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: inner.x,
+                row: scrollbar_row,
+                modifiers: KeyModifiers::NONE,
+            };
+            handle_mouse_sync(&mut app, mouse_up);
+            assert!(!app.is_dragging_h_scrollbar, "Mouse up must reset is_dragging_h_scrollbar");
         }
     }
 }
