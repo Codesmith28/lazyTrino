@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeMap, HashSet};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NestedType {
@@ -147,10 +147,7 @@ pub fn build_sql_expression(parent_col: &str, path: &[String], nested_type: Nest
 }
 
 /// Extracts all nested paths discovered from sample values of a column.
-pub fn discover_nested_paths(
-    values: &[String],
-    nested_type: NestedType,
-) -> Vec<Vec<String>> {
+pub fn discover_nested_paths(values: &[String], nested_type: NestedType) -> Vec<Vec<String>> {
     let mut discovered: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     for raw in values {
@@ -167,7 +164,9 @@ pub fn discover_nested_paths(
             }
             NestedType::Map => {
                 // Could be JSON map or Trino {k=v} map
-                if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(raw) {
+                if let Ok(serde_json::Value::Object(map)) =
+                    serde_json::from_str::<serde_json::Value>(raw)
+                {
                     for key in map.keys() {
                         let path = vec![key.clone()];
                         discovered.entry(key.clone()).or_insert(path);
@@ -181,8 +180,14 @@ pub fn discover_nested_paths(
                 }
             }
             NestedType::Row => {
-                if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(raw) {
-                    collect_json_paths(&serde_json::Value::Object(map), Vec::new(), &mut discovered);
+                if let Ok(serde_json::Value::Object(map)) =
+                    serde_json::from_str::<serde_json::Value>(raw)
+                {
+                    collect_json_paths(
+                        &serde_json::Value::Object(map),
+                        Vec::new(),
+                        &mut discovered,
+                    );
                 } else if raw.starts_with('{') && raw.ends_with('}') {
                     let inner = &raw[1..raw.len() - 1];
                     for pair in parse_trino_map_pairs(inner) {
@@ -207,7 +212,9 @@ fn collect_json_paths(
             let mut next_path = current_path.clone();
             next_path.push(k.clone());
             let full_key = next_path.join(".");
-            discovered.entry(full_key).or_insert_with(|| next_path.clone());
+            discovered
+                .entry(full_key)
+                .or_insert_with(|| next_path.clone());
 
             // Recurse into nested objects up to depth 3
             if next_path.len() < 3 && child.is_object() {
@@ -255,7 +262,11 @@ fn parse_trino_map_pairs(inner: &str) -> Vec<(String, String)> {
                 in_value = true;
             }
             ',' if !in_quotes && paren_depth == 0 => {
-                let k = current_key.trim().trim_matches('\'').trim_matches('"').to_string();
+                let k = current_key
+                    .trim()
+                    .trim_matches('\'')
+                    .trim_matches('"')
+                    .to_string();
                 let v = current_val.trim().to_string();
                 if !k.is_empty() {
                     pairs.push((k, v));
@@ -274,7 +285,11 @@ fn parse_trino_map_pairs(inner: &str) -> Vec<(String, String)> {
         }
     }
 
-    let k = current_key.trim().trim_matches('\'').trim_matches('"').to_string();
+    let k = current_key
+        .trim()
+        .trim_matches('\'')
+        .trim_matches('"')
+        .to_string();
     let v = current_val.trim().to_string();
     if !k.is_empty() {
         pairs.push((k, v));
@@ -446,7 +461,10 @@ pub fn toggle_tree_node_selection(
         if is_selected {
             selected_set.remove(&node.name);
             // Check if parent should be deselected
-            for parent in tree.iter().filter(|n| n.is_parent && n.children.contains(&node.name)) {
+            for parent in tree
+                .iter()
+                .filter(|n| n.is_parent && n.children.contains(&node.name))
+            {
                 if !parent.children.iter().any(|c| selected_set.contains(c)) {
                     selected_set.remove(&parent.name);
                 }
@@ -454,7 +472,10 @@ pub fn toggle_tree_node_selection(
         } else {
             selected_set.insert(node.name.clone());
             // Check if parent should be selected
-            for parent in tree.iter().filter(|n| n.is_parent && n.children.contains(&node.name)) {
+            for parent in tree
+                .iter()
+                .filter(|n| n.is_parent && n.children.contains(&node.name))
+            {
                 selected_set.insert(parent.name.clone());
             }
         }
@@ -478,7 +499,10 @@ pub fn toggle_all_tree_selection(
             for child in &node.children {
                 selected_set.insert(child.clone());
             }
-            for parent in tree.iter().filter(|n| n.is_parent && n.children.contains(&node.name)) {
+            for parent in tree
+                .iter()
+                .filter(|n| n.is_parent && n.children.contains(&node.name))
+            {
                 selected_set.insert(parent.name.clone());
             }
         }
@@ -515,10 +539,7 @@ mod tests {
             Some(NestedType::Json)
         );
 
-        let map_samples = vec![
-            "{k1=v1, k2=v2}".to_string(),
-            "{k1=v3, k2=v4}".to_string(),
-        ];
+        let map_samples = vec!["{k1=v1, k2=v2}".to_string(), "{k1=v3, k2=v4}".to_string()];
         assert_eq!(
             detect_nested_type("properties", "varchar", &map_samples),
             Some(NestedType::Map)
@@ -594,11 +615,8 @@ mod tests {
             "json_extract_scalar(\"metadata\", '$.user.name')"
         );
 
-        let map_expr = build_sql_expression(
-            "attributes",
-            &["cluster_id".to_string()],
-            NestedType::Map,
-        );
+        let map_expr =
+            build_sql_expression("attributes", &["cluster_id".to_string()], NestedType::Map);
         assert_eq!(map_expr, "\"attributes\"['cluster_id']");
     }
 

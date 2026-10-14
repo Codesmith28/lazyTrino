@@ -16,7 +16,9 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{
+        List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    },
 };
 
 use crate::app::{SaveViewPromptState, SavedViewsModalState};
@@ -28,7 +30,11 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &SavedViewsModalState) {
     let count_info = if modal.selected_ids.is_empty() {
         format!("{} saved", modal.views.len())
     } else {
-        format!("{} saved, {} selected", modal.views.len(), modal.selected_ids.len())
+        format!(
+            "{} saved, {} selected",
+            modal.views.len(),
+            modal.selected_ids.len()
+        )
     };
     let title = format!(" Saved Views ({count_info}) ");
     let inner = modal::render_modal_frame(frame, popup_area, &title, true);
@@ -78,10 +84,24 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &SavedViewsModalState) {
                 };
 
                 let title_line = Line::from(vec![
-                    Span::styled(prefix, if is_selected { theme::warning_bold_style() } else { theme::text_style() }),
+                    Span::styled(
+                        prefix,
+                        if is_selected {
+                            theme::warning_bold_style()
+                        } else {
+                            theme::text_style()
+                        },
+                    ),
                     Span::styled(checkbox, check_style),
                     Span::styled(format!("{}. ", i + 1), theme::muted_style()),
-                    Span::styled(&view.name, if is_selected { theme::warning_bold_style() } else { theme::header_style() }),
+                    Span::styled(
+                        &view.name,
+                        if is_selected {
+                            theme::warning_bold_style()
+                        } else {
+                            theme::header_style()
+                        },
+                    ),
                     Span::styled(format!("  [{}]", view.saved_at), theme::muted_style()),
                 ]);
 
@@ -180,12 +200,10 @@ fn render_delete_confirmation(
         let count = delete_ids.len();
         vec![
             Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    format!("Delete {count} selected saved views? (y/n)"),
-                    theme::warning_bold_style(),
-                ),
-            ]),
+            Line::from(vec![Span::styled(
+                format!("Delete {count} selected saved views? (y/n)"),
+                theme::warning_bold_style(),
+            )]),
             Line::from(""),
             Line::from(vec![
                 Span::styled("  [ y / Enter ] Confirm    ", theme::success_style()),
@@ -197,11 +215,7 @@ fn render_delete_confirmation(
     frame.render_widget(Paragraph::new(prompt), inner);
 }
 
-pub fn render_save_prompt(
-    frame: &mut Frame,
-    area: Rect,
-    prompt: &SaveViewPromptState,
-) {
+pub fn render_save_prompt(frame: &mut Frame, area: Rect, prompt: &SaveViewPromptState) {
     let popup_area = modal::modal_small(area);
     let inner = modal::render_modal_frame(frame, popup_area, " Save Table View ", true);
 

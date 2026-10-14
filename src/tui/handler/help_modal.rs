@@ -96,8 +96,7 @@ pub fn handle_help_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> {
                 None
             }
             KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char('f')
-                if code == KeyCode::PageDown
-                    || key.modifiers.contains(KeyModifiers::CONTROL) =>
+                if code == KeyCode::PageDown || key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 if let Some(ref mut m) = app.help_modal {
                     let total_lines =
@@ -108,8 +107,7 @@ pub fn handle_help_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> {
                 None
             }
             KeyCode::PageUp | KeyCode::Char('u') | KeyCode::Char('b')
-                if code == KeyCode::PageUp
-                    || key.modifiers.contains(KeyModifiers::CONTROL) =>
+                if code == KeyCode::PageUp || key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 if let Some(ref mut m) = app.help_modal {
                     m.scroll = m.scroll.saturating_sub(15);

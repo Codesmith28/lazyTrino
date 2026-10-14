@@ -37,9 +37,7 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
         Mode::SavedViewsModal => {
             Some(" Space:toggle  a:all/none  Enter:restore  d/Del:delete  j/k:move  Esc:close ")
         }
-        Mode::SaveViewPrompt => {
-            Some(" Type:name  Bksp:del  Enter:save  Esc:cancel ")
-        }
+        Mode::SaveViewPrompt => Some(" Type:name  Bksp:del  Enter:save  Esc:cancel "),
         Mode::Search => Some(" Type:filter  Bksp:del  Enter:close  Esc:clear "),
         Mode::QueryInput => Some(" Enter:run  Esc:cancel  Ctrl+A:all  Ctrl+C:copy  Ctrl+V:paste "),
         Mode::HelpModal | Mode::Normal => {
@@ -50,7 +48,9 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
             };
             match screen {
                 Screen::Connect(_) => Some(" Tab:next field  Enter:connect  ?:help  Ctrl+C:quit "),
-                Screen::Catalog(_) => Some(" j/k:move  l/Enter:select  /:search  ?:help  Ctrl+C:quit "),
+                Screen::Catalog(_) => {
+                    Some(" j/k:move  l/Enter:select  /:search  ?:help  Ctrl+C:quit ")
+                }
                 Screen::Schema(_) | Screen::Table(_) => {
                     Some(" j/k:move  l/Enter:select  h/Esc:back  /:search  ?:help  Ctrl+C:quit ")
                 }
@@ -62,15 +62,21 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
                             " j/k:move  l/Enter:run  h/Esc:back  v/c/e/t/m/p:action  Tab:pane  ?:help  Ctrl+C:quit ",
                         ),
                         ActivePanel::MainViewer => match selected_action {
-                            Some(Action::TableView) if state.results.is_some() && state.drilldown.is_some() => Some(
-                                " hjkl/←→:cells  <:up  S:sort  C:cols  F:filter  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
-                            ),
+                            Some(Action::TableView)
+                                if state.results.is_some() && state.drilldown.is_some() =>
+                            {
+                                Some(
+                                    " hjkl/←→:cells  <:up  S:sort  C:cols  F:filter  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                )
+                            }
                             Some(Action::TableView) if state.results.is_some() => Some(
                                 " hjkl/←→:cells  S:sort  C:cols  F:filter  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
                             ),
-                            Some(Action::Partitions) if !app.partition_tree_lines.is_empty() => Some(
-                                " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
-                            ),
+                            Some(Action::Partitions) if !app.partition_tree_lines.is_empty() => {
+                                Some(
+                                    " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                )
+                            }
                             Some(Action::Schema) if !app.vertical_schema_cols.is_empty() => Some(
                                 " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
                             ),

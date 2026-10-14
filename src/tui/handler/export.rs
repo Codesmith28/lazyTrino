@@ -31,7 +31,10 @@ fn export_visible_data(state: &ResultsState) -> (Vec<String>, Vec<Vec<String>>) 
             .filter(|(_, c)| !state.hidden_columns.contains(*c))
             .map(|(i, _)| i)
             .collect();
-        let cols: Vec<String> = vis_indices.iter().map(|&i| state.columns[i].clone()).collect();
+        let cols: Vec<String> = vis_indices
+            .iter()
+            .map(|&i| state.columns[i].clone())
+            .collect();
         let rows: Vec<Vec<String>> = state
             .rows
             .iter()

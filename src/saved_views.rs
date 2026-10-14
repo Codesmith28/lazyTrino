@@ -12,12 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{
-    collections::HashSet,
-    fs,
-    path::PathBuf,
-    time::SystemTime,
-};
+use std::{collections::HashSet, fs, path::PathBuf, time::SystemTime};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -61,7 +56,11 @@ impl StoredColumnFilter {
                 let set: HashSet<String> = vals.iter().cloned().collect();
                 ColumnFilter::Values(set)
             }
-            StoredColumnFilter::Numeric { op, value, raw_value } => {
+            StoredColumnFilter::Numeric {
+                op,
+                value,
+                raw_value,
+            } => {
                 let numeric_op = match op.as_str() {
                     "<" => NumericOp::Lt,
                     "<=" => NumericOp::Lte,
@@ -239,7 +238,10 @@ mod tests {
             action_idx: 0,
             query: "SELECT * FROM iceberg.sales.orders LIMIT 100".to_string(),
             column_filters: vec![
-                ("status".to_string(), StoredColumnFilter::Values(vec!["COMPLETE".to_string()])),
+                (
+                    "status".to_string(),
+                    StoredColumnFilter::Values(vec!["COMPLETE".to_string()]),
+                ),
                 (
                     "price".to_string(),
                     StoredColumnFilter::Numeric {
@@ -271,7 +273,10 @@ mod tests {
         set.insert("B".to_string());
         let orig = ColumnFilter::Values(set.clone());
         let stored = StoredColumnFilter::from(&orig);
-        assert_eq!(stored, StoredColumnFilter::Values(vec!["A".to_string(), "B".to_string()]));
+        assert_eq!(
+            stored,
+            StoredColumnFilter::Values(vec!["A".to_string(), "B".to_string()])
+        );
         assert_eq!(stored.to_column_filter(), orig);
 
         let num_filter = ColumnFilter::Numeric(NumericFilter {

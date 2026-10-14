@@ -250,7 +250,9 @@ pub(super) fn active_query_buffer(app: &App) -> Option<String> {
     match &app.screen {
         Screen::Actions(action_state) => {
             let is_partitions_or_schema = matches!(
-                crate::app::ACTIONS.get(action_state.selected).map(|(_, _, a)| a),
+                crate::app::ACTIONS
+                    .get(action_state.selected)
+                    .map(|(_, _, a)| a),
                 Some(crate::app::Action::Partitions | crate::app::Action::Schema)
             );
             if !is_partitions_or_schema && let Some(ref res) = action_state.results {

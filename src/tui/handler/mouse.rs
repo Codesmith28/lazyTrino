@@ -129,7 +129,9 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 if mouse.column < border_x && mouse.row < bottom_y {
                     if is_in_table {
                         let clicked_row = mouse.row.saturating_sub(1) as usize;
-                        let line_counts = crate::tui::screens::actions::item_line_counts(border_x.saturating_sub(2));
+                        let line_counts = crate::tui::screens::actions::item_line_counts(
+                            border_x.saturating_sub(2),
+                        );
                         let mut acc = 0;
                         let mut clicked_idx = None;
                         for (idx, count) in line_counts.iter().enumerate() {
@@ -165,8 +167,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
 
                         if is_on_h_scrollbar {
                             let avail_width = (inner.width as usize).saturating_sub(4).max(1);
-                            let max_scroll_h =
-                                crate::tui::screens::results::compute_max_scroll_h(res, avail_width);
+                            let max_scroll_h = crate::tui::screens::results::compute_max_scroll_h(
+                                res,
+                                avail_width,
+                            );
 
                             if mouse.column <= inner.x + 1 {
                                 crate::tui::screens::results::scroll_table_horizontal_left(
@@ -299,12 +303,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 && !app.is_dragging_resizer
                 && !app.is_dragging_query_select
                 && let Some((row_idx, col_idx)) =
-                    crate::tui::screens::results::hit_test_cell(
-                        res,
-                        inner,
-                        mouse.column,
-                        mouse.row,
-                    )
+                    crate::tui::screens::results::hit_test_cell(res, inner, mouse.column, mouse.row)
             {
                 if res.visual_mode == VisualMode::None {
                     res.visual_mode = VisualMode::Block {
@@ -335,12 +334,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 && let Screen::Actions(ref mut a) = app.screen
                 && let Some(ref mut res) = a.results
                 && let Some((row_idx, col_idx)) =
-                    crate::tui::screens::results::hit_test_cell(
-                        res,
-                        inner,
-                        mouse.column,
-                        mouse.row,
-                    )
+                    crate::tui::screens::results::hit_test_cell(res, inner, mouse.column, mouse.row)
             {
                 if res.visual_mode == VisualMode::None {
                     res.selected_row = row_idx;
@@ -441,10 +435,14 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     && let Some(ref mut res) = a.results
                 {
                     if is_horizontal {
-                        crate::tui::screens::results::scroll_table_horizontal_right(res, avail_width);
+                        crate::tui::screens::results::scroll_table_horizontal_right(
+                            res,
+                            avail_width,
+                        );
                     } else if !res.rows.is_empty() {
                         let delta = 3;
-                        let new_scroll_v = (res.scroll_v.get() + delta).min(res.rows.len().saturating_sub(1));
+                        let new_scroll_v =
+                            (res.scroll_v.get() + delta).min(res.rows.len().saturating_sub(1));
                         res.scroll_v.set(new_scroll_v);
                         if res.selected_row < new_scroll_v {
                             res.selected_row = new_scroll_v;
@@ -520,14 +518,18 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     && let Some(ref mut res) = a.results
                 {
                     if is_horizontal {
-                        crate::tui::screens::results::scroll_table_horizontal_left(res, avail_width);
+                        crate::tui::screens::results::scroll_table_horizontal_left(
+                            res,
+                            avail_width,
+                        );
                     } else {
                         let delta = 3;
                         let new_scroll_v = res.scroll_v.get().saturating_sub(delta);
                         res.scroll_v.set(new_scroll_v);
                         let max_visible_row = new_scroll_v + view_rows.saturating_sub(1);
                         if res.selected_row > max_visible_row {
-                            res.selected_row = max_visible_row.min(res.rows.len().saturating_sub(1));
+                            res.selected_row =
+                                max_visible_row.min(res.rows.len().saturating_sub(1));
                             res.last_selected_row.set(res.selected_row);
                         }
                     }
@@ -563,11 +565,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
     None
 }
 
-pub fn results_table_inner_rect(
-    app: &App,
-    term_width: u16,
-    term_height: u16,
-) -> Option<Rect> {
+pub fn results_table_inner_rect(app: &App, term_width: u16, term_height: u16) -> Option<Rect> {
     let bottom_y = term_height.saturating_sub(7);
     if bottom_y == 0 {
         return None;
@@ -587,11 +585,11 @@ pub fn results_table_inner_rect(
     let inner_w = preview_width.saturating_sub(2).max(1) as usize;
 
     let query_height = if matches!(app.mode, Mode::QueryInput) {
-        let total_chars = 7
-            + a.results
-                .as_ref()
-                .map(|r| r.query_buffer.len())
-                .unwrap_or_else(|| a.query_buffer.len());
+        let total_chars = 7 + a
+            .results
+            .as_ref()
+            .map(|r| r.query_buffer.len())
+            .unwrap_or_else(|| a.query_buffer.len());
         let lines = total_chars.div_ceil(inner_w);
         (lines as u16 + 2).clamp(3, 7)
     } else {
@@ -832,7 +830,10 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
                     .iter()
                     .map(|row| {
                         let is_summary = is_stats
-                            && crate::tui::screens::results::is_stats_summary_row(&res.columns, row);
+                            && crate::tui::screens::results::is_stats_summary_row(
+                                &res.columns,
+                                row,
+                            );
                         crate::tui::screens::results::compute_row_height(
                             row,
                             &visible_cols,
@@ -848,18 +849,18 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
 
                 let has_h_scrollbar = res.columns.len() > 1;
                 let table_reserved_rows = if has_h_scrollbar { 3 } else { 2 };
-                let viewport_lines =
-                    (inner.height as usize).saturating_sub(table_reserved_rows).max(1);
+                let viewport_lines = (inner.height as usize)
+                    .saturating_sub(table_reserved_rows)
+                    .max(1);
 
-                let effective_scroll_v =
-                    crate::tui::screens::results::calculate_effective_scroll_v(
-                        res.scroll_v.get(),
-                        res.selected_row,
-                        res.last_selected_row.get(),
-                        viewport_lines,
-                        &row_visual_heights,
-                        res.rows.len(),
-                    );
+                let effective_scroll_v = crate::tui::screens::results::calculate_effective_scroll_v(
+                    res.scroll_v.get(),
+                    res.selected_row,
+                    res.last_selected_row.get(),
+                    viewport_lines,
+                    &row_visual_heights,
+                    res.rows.len(),
+                );
 
                 if start_row <= inner.y + 1 && end_row >= inner.y {
                     let header = format_csv_row(
@@ -901,7 +902,8 @@ fn handle_filter_modal_mouse(
     term_height: u16,
 ) -> Option<Command> {
     let _ = app.filter_modal.as_ref()?;
-    let popup_area = crate::tui::screens::modal::modal_medium(Rect::new(0, 0, term_width, term_height));
+    let popup_area =
+        crate::tui::screens::modal::modal_medium(Rect::new(0, 0, term_width, term_height));
 
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
@@ -1024,7 +1026,8 @@ fn handle_column_modal_mouse(
     term_height: u16,
 ) -> Option<Command> {
     let _ = app.column_modal.as_ref()?;
-    let popup_area = crate::tui::screens::modal::modal_medium(Rect::new(0, 0, term_width, term_height));
+    let popup_area =
+        crate::tui::screens::modal::modal_medium(Rect::new(0, 0, term_width, term_height));
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             if mouse.column < popup_area.x
@@ -1113,7 +1116,8 @@ fn handle_help_modal_mouse(
     term_height: u16,
 ) -> Option<Command> {
     let _ = app.help_modal.as_ref()?;
-    let popup_area = crate::tui::screens::modal::modal_large(Rect::new(0, 0, term_width, term_height));
+    let popup_area =
+        crate::tui::screens::modal::modal_large(Rect::new(0, 0, term_width, term_height));
 
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
@@ -1338,14 +1342,23 @@ mod tests {
 
         if let Screen::Actions(a) = &app.screen {
             let res = a.results.as_ref().unwrap();
-            assert_eq!(res.selected_row, 1, "Clicking row 1 must set selected_row to 1");
-            assert_eq!(res.selected_col, 0, "Clicking column 0 must set selected_col to 0");
+            assert_eq!(
+                res.selected_row, 1,
+                "Clicking row 1 must set selected_row to 1"
+            );
+            assert_eq!(
+                res.selected_col, 0,
+                "Clicking column 0 must set selected_col to 0"
+            );
         } else {
             panic!("Expected Screen::Actions");
         }
 
         // Must NOT set is_selecting_text (no blue line highlight)
-        assert!(!app.is_selecting_text, "A single click must not start text selection");
+        assert!(
+            !app.is_selecting_text,
+            "A single click must not start text selection"
+        );
 
         // MouseUp event without drag
         let up_event = MouseEvent {
@@ -1355,7 +1368,10 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         handle_mouse_sync(&mut app, up_event);
-        assert!(app.copied_toast.is_none(), "A single click must not copy row to clipboard");
+        assert!(
+            app.copied_toast.is_none(),
+            "A single click must not copy row to clipboard"
+        );
     }
 
     #[test]
@@ -1397,8 +1413,15 @@ mod tests {
 
         if let Screen::Actions(a) = &app.screen {
             let res = a.results.as_ref().unwrap();
-            assert_eq!(res.scroll_v.get(), 12, "4 scroll down events must advance scroll_v by 12");
-            assert!(res.selected_row >= 12, "selected_row must stay within visible viewport");
+            assert_eq!(
+                res.scroll_v.get(),
+                12,
+                "4 scroll down events must advance scroll_v by 12"
+            );
+            assert!(
+                res.selected_row >= 12,
+                "selected_row must stay within visible viewport"
+            );
         } else {
             panic!("Expected Screen::Actions");
         }
@@ -1417,7 +1440,11 @@ mod tests {
 
         if let Screen::Actions(a) = &app.screen {
             let res = a.results.as_ref().unwrap();
-            assert_eq!(res.scroll_v.get(), 6, "2 scroll up events must retreat scroll_v by 6");
+            assert_eq!(
+                res.scroll_v.get(),
+                6,
+                "2 scroll up events must retreat scroll_v by 6"
+            );
         } else {
             panic!("Expected Screen::Actions");
         }
@@ -1454,7 +1481,10 @@ mod tests {
 
         if let Screen::Actions(a) = &app.screen {
             let dd = a.drilldown.as_ref().unwrap();
-            assert_eq!(dd.selected, 3, "ScrollDown in drilldown must advance selected by 3");
+            assert_eq!(
+                dd.selected, 3,
+                "ScrollDown in drilldown must advance selected by 3"
+            );
         }
 
         let scroll_up = MouseEvent {
@@ -1467,7 +1497,10 @@ mod tests {
 
         if let Screen::Actions(a) = &app.screen {
             let dd = a.drilldown.as_ref().unwrap();
-            assert_eq!(dd.selected, 0, "ScrollUp in drilldown must retreat selected by 3");
+            assert_eq!(
+                dd.selected, 0,
+                "ScrollUp in drilldown must retreat selected by 3"
+            );
         }
     }
 
@@ -1506,7 +1539,11 @@ mod tests {
 
         if let Screen::Actions(a) = &app.screen {
             let res = a.results.as_ref().unwrap();
-            assert_eq!(res.scroll_h.get(), 1, "Shift+ScrollDown should advance scroll_h to 1");
+            assert_eq!(
+                res.scroll_h.get(),
+                1,
+                "Shift+ScrollDown should advance scroll_h to 1"
+            );
             assert_eq!(res.selected_col, 1);
         }
 
@@ -1521,7 +1558,11 @@ mod tests {
 
         if let Screen::Actions(a) = &app.screen {
             let res = a.results.as_ref().unwrap();
-            assert_eq!(res.scroll_h.get(), 2, "ScrollRight should advance scroll_h to 2");
+            assert_eq!(
+                res.scroll_h.get(),
+                2,
+                "ScrollRight should advance scroll_h to 2"
+            );
             assert_eq!(res.selected_col, 2);
         }
 
@@ -1536,7 +1577,11 @@ mod tests {
 
         if let Screen::Actions(a) = &app.screen {
             let res = a.results.as_ref().unwrap();
-            assert_eq!(res.scroll_h.get(), 1, "Shift+ScrollUp should retreat scroll_h to 1");
+            assert_eq!(
+                res.scroll_h.get(),
+                1,
+                "Shift+ScrollUp should retreat scroll_h to 1"
+            );
         }
 
         // 4. ScrollLeft moves left
@@ -1550,7 +1595,11 @@ mod tests {
 
         if let Screen::Actions(a) = &app.screen {
             let res = a.results.as_ref().unwrap();
-            assert_eq!(res.scroll_h.get(), 0, "ScrollLeft should retreat scroll_h to 0");
+            assert_eq!(
+                res.scroll_h.get(),
+                0,
+                "ScrollLeft should retreat scroll_h to 0"
+            );
         }
 
         let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -1567,7 +1616,11 @@ mod tests {
             handle_mouse_sync(&mut app, wheel_on_scrollbar);
             if let Screen::Actions(a) = &app.screen {
                 let res = a.results.as_ref().unwrap();
-                assert_eq!(res.scroll_h.get(), 1, "Wheel over scrollbar row must scroll right");
+                assert_eq!(
+                    res.scroll_h.get(),
+                    1,
+                    "Wheel over scrollbar row must scroll right"
+                );
             }
 
             // 6. Mouse wheel scroll over header row (without Shift modifier) scrolls horizontally
@@ -1580,7 +1633,11 @@ mod tests {
             handle_mouse_sync(&mut app, wheel_on_header);
             if let Screen::Actions(a) = &app.screen {
                 let res = a.results.as_ref().unwrap();
-                assert_eq!(res.scroll_h.get(), 2, "Wheel over header row must scroll right");
+                assert_eq!(
+                    res.scroll_h.get(),
+                    2,
+                    "Wheel over header row must scroll right"
+                );
             }
 
             // 7. Clicking right arrow ► on horizontal scrollbar
@@ -1619,7 +1676,10 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
             };
             handle_mouse_sync(&mut app, mouse_up);
-            assert!(!app.is_dragging_h_scrollbar, "Mouse up must reset is_dragging_h_scrollbar");
+            assert!(
+                !app.is_dragging_h_scrollbar,
+                "Mouse up must reset is_dragging_h_scrollbar"
+            );
         }
     }
 
@@ -1637,7 +1697,10 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         handle_mouse_sync(&mut app, scroll_down);
-        assert!(app.help_modal.as_ref().unwrap().scroll > 0, "Mouse ScrollDown must scroll help modal");
+        assert!(
+            app.help_modal.as_ref().unwrap().scroll > 0,
+            "Mouse ScrollDown must scroll help modal"
+        );
 
         // ScrollUp
         let scroll_up = MouseEvent {
@@ -1647,7 +1710,11 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         handle_mouse_sync(&mut app, scroll_up);
-        assert_eq!(app.help_modal.as_ref().unwrap().scroll, 0, "Mouse ScrollUp must scroll back up");
+        assert_eq!(
+            app.help_modal.as_ref().unwrap().scroll,
+            0,
+            "Mouse ScrollUp must scroll back up"
+        );
 
         // Click outside closes help modal (e.g. at (0, 0))
         let click_outside = MouseEvent {
@@ -1657,7 +1724,10 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         handle_mouse_sync(&mut app, click_outside);
-        assert!(app.help_modal.is_none(), "Click outside help modal must close it");
+        assert!(
+            app.help_modal.is_none(),
+            "Click outside help modal must close it"
+        );
     }
 
     #[test]
@@ -1665,7 +1735,9 @@ mod tests {
         let mut app = sample_app();
         app.column_modal = Some(ColumnModalState {
             columns: vec!["id".to_string(), "name".to_string(), "status".to_string()],
-            selected_columns: ["id".to_string(), "name".to_string(), "status".to_string()].into_iter().collect(),
+            selected_columns: ["id".to_string(), "name".to_string(), "status".to_string()]
+                .into_iter()
+                .collect(),
             cursor: 0,
             scroll: 0,
             search_query: String::new(),
@@ -1682,7 +1754,10 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         handle_mouse_sync(&mut app, scroll_down);
-        assert!(app.column_modal.as_ref().unwrap().cursor > 0, "Mouse ScrollDown must move cursor");
+        assert!(
+            app.column_modal.as_ref().unwrap().cursor > 0,
+            "Mouse ScrollDown must move cursor"
+        );
 
         // Mouse scroll up
         let scroll_up = MouseEvent {
@@ -1692,7 +1767,11 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         handle_mouse_sync(&mut app, scroll_up);
-        assert_eq!(app.column_modal.as_ref().unwrap().cursor, 0, "Mouse ScrollUp must return to 0");
+        assert_eq!(
+            app.column_modal.as_ref().unwrap().cursor,
+            0,
+            "Mouse ScrollUp must return to 0"
+        );
 
         // Click outside closes column modal
         let click_outside = MouseEvent {
@@ -1702,7 +1781,10 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         handle_mouse_sync(&mut app, click_outside);
-        assert!(app.column_modal.is_none(), "Click outside column modal must close it");
+        assert!(
+            app.column_modal.is_none(),
+            "Click outside column modal must close it"
+        );
     }
 
     #[test]
@@ -1750,7 +1832,9 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         handle_mouse_sync(&mut app, click_r0c0);
-        let Screen::Actions(a) = &app.screen else { panic!() };
+        let Screen::Actions(a) = &app.screen else {
+            panic!()
+        };
         let res = a.results.as_ref().unwrap();
         assert_eq!(res.visual_mode, VisualMode::None);
         assert_eq!(res.selected_row, 0);
@@ -1764,7 +1848,9 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         handle_mouse_sync(&mut app, drag_r1c1);
-        let Screen::Actions(a) = &app.screen else { panic!() };
+        let Screen::Actions(a) = &app.screen else {
+            panic!()
+        };
         let res = a.results.as_ref().unwrap();
         assert_eq!(
             res.visual_mode,

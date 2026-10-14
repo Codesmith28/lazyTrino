@@ -165,12 +165,12 @@ main() {
     if [ -z "$RELEASE_JSON" ] || echo "$RELEASE_JSON" | grep -q '"message": "Not Found"'; then
         warn "Could not fetch release metadata from GitHub API (release may not be published yet or rate limit reached)."
         warn "Attempting fallback to build from source or default binary asset..."
-        TAG="v0.1.0"
+        TAG="v0.2.0"
     else
         TAG="$(echo "$RELEASE_JSON" | grep -o '"tag_name": *"[^"]*"' | head -n 1 | cut -d'"' -f4)"
     fi
 
-    [ -z "$TAG" ] && TAG="v0.1.0"
+    [ -z "$TAG" ] && TAG="v0.2.0"
     success "Target release version: ${BOLD}${TAG}${RESET}"
 
     # Determine target triple

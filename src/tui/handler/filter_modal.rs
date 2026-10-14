@@ -15,8 +15,8 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::{
-    App, ColumnFilter, FilterModalState, FilterMode, Mode, NumericFilter, NumericFocus,
-    NumericOp, Screen, VerticalColumn,
+    App, ColumnFilter, FilterModalState, FilterMode, Mode, NumericFilter, NumericFocus, NumericOp,
+    Screen, VerticalColumn,
 };
 use crate::tui::handler::Command;
 use crate::tui::handler::navigation::normalize_key_code;
@@ -438,7 +438,9 @@ fn handle_values_modal_key(app: &mut App, key: KeyEvent, is_numeric_col: bool) -
         }
         KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char('f')
             if code == KeyCode::PageDown
-                || key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                || key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
         {
             if let Some(ref mut m) = app.filter_modal {
                 let matched = m.filtered_indices();
@@ -453,7 +455,9 @@ fn handle_values_modal_key(app: &mut App, key: KeyEvent, is_numeric_col: bool) -
         }
         KeyCode::PageUp | KeyCode::Char('u') | KeyCode::Char('b')
             if code == KeyCode::PageUp
-                || key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                || key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
         {
             if let Some(ref mut m) = app.filter_modal {
                 m.cursor = m.cursor.saturating_sub(10);
@@ -521,25 +525,21 @@ pub fn apply_filter_modal(app: &mut App) -> Option<Command> {
     let modal = app.filter_modal.take()?;
 
     let new_filter = match modal.mode {
-        FilterMode::Numeric => {
-            match modal.parse_numeric_filter() {
-                Ok(Some((op, value, raw_value))) => {
-                    Some(ColumnFilter::Numeric(NumericFilter {
-                        op,
-                        value,
-                        raw_value,
-                    }))
-                }
-                Ok(None) => None,
-                Err(err) => {
-                    let mut m = modal;
-                    m.numeric_error = Some(err);
-                    app.filter_modal = Some(m);
-                    app.mode = Mode::FilterModal;
-                    return None;
-                }
+        FilterMode::Numeric => match modal.parse_numeric_filter() {
+            Ok(Some((op, value, raw_value))) => Some(ColumnFilter::Numeric(NumericFilter {
+                op,
+                value,
+                raw_value,
+            })),
+            Ok(None) => None,
+            Err(err) => {
+                let mut m = modal;
+                m.numeric_error = Some(err);
+                app.filter_modal = Some(m);
+                app.mode = Mode::FilterModal;
+                return None;
             }
-        }
+        },
         FilterMode::Values => {
             if modal.is_numeric_col
                 && let Some((op, num_str)) = NumericOp::from_str_prefix(&modal.search_query)
@@ -685,7 +685,10 @@ mod tests {
         open_filter_modal(&mut app);
 
         assert!(matches!(app.mode, Mode::FilterModal));
-        let modal = app.filter_modal.as_ref().expect("filter modal should be open");
+        let modal = app
+            .filter_modal
+            .as_ref()
+            .expect("filter modal should be open");
         assert_eq!(modal.column_index, 1);
         assert_eq!(modal.column_name, "status");
         assert_eq!(modal.values, vec!["active", "inactive", "pending"]);
@@ -707,17 +710,47 @@ mod tests {
 
         // Toggle at cursor 1 ("inactive")
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
-        assert!(!app.filter_modal.as_ref().unwrap().selected_values.contains("inactive"));
-        assert!(app.filter_modal.as_ref().unwrap().selected_values.contains("active"));
-        assert!(app.filter_modal.as_ref().unwrap().selected_values.contains("pending"));
+        assert!(
+            !app.filter_modal
+                .as_ref()
+                .unwrap()
+                .selected_values
+                .contains("inactive")
+        );
+        assert!(
+            app.filter_modal
+                .as_ref()
+                .unwrap()
+                .selected_values
+                .contains("active")
+        );
+        assert!(
+            app.filter_modal
+                .as_ref()
+                .unwrap()
+                .selected_values
+                .contains("pending")
+        );
 
         // Toggle again to re-enable
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
-        assert!(app.filter_modal.as_ref().unwrap().selected_values.contains("inactive"));
+        assert!(
+            app.filter_modal
+                .as_ref()
+                .unwrap()
+                .selected_values
+                .contains("inactive")
+        );
 
         // 'a' toggles all off when all are selected
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('a')));
-        assert!(app.filter_modal.as_ref().unwrap().selected_values.is_empty());
+        assert!(
+            app.filter_modal
+                .as_ref()
+                .unwrap()
+                .selected_values
+                .is_empty()
+        );
 
         // 'a' toggles all on when none are selected
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('a')));
@@ -846,10 +879,22 @@ mod tests {
     #[test]
     fn test_is_numeric_column_detection() {
         // Values based
-        assert!(is_numeric_column("num", &[], &["1".to_string(), "2".to_string(), "3.5".to_string()]));
-        assert!(!is_numeric_column("txt", &[], &["foo".to_string(), "bar".to_string()]));
+        assert!(is_numeric_column(
+            "num",
+            &[],
+            &["1".to_string(), "2".to_string(), "3.5".to_string()]
+        ));
+        assert!(!is_numeric_column(
+            "txt",
+            &[],
+            &["foo".to_string(), "bar".to_string()]
+        ));
         assert!(!is_numeric_column("empty", &[], &[]));
-        assert!(is_numeric_column("with_null", &[], &["null".to_string(), "10".to_string()]));
+        assert!(is_numeric_column(
+            "with_null",
+            &[],
+            &["null".to_string(), "10".to_string()]
+        ));
 
         // Schema based
         let schema_col = VerticalColumn {
@@ -878,9 +923,19 @@ mod tests {
         // Test <, <=, >, >=, = on column "id" (values 1, 2, 3, 4)
         for (target_op_keys, input_str, expected_rows, expected_sql_op) in [
             (vec![KeyCode::Char('<')], "3", vec!["1", "2"], "<"),
-            (vec![KeyCode::Char('<'), KeyCode::Right], "2", vec!["1", "2"], "<="),
+            (
+                vec![KeyCode::Char('<'), KeyCode::Right],
+                "2",
+                vec!["1", "2"],
+                "<=",
+            ),
             (vec![KeyCode::Char('>')], "2", vec!["3", "4"], ">"),
-            (vec![KeyCode::Char('>'), KeyCode::Right], "3", vec!["3", "4"], ">="),
+            (
+                vec![KeyCode::Char('>'), KeyCode::Right],
+                "3",
+                vec!["3", "4"],
+                ">=",
+            ),
             (vec![KeyCode::Char('=')], "2", vec!["2"], "="),
         ] {
             let mut app = sample_app_with_results();
@@ -914,7 +969,11 @@ mod tests {
             };
             let res = action_state.results.as_ref().unwrap();
             let row_ids: Vec<&str> = res.rows.iter().map(|r| r[0].as_str()).collect();
-            assert_eq!(row_ids, expected_rows, "mismatch for op {}", expected_sql_op);
+            assert_eq!(
+                row_ids, expected_rows,
+                "mismatch for op {}",
+                expected_sql_op
+            );
             assert_eq!(
                 res.query_buffer,
                 format!("SELECT id, status FROM users WHERE \"id\" {expected_sql_op} {input_str}")
@@ -998,13 +1057,19 @@ mod tests {
         // Move to operator and cycle right
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('k')));
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Right));
-        assert_eq!(app.filter_modal.as_ref().unwrap().numeric_op, NumericOp::Lte);
+        assert_eq!(
+            app.filter_modal.as_ref().unwrap().numeric_op,
+            NumericOp::Lte
+        );
 
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Right));
         assert_eq!(app.filter_modal.as_ref().unwrap().numeric_op, NumericOp::Gt);
 
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Right));
-        assert_eq!(app.filter_modal.as_ref().unwrap().numeric_op, NumericOp::Gte);
+        assert_eq!(
+            app.filter_modal.as_ref().unwrap().numeric_op,
+            NumericOp::Gte
+        );
 
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Right));
         assert_eq!(app.filter_modal.as_ref().unwrap().numeric_op, NumericOp::Eq);
@@ -1030,7 +1095,10 @@ mod tests {
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('<')));
         assert_eq!(app.filter_modal.as_ref().unwrap().numeric_op, NumericOp::Lt);
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('=')));
-        assert_eq!(app.filter_modal.as_ref().unwrap().numeric_op, NumericOp::Lte);
+        assert_eq!(
+            app.filter_modal.as_ref().unwrap().numeric_op,
+            NumericOp::Lte
+        );
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('2')));
         assert_eq!(app.filter_modal.as_ref().unwrap().numeric_input, "2");
 
@@ -1075,7 +1143,10 @@ mod tests {
 
         // handle_key_sync should detect app.filter_modal.is_some() and route Esc to filter modal
         crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Esc));
-        assert!(app.filter_modal.is_none(), "Filter modal must be closed by Esc");
+        assert!(
+            app.filter_modal.is_none(),
+            "Filter modal must be closed by Esc"
+        );
         assert_eq!(app.mode, Mode::Normal);
     }
 
@@ -1102,4 +1173,3 @@ mod tests {
         assert_eq!(app.mode, Mode::Normal);
     }
 }
-

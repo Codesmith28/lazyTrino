@@ -112,14 +112,19 @@ pub fn render(
             let (col_name, label, depth, is_parent, is_checked, is_partially_checked) =
                 if let Some(node) = modal.tree_nodes.get(orig_idx) {
                     let all_selected = if node.is_parent {
-                        node.children.iter().all(|c| modal.selected_columns.contains(c))
+                        node.children
+                            .iter()
+                            .all(|c| modal.selected_columns.contains(c))
                     } else {
                         modal.selected_columns.contains(&node.name)
                     };
                     let partial = node.is_parent
                         && !all_selected
                         && (modal.selected_columns.contains(&node.name)
-                            || node.children.iter().any(|c| modal.selected_columns.contains(c)));
+                            || node
+                                .children
+                                .iter()
+                                .any(|c| modal.selected_columns.contains(c)));
                     (
                         node.name.as_str(),
                         node.label.as_str(),
@@ -129,7 +134,11 @@ pub fn render(
                         partial,
                     )
                 } else {
-                    let col = modal.columns.get(orig_idx).map(|s| s.as_str()).unwrap_or("");
+                    let col = modal
+                        .columns
+                        .get(orig_idx)
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
                     let checked = modal.selected_columns.contains(col);
                     (col, col, 0, false, checked, false)
                 };
@@ -238,8 +247,8 @@ pub fn render(
 mod tests {
     use super::*;
     use crate::trino::flatten::ColumnTreeNode;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     use std::collections::HashSet;
 
     #[test]
@@ -309,17 +318,24 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        let content: String = buffer
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
 
         // Check for tree indicators: parent arrow [▼], partial selection [-], and nested tag
-        assert!(content.contains("[▼]"), "Must render parent expand indicator [▼]");
-        assert!(content.contains("[-]"), "Must render partial selection [-] for parent");
-        assert!(content.contains("(nested)"), "Must render (nested) tag for child");
-        assert!(content.contains("[x]"), "Must render [x] for selected child");
+        assert!(
+            content.contains("[▼]"),
+            "Must render parent expand indicator [▼]"
+        );
+        assert!(
+            content.contains("[-]"),
+            "Must render partial selection [-] for parent"
+        );
+        assert!(
+            content.contains("(nested)"),
+            "Must render (nested) tag for child"
+        );
+        assert!(
+            content.contains("[x]"),
+            "Must render [x] for selected child"
+        );
     }
 }
-

@@ -692,26 +692,22 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     } else {
                         None
                     };
-                    let cached_total = existing_results
-                        .and_then(|r| r.total_count)
-                        .or_else(|| {
-                            if let Screen::Actions(ref a) = app.screen {
-                                a.drilldown
-                                    .as_ref()
-                                    .and_then(|d| d.counts_cache.get(&filters).copied())
-                            } else {
-                                None
-                            }
-                        });
-                    let cached_table = existing_results
-                        .and_then(|r| r.table_count)
-                        .or_else(|| {
-                            if let Screen::Actions(ref a) = app.screen {
-                                a.drilldown.as_ref().and_then(|d| d.table_count)
-                            } else {
-                                None
-                            }
-                        });
+                    let cached_total = existing_results.and_then(|r| r.total_count).or_else(|| {
+                        if let Screen::Actions(ref a) = app.screen {
+                            a.drilldown
+                                .as_ref()
+                                .and_then(|d| d.counts_cache.get(&filters).copied())
+                        } else {
+                            None
+                        }
+                    });
+                    let cached_table = existing_results.and_then(|r| r.table_count).or_else(|| {
+                        if let Screen::Actions(ref a) = app.screen {
+                            a.drilldown.as_ref().and_then(|d| d.table_count)
+                        } else {
+                            None
+                        }
+                    });
                     let total_loading = existing_results
                         .map(|r| r.total_count_loading)
                         .unwrap_or(is_paginated && cached_total.is_none());
@@ -800,8 +796,15 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                                             .iter()
                                             .filter(|row| {
                                                 for (filter_col, filter) in &res.column_filters {
-                                                    if let Some(idx) = res.columns.iter().position(|c| c == filter_col) {
-                                                        let val = row.get(idx).map(|s| s.as_str()).unwrap_or("");
+                                                    if let Some(idx) = res
+                                                        .columns
+                                                        .iter()
+                                                        .position(|c| c == filter_col)
+                                                    {
+                                                        let val = row
+                                                            .get(idx)
+                                                            .map(|s| s.as_str())
+                                                            .unwrap_or("");
                                                         if !filter.matches(val) {
                                                             return false;
                                                         }
@@ -813,7 +816,10 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                                             .collect();
                                     }
                                 }
-                                app.copied_toast = Some((format!("Restored view: {}", view.name), std::time::Instant::now()));
+                                app.copied_toast = Some((
+                                    format!("Restored view: {}", view.name),
+                                    std::time::Instant::now(),
+                                ));
                             }
                             a.query_buffer = res.query_buffer.clone();
                             a.query_cursor = res.query_cursor;
@@ -1276,7 +1282,8 @@ mod tests {
         };
         let dd = state.drilldown.as_ref().unwrap();
         assert_eq!(
-            dd.counts_cache.get(&vec![("date".to_string(), "2026-08-06".to_string())]),
+            dd.counts_cache
+                .get(&vec![("date".to_string(), "2026-08-06".to_string())]),
             Some(&45120)
         );
         assert!(!dd.current_count_loading);

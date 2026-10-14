@@ -228,8 +228,7 @@ pub fn scroll_table_horizontal_right(res: &mut ResultsState, avail_width: usize)
     let new_scroll_h = (res.scroll_h.get() + 1).min(max_scroll_h);
     res.scroll_h.set(new_scroll_h);
 
-    let (first_vis_idx, _last_vis_idx) =
-        visible_col_range_indices(res, avail_width, new_scroll_h);
+    let (first_vis_idx, _last_vis_idx) = visible_col_range_indices(res, avail_width, new_scroll_h);
     let sel_vis_idx = all_vis
         .iter()
         .position(|(orig_idx, _)| *orig_idx == res.selected_col)
@@ -248,8 +247,7 @@ pub fn scroll_table_horizontal_left(res: &mut ResultsState, avail_width: usize) 
     let new_scroll_h = res.scroll_h.get().saturating_sub(1);
     res.scroll_h.set(new_scroll_h);
 
-    let (_first_vis_idx, last_vis_idx) =
-        visible_col_range_indices(res, avail_width, new_scroll_h);
+    let (_first_vis_idx, last_vis_idx) = visible_col_range_indices(res, avail_width, new_scroll_h);
     let sel_vis_idx = all_vis
         .iter()
         .position(|(orig_idx, _)| *orig_idx == res.selected_col)
@@ -260,7 +258,11 @@ pub fn scroll_table_horizontal_left(res: &mut ResultsState, avail_width: usize) 
     }
 }
 
-pub fn scroll_table_horizontal_to(res: &mut ResultsState, avail_width: usize, target_scroll_h: usize) {
+pub fn scroll_table_horizontal_to(
+    res: &mut ResultsState,
+    avail_width: usize,
+    target_scroll_h: usize,
+) {
     let all_vis = res.visible_columns();
     if all_vis.is_empty() {
         return;
@@ -269,8 +271,7 @@ pub fn scroll_table_horizontal_to(res: &mut ResultsState, avail_width: usize, ta
     let new_scroll_h = target_scroll_h.min(max_scroll_h);
     res.scroll_h.set(new_scroll_h);
 
-    let (first_vis_idx, last_vis_idx) =
-        visible_col_range_indices(res, avail_width, new_scroll_h);
+    let (first_vis_idx, last_vis_idx) = visible_col_range_indices(res, avail_width, new_scroll_h);
     let sel_vis_idx = all_vis
         .iter()
         .position(|(orig_idx, _)| *orig_idx == res.selected_col)
@@ -310,7 +311,9 @@ pub fn visible_columns_layout(
         while effective_scroll_h < sel_vis_idx {
             let mut width = 0;
             let mut fits = false;
-            for (v_idx, (orig_col_idx, c)) in all_visible_cols.iter().enumerate().skip(effective_scroll_h) {
+            for (v_idx, (orig_col_idx, c)) in
+                all_visible_cols.iter().enumerate().skip(effective_scroll_h)
+            {
                 let needed = compute_column_width(state, *orig_col_idx, c, available_width) + 2;
                 if width + needed <= available_width || width == 0 {
                     width += needed;
@@ -327,9 +330,7 @@ pub fn visible_columns_layout(
             }
             effective_scroll_h += 1;
         }
-    } else if sel_vis_idx < last_sel_vis_idx
-        && sel_vis_idx < effective_scroll_h + h_margin
-    {
+    } else if sel_vis_idx < last_sel_vis_idx && sel_vis_idx < effective_scroll_h + h_margin {
         effective_scroll_h = sel_vis_idx.saturating_sub(h_margin);
     }
 
@@ -342,12 +343,11 @@ pub fn visible_columns_layout(
     let mut visible_cols: Vec<(usize, String)> = Vec::new();
     let mut col_width_sizes: Vec<usize> = Vec::new();
 
-    for (_v_idx, (orig_col_idx, c)) in all_visible_cols.iter().enumerate().skip(effective_scroll_h) {
+    for (_v_idx, (orig_col_idx, c)) in all_visible_cols.iter().enumerate().skip(effective_scroll_h)
+    {
         let needed_width = compute_column_width(state, *orig_col_idx, c, available_width);
 
-        if visible_cols.is_empty()
-            || cumulative_width + needed_width + 2 <= available_width
-        {
+        if visible_cols.is_empty() || cumulative_width + needed_width + 2 <= available_width {
             cumulative_width += needed_width + 2;
             visible_cols.push((*orig_col_idx, (*c).clone()));
             col_width_sizes.push(needed_width);
@@ -515,8 +515,7 @@ pub fn hit_test_cell(
     }
 
     let available_width = inner.width.saturating_sub(4) as usize;
-    let (visible_cols, col_width_sizes, _) =
-        visible_columns_layout(state, available_width);
+    let (visible_cols, col_width_sizes, _) = visible_columns_layout(state, available_width);
     if visible_cols.is_empty() {
         return None;
     }
@@ -581,7 +580,9 @@ pub fn hit_test_cell(
         return None;
     }
     let table_reserved_rows = if has_h_scrollbar { 3 } else { 2 };
-    let viewport_lines = (inner.height as usize).saturating_sub(table_reserved_rows).max(1);
+    let viewport_lines = (inner.height as usize)
+        .saturating_sub(table_reserved_rows)
+        .max(1);
 
     let effective_scroll_v = calculate_effective_scroll_v(
         state.scroll_v.get(),
@@ -829,7 +830,9 @@ pub fn render(
 
     let has_h_scrollbar = state.columns.len() > 1;
     let table_reserved_rows = if has_h_scrollbar { 3 } else { 2 };
-    let viewport_lines = (inner.height as usize).saturating_sub(table_reserved_rows).max(1);
+    let viewport_lines = (inner.height as usize)
+        .saturating_sub(table_reserved_rows)
+        .max(1);
 
     let effective_scroll_v = calculate_effective_scroll_v(
         state.scroll_v.get(),
@@ -879,12 +882,7 @@ pub fn render(
     let mut visible_rows: Vec<Row> = Vec::new();
     let mut total_rendered_lines: usize = 0;
 
-    for (row_idx, row) in state
-        .rows
-        .iter()
-        .enumerate()
-        .skip(effective_scroll_v)
-    {
+    for (row_idx, row) in state.rows.iter().enumerate().skip(effective_scroll_v) {
         if total_rendered_lines >= viewport_lines && !visible_rows.is_empty() {
             break;
         }
@@ -1175,7 +1173,14 @@ mod tests {
 
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 140, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 140, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
 
@@ -1210,9 +1215,11 @@ mod tests {
             query_buffer: "SELECT id, secret, name FROM users".to_string(),
             query_cursor: 35,
             columns: vec!["id".to_string(), "secret".to_string(), "name".to_string()],
-            rows: vec![
-                vec!["1".to_string(), "pass123".to_string(), "Alice".to_string()],
-            ],
+            rows: vec![vec![
+                "1".to_string(),
+                "pass123".to_string(),
+                "Alice".to_string(),
+            ]],
             scroll_v: std::cell::Cell::new(0),
             scroll_h: std::cell::Cell::new(0),
             selected_row: 0,
@@ -1233,7 +1240,14 @@ mod tests {
 
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 140, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 140, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
 
@@ -1246,11 +1260,26 @@ mod tests {
             content.push('\n');
         }
 
-        assert!(content.contains("id"), "visible column 'id' must be rendered");
-        assert!(content.contains("name"), "visible column 'name' must be rendered");
-        assert!(!content.contains("secret"), "hidden column 'secret' must not be rendered");
-        assert!(!content.contains("pass123"), "hidden column value 'pass123' must not be rendered");
-        assert!(content.contains("(1 hidden)"), "Title should indicate 1 hidden column: {content}");
+        assert!(
+            content.contains("id"),
+            "visible column 'id' must be rendered"
+        );
+        assert!(
+            content.contains("name"),
+            "visible column 'name' must be rendered"
+        );
+        assert!(
+            !content.contains("secret"),
+            "hidden column 'secret' must not be rendered"
+        );
+        assert!(
+            !content.contains("pass123"),
+            "hidden column value 'pass123' must not be rendered"
+        );
+        assert!(
+            content.contains("(1 hidden)"),
+            "Title should indicate 1 hidden column: {content}"
+        );
     }
 
     #[test]
@@ -1280,7 +1309,14 @@ mod tests {
         // Initial render: cursor at row 0, scroll_v should be 0
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
         assert_eq!(state.scroll_v.get(), 0, "Initial scroll_v should be 0");
@@ -1289,7 +1325,14 @@ mod tests {
         state.selected_row = 10;
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
         assert_eq!(
@@ -1302,7 +1345,14 @@ mod tests {
         state.selected_row = 11;
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
         assert_eq!(
@@ -1315,55 +1365,121 @@ mod tests {
         state.selected_row = 12;
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
-        assert_eq!(state.scroll_v.get(), 2, "Reaching threshold should incrementally scroll to 2");
+        assert_eq!(
+            state.scroll_v.get(),
+            2,
+            "Reaching threshold should incrementally scroll to 2"
+        );
 
         // Move cursor down to row 13: sheet should incrementally scroll to 3
         state.selected_row = 13;
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
-        assert_eq!(state.scroll_v.get(), 3, "Reaching threshold should incrementally scroll to 3");
+        assert_eq!(
+            state.scroll_v.get(),
+            3,
+            "Reaching threshold should incrementally scroll to 3"
+        );
 
         // Now move cursor back UP to row 12 (within viewport with scroll_v = 3): sheet should NOT move
         state.selected_row = 12;
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
-        assert_eq!(state.scroll_v.get(), 3, "Moving up within viewport should NOT move the sheet");
+        assert_eq!(
+            state.scroll_v.get(),
+            3,
+            "Moving up within viewport should NOT move the sheet"
+        );
 
         // Move cursor up to row 7 (7 >= scroll_v 3 + margin 4): sheet should STILL not move
         state.selected_row = 7;
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
-        assert_eq!(state.scroll_v.get(), 3, "Moving up within margin should keep scroll_v = 3");
+        assert_eq!(
+            state.scroll_v.get(),
+            3,
+            "Moving up within margin should keep scroll_v = 3"
+        );
 
         // Move cursor up past the margin threshold (row 6 < scroll_v 3 + margin 4): sheet incrementally scrolls up to 2
         state.selected_row = 6;
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
-        assert_eq!(state.scroll_v.get(), 2, "Moving past top margin should incrementally scroll up to 2");
+        assert_eq!(
+            state.scroll_v.get(),
+            2,
+            "Moving past top margin should incrementally scroll up to 2"
+        );
 
         // Move cursor up to row 0: sheet incrementally scrolls up to 0
         state.selected_row = 0;
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
-        assert_eq!(state.scroll_v.get(), 0, "Moving to top should scroll back to 0");
+        assert_eq!(
+            state.scroll_v.get(),
+            0,
+            "Moving to top should scroll back to 0"
+        );
     }
 
     #[test]
@@ -1373,7 +1489,8 @@ mod tests {
             .map(|i| {
                 vec![
                     format!("id_{i}"),
-                    "This is a very long description text that definitely wraps into several lines".to_string(),
+                    "This is a very long description text that definitely wraps into several lines"
+                        .to_string(),
                 ]
             })
             .collect();
@@ -1397,7 +1514,14 @@ mod tests {
         // Initial render: row 0 selected, scroll_v = 0
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
         assert_eq!(state.scroll_v.get(), 0);
@@ -1407,7 +1531,14 @@ mod tests {
         state.selected_row = 5;
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
         assert!(
@@ -1420,7 +1551,14 @@ mod tests {
         state.selected_row = 10;
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
         assert!(
@@ -1503,7 +1641,14 @@ mod tests {
         // Initial render: cursor at 0, scroll_v 0
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
         assert_eq!(state.scroll_v.get(), 0);
@@ -1514,7 +1659,14 @@ mod tests {
         state.last_selected_row.set(10);
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
         assert_eq!(
@@ -1529,7 +1681,14 @@ mod tests {
         state.last_selected_row.set(25);
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 80, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
         assert_eq!(
@@ -1586,7 +1745,10 @@ mod tests {
 
         let avail_width = 80;
         let max_scroll = compute_max_scroll_h(&state, avail_width);
-        assert!(max_scroll > 0, "20 columns should require scrolling across 80 width");
+        assert!(
+            max_scroll > 0,
+            "20 columns should require scrolling across 80 width"
+        );
 
         // Scroll right 3 times
         scroll_table_horizontal_right(&mut state, avail_width);
@@ -1810,7 +1972,14 @@ mod tests {
 
         terminal
             .draw(|f| {
-                render(f, Rect::new(0, 0, 160, 20), &state, "".to_string(), true, &app);
+                render(
+                    f,
+                    Rect::new(0, 0, 160, 20),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
             })
             .unwrap();
 
@@ -1823,8 +1992,17 @@ mod tests {
             content.push('\n');
         }
 
-        assert!(content.contains("▼"), "Header should contain sort indicator: {content}");
-        assert!(content.contains("sorted by id desc"), "Title should show sort info: {content}");
-        assert!(content.contains("iceberg › sales › orders"), "Title should show table breadcrumb: {content}");
+        assert!(
+            content.contains("▼"),
+            "Header should contain sort indicator: {content}"
+        );
+        assert!(
+            content.contains("sorted by id desc"),
+            "Title should show sort info: {content}"
+        );
+        assert!(
+            content.contains("iceberg › sales › orders"),
+            "Title should show table breadcrumb: {content}"
+        );
     }
 }

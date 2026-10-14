@@ -232,12 +232,16 @@ pub async fn run_self_update() -> Result<()> {
         .context("Failed to connect to GitHub releases API")?;
 
     if response.status() == reqwest::StatusCode::NOT_FOUND {
-        println!("\x1b[1;33m⚠\x1b[0m No releases currently available on GitHub for \x1b[1m{REPO}\x1b[0m.");
+        println!(
+            "\x1b[1;33m⚠\x1b[0m No releases currently available on GitHub for \x1b[1m{REPO}\x1b[0m."
+        );
         return Ok(());
     }
 
     if response.status() == reqwest::StatusCode::FORBIDDEN {
-        println!("\x1b[1;33m⚠\x1b[0m GitHub API rate limit reached. Please check back later or install from https://github.com/{REPO}/releases.");
+        println!(
+            "\x1b[1;33m⚠\x1b[0m GitHub API rate limit reached. Please check back later or install from https://github.com/{REPO}/releases."
+        );
         return Ok(());
     }
 
@@ -329,14 +333,17 @@ pub async fn run_self_update() -> Result<()> {
         .context("Failed to read download stream")?;
 
     {
-        let mut f = File::create(&temp_download)
-            .context("Failed to create temporary file for download")?;
+        let mut f =
+            File::create(&temp_download).context("Failed to create temporary file for download")?;
         f.write_all(&bytes)
             .context("Failed to write downloaded data to temporary file")?;
         f.flush()?;
     }
 
-    println!("\x1b[1;32m✔\x1b[0m Download complete ({} bytes).", bytes.len());
+    println!(
+        "\x1b[1;32m✔\x1b[0m Download complete ({} bytes).",
+        bytes.len()
+    );
     println!(
         "\x1b[1;36m➜\x1b[0m Installing update to \x1b[1m{}\x1b[0m...",
         current_exe.display()

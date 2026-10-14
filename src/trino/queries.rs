@@ -265,7 +265,9 @@ pub fn format_column_filter_predicate_with_overrides(
     filter: &ColumnFilter,
     expr_overrides: Option<&HashMap<String, String>>,
 ) -> String {
-    let col_ref = if let Some(map) = expr_overrides && let Some(expr) = map.get(col) {
+    let col_ref = if let Some(map) = expr_overrides
+        && let Some(expr) = map.get(col)
+    {
         expr.clone()
     } else {
         resolve_column_sql_ref(col)
@@ -281,7 +283,10 @@ pub fn format_column_filter_predicate_with_overrides(
     }
 }
 
-pub fn format_column_filter_values_predicate(col: &str, selected_values: &HashSet<String>) -> String {
+pub fn format_column_filter_values_predicate(
+    col: &str,
+    selected_values: &HashSet<String>,
+) -> String {
     let col_ref = resolve_column_sql_ref(col);
     format_column_filter_values_predicate_with_ref(&col_ref, selected_values)
 }
@@ -290,7 +295,6 @@ pub fn format_column_filter_values_predicate_with_ref(
     col_ref: &str,
     selected_values: &HashSet<String>,
 ) -> String {
-
     if selected_values.is_empty() {
         return "1 = 0".to_string();
     }
@@ -298,7 +302,9 @@ pub fn format_column_filter_values_predicate_with_ref(
     let mut vals: Vec<&String> = selected_values.iter().collect();
     vals.sort();
 
-    let has_null = vals.iter().any(|v| v.eq_ignore_ascii_case("null") || v.is_empty());
+    let has_null = vals
+        .iter()
+        .any(|v| v.eq_ignore_ascii_case("null") || v.is_empty());
     let non_nulls: Vec<&&String> = vals
         .iter()
         .filter(|v| !v.eq_ignore_ascii_case("null") && !v.is_empty())
@@ -318,7 +324,11 @@ pub fn format_column_filter_values_predicate_with_ref(
     } else {
         let all_numeric = non_nulls.iter().all(|v| is_numeric_literal(v));
         if all_numeric {
-            let joined = non_nulls.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(", ");
+            let joined = non_nulls
+                .iter()
+                .map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
             Some(format!("{col_ref} IN ({joined})"))
         } else {
             let joined = non_nulls
@@ -383,9 +393,7 @@ pub fn split_sql_clauses(sql: &str) -> (&str, Option<&str>, &str) {
                 i == 0 || bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b')';
             if at_word_start {
                 let rest = &sql[i..];
-                if where_pos.is_none()
-                    && rest.len() >= 5
-                    && rest[..5].eq_ignore_ascii_case("WHERE")
+                if where_pos.is_none() && rest.len() >= 5 && rest[..5].eq_ignore_ascii_case("WHERE")
                 {
                     let after = &rest[5..];
                     if after.is_empty()
@@ -441,8 +449,6 @@ pub fn split_sql_clauses(sql: &str) -> (&str, Option<&str>, &str) {
     }
 }
 
-
-
 pub fn replace_select_columns(
     head: &str,
     visible_columns: &[String],
@@ -475,10 +481,7 @@ pub fn replace_select_columns_with_overrides(
         match bytes[i] {
             b'(' => depth += 1,
             b')' => depth = depth.saturating_sub(1),
-            _ if depth == 0
-                && i + 6 <= len
-                && head[i..i + 6].eq_ignore_ascii_case(" FROM ") =>
-            {
+            _ if depth == 0 && i + 6 <= len && head[i..i + 6].eq_ignore_ascii_case(" FROM ") => {
                 from_pos = Some(i);
                 break;
             }
@@ -494,13 +497,20 @@ pub fn replace_select_columns_with_overrides(
     let formatted_cols = visible_columns
         .iter()
         .map(|c| {
-            if let Some(map) = expr_overrides && let Some(expr) = map.get(c) {
+            if let Some(map) = expr_overrides
+                && let Some(expr) = map.get(c)
+            {
                 format!("{expr} AS {}", q(c))
             } else if c.starts_with('"') || c.contains('(') || c.contains('[') {
                 c.to_string()
             } else if let Some((parent, child)) = c.split_once('.') {
                 let path = child.split('.').collect::<Vec<_>>().join(".");
-                format!("json_extract_scalar({}, '$.{}') AS {}", q(parent), path, q(c))
+                format!(
+                    "json_extract_scalar({}, '$.{}') AS {}",
+                    q(parent),
+                    path,
+                    q(c)
+                )
             } else {
                 q(c)
             }
@@ -647,7 +657,8 @@ pub fn update_query_limit(sql: &str, new_limit: usize) -> String {
         let b = bytes[i];
 
         // Line comment: -- until end of line
-        if !in_single_quote && !in_double_quote && b == b'-' && i + 1 < len && bytes[i + 1] == b'-' {
+        if !in_single_quote && !in_double_quote && b == b'-' && i + 1 < len && bytes[i + 1] == b'-'
+        {
             i += 2;
             while i < len && bytes[i] != b'\n' {
                 i += 1;
@@ -905,19 +916,31 @@ mod tests {
     fn test_format_column_filter_predicate() {
         let mut set = HashSet::new();
         set.insert("ACTIVE".to_string());
-        assert_eq!(format_column_filter_predicate("status", &ColumnFilter::Values(set.clone())), "\"status\" = 'ACTIVE'");
+        assert_eq!(
+            format_column_filter_predicate("status", &ColumnFilter::Values(set.clone())),
+            "\"status\" = 'ACTIVE'"
+        );
 
         set.insert("PENDING".to_string());
-        assert_eq!(format_column_filter_predicate("status", &ColumnFilter::Values(set)), "\"status\" IN ('ACTIVE', 'PENDING')");
+        assert_eq!(
+            format_column_filter_predicate("status", &ColumnFilter::Values(set)),
+            "\"status\" IN ('ACTIVE', 'PENDING')"
+        );
 
         let mut num_set = HashSet::new();
         num_set.insert("10".to_string());
         num_set.insert("20".to_string());
-        assert_eq!(format_column_filter_predicate("amount", &ColumnFilter::Values(num_set)), "\"amount\" IN (10, 20)");
+        assert_eq!(
+            format_column_filter_predicate("amount", &ColumnFilter::Values(num_set)),
+            "\"amount\" IN (10, 20)"
+        );
 
         let mut null_set = HashSet::new();
         null_set.insert("null".to_string());
-        assert_eq!(format_column_filter_predicate("status", &ColumnFilter::Values(null_set.clone())), "\"status\" IS NULL");
+        assert_eq!(
+            format_column_filter_predicate("status", &ColumnFilter::Values(null_set.clone())),
+            "\"status\" IS NULL"
+        );
 
         null_set.insert("ACTIVE".to_string());
         assert_eq!(
@@ -926,7 +949,10 @@ mod tests {
         );
 
         let empty_set: HashSet<String> = HashSet::new();
-        assert_eq!(format_column_filter_predicate("status", &ColumnFilter::Values(empty_set)), "1 = 0");
+        assert_eq!(
+            format_column_filter_predicate("status", &ColumnFilter::Values(empty_set)),
+            "1 = 0"
+        );
 
         // Numeric operators: <, <=, >, >=, =
         use crate::app::{NumericFilter, NumericOp};
@@ -935,35 +961,50 @@ mod tests {
             value: 100.0,
             raw_value: "100".to_string(),
         });
-        assert_eq!(format_column_filter_predicate("amount", &lt), "\"amount\" < 100");
+        assert_eq!(
+            format_column_filter_predicate("amount", &lt),
+            "\"amount\" < 100"
+        );
 
         let lte = ColumnFilter::Numeric(NumericFilter {
             op: NumericOp::Lte,
             value: 50.5,
             raw_value: "50.5".to_string(),
         });
-        assert_eq!(format_column_filter_predicate("amount", &lte), "\"amount\" <= 50.5");
+        assert_eq!(
+            format_column_filter_predicate("amount", &lte),
+            "\"amount\" <= 50.5"
+        );
 
         let gt = ColumnFilter::Numeric(NumericFilter {
             op: NumericOp::Gt,
             value: 0.0,
             raw_value: "0".to_string(),
         });
-        assert_eq!(format_column_filter_predicate("amount", &gt), "\"amount\" > 0");
+        assert_eq!(
+            format_column_filter_predicate("amount", &gt),
+            "\"amount\" > 0"
+        );
 
         let gte = ColumnFilter::Numeric(NumericFilter {
             op: NumericOp::Gte,
             value: 10.0,
             raw_value: "10".to_string(),
         });
-        assert_eq!(format_column_filter_predicate("amount", &gte), "\"amount\" >= 10");
+        assert_eq!(
+            format_column_filter_predicate("amount", &gte),
+            "\"amount\" >= 10"
+        );
 
         let eq = ColumnFilter::Numeric(NumericFilter {
             op: NumericOp::Eq,
             value: 42.0,
             raw_value: "42".to_string(),
         });
-        assert_eq!(format_column_filter_predicate("amount", &eq), "\"amount\" = 42");
+        assert_eq!(
+            format_column_filter_predicate("amount", &eq),
+            "\"amount\" = 42"
+        );
     }
 
     #[test]
@@ -976,7 +1017,10 @@ mod tests {
         let mut sel = HashSet::new();
         sel.insert("ACTIVE".to_string());
         filters.insert("status".to_string(), ColumnFilter::Values(sel));
-        distinct.insert("status".to_string(), vec!["ACTIVE".to_string(), "PENDING".to_string()]);
+        distinct.insert(
+            "status".to_string(),
+            vec!["ACTIVE".to_string(), "PENDING".to_string()],
+        );
 
         let sql = build_query_with_column_filters(base_query, &filters, &distinct);
         assert_eq!(
@@ -1015,7 +1059,10 @@ mod tests {
         let head = "SELECT * FROM \"iceberg\".\"sales\".\"orders\"";
         let cols = vec!["id".to_string(), "status".to_string()];
         let replaced = replace_select_columns(head, &cols, 3);
-        assert_eq!(replaced, "SELECT \"id\", \"status\" FROM \"iceberg\".\"sales\".\"orders\"");
+        assert_eq!(
+            replaced,
+            "SELECT \"id\", \"status\" FROM \"iceberg\".\"sales\".\"orders\""
+        );
 
         // All columns visible preserves original head
         let all_cols = vec!["id".to_string(), "status".to_string(), "amount".to_string()];
@@ -1035,7 +1082,10 @@ mod tests {
         let mut sel = HashSet::new();
         sel.insert("ACTIVE".to_string());
         filters.insert("status".to_string(), ColumnFilter::Values(sel));
-        distinct.insert("status".to_string(), vec!["ACTIVE".to_string(), "PENDING".to_string()]);
+        distinct.insert(
+            "status".to_string(),
+            vec!["ACTIVE".to_string(), "PENDING".to_string()],
+        );
 
         let sql = build_query_with_all_filters(base_query, &all_cols, &hidden, &filters, &distinct);
         assert_eq!(
@@ -1138,4 +1188,3 @@ mod tests {
         );
     }
 }
-

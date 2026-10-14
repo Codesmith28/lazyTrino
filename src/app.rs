@@ -231,7 +231,11 @@ impl DrillDownState {
         self.counts_cache
             .get(&self.path)
             .copied()
-            .or(if self.path.is_empty() { self.table_count } else { None })
+            .or(if self.path.is_empty() {
+                self.table_count
+            } else {
+                None
+            })
     }
 
     /// Gets the cached count for a specific prefix of the path up to `depth`.
@@ -394,11 +398,17 @@ impl ResultsState {
     }
 
     pub fn first_visible_col(&self) -> usize {
-        self.visible_columns().first().map(|(idx, _)| *idx).unwrap_or(0)
+        self.visible_columns()
+            .first()
+            .map(|(idx, _)| *idx)
+            .unwrap_or(0)
     }
 
     pub fn last_visible_col(&self) -> usize {
-        self.visible_columns().last().map(|(idx, _)| *idx).unwrap_or(0)
+        self.visible_columns()
+            .last()
+            .map(|(idx, _)| *idx)
+            .unwrap_or(0)
     }
 
     pub fn selection_range(&self) -> Option<(usize, usize)> {
@@ -538,8 +548,10 @@ impl ResultsState {
                 self.rows.sort_by(|row_a, row_b| {
                     let val_a = row_a.get(col_idx).map(|s| s.as_str()).unwrap_or("");
                     let val_b = row_b.get(col_idx).map(|s| s.as_str()).unwrap_or("");
-                    let is_null_a = val_a.trim().is_empty() || val_a.trim().eq_ignore_ascii_case("null");
-                    let is_null_b = val_b.trim().is_empty() || val_b.trim().eq_ignore_ascii_case("null");
+                    let is_null_a =
+                        val_a.trim().is_empty() || val_a.trim().eq_ignore_ascii_case("null");
+                    let is_null_b =
+                        val_b.trim().is_empty() || val_b.trim().eq_ignore_ascii_case("null");
 
                     if is_null_a && is_null_b {
                         return std::cmp::Ordering::Equal;
@@ -750,21 +762,27 @@ pub fn compare_cell_values(a: &str, b: &str, data_type: Option<&str>) -> std::cm
     compare_non_null_cell_values(a_trim, b_trim, data_type)
 }
 
-pub fn compare_non_null_cell_values(a: &str, b: &str, data_type: Option<&str>) -> std::cmp::Ordering {
+pub fn compare_non_null_cell_values(
+    a: &str,
+    b: &str,
+    data_type: Option<&str>,
+) -> std::cmp::Ordering {
     let is_numeric = data_type.map(is_numeric_type).unwrap_or(false)
         || (a.parse::<f64>().is_ok() && b.parse::<f64>().is_ok());
 
-    if is_numeric
-        && let (Ok(num_a), Ok(num_b)) = (a.parse::<f64>(), b.parse::<f64>())
-    {
-        return num_a.partial_cmp(&num_b).unwrap_or(std::cmp::Ordering::Equal);
+    if is_numeric && let (Ok(num_a), Ok(num_b)) = (a.parse::<f64>(), b.parse::<f64>()) {
+        return num_a
+            .partial_cmp(&num_b)
+            .unwrap_or(std::cmp::Ordering::Equal);
     }
 
     if let (Ok(bool_a), Ok(bool_b)) = (a.parse::<bool>(), b.parse::<bool>()) {
         return bool_a.cmp(&bool_b);
     }
 
-    a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b))
+    a.to_lowercase()
+        .cmp(&b.to_lowercase())
+        .then_with(|| a.cmp(b))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -19,8 +19,8 @@ use crate::app::*;
 use crate::trino::client::TrinoClient;
 use crate::trino::error::TrinoClientError;
 
-mod commands;
 pub mod column_modal;
+mod commands;
 mod export;
 pub mod filter_modal;
 pub mod help_modal;

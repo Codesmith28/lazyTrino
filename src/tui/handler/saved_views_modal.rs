@@ -17,7 +17,7 @@ use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{ActionState, ActivePanel, App, Mode, Screen};
-use crate::saved_views::{delete_saved_view, SavedView};
+use crate::saved_views::{SavedView, delete_saved_view};
 use crate::tui::handler::{Command, navigation};
 
 pub fn open_saved_views_modal(app: &mut App) {
@@ -214,7 +214,9 @@ pub fn open_save_view_prompt(app: &mut App) {
     } else if !a.query_buffer.is_empty() {
         a.query_buffer.clone()
     } else {
-        crate::app::ACTIONS[action_idx].2.build_query(&catalog, &schema, &table)
+        crate::app::ACTIONS[action_idx]
+            .2
+            .build_query(&catalog, &schema, &table)
     };
 
     let (column_filters, hidden_columns, sort) = if let Some(ref res) = a.results {
@@ -487,7 +489,10 @@ mod tests {
             table: "orders".to_string(),
             action_idx: 0,
             query: "SELECT * FROM iceberg.sales.orders".to_string(),
-            column_filters: vec![("status".to_string(), StoredColumnFilter::Values(vec!["OK".to_string()]))],
+            column_filters: vec![(
+                "status".to_string(),
+                StoredColumnFilter::Values(vec!["OK".to_string()]),
+            )],
             hidden_columns: vec!["internal_id".to_string()],
             sort: Some(("id".to_string(), StoredSortDirection::Asc)),
             partition_path: Vec::new(),
@@ -546,14 +551,26 @@ mod tests {
         // Press 'n' cancels deletion
         let n_key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
         handle_saved_views_modal_key(&mut app, n_key);
-        assert!(app.saved_views_modal.as_ref().unwrap().pending_delete_ids.is_empty());
+        assert!(
+            app.saved_views_modal
+                .as_ref()
+                .unwrap()
+                .pending_delete_ids
+                .is_empty()
+        );
         assert_eq!(app.saved_views_modal.as_ref().unwrap().views.len(), 2);
 
         // Press 'd' again and press 'y' to confirm
         handle_saved_views_modal_key(&mut app, d_key);
         let y_key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
         handle_saved_views_modal_key(&mut app, y_key);
-        assert!(app.saved_views_modal.as_ref().unwrap().pending_delete_ids.is_empty());
+        assert!(
+            app.saved_views_modal
+                .as_ref()
+                .unwrap()
+                .pending_delete_ids
+                .is_empty()
+        );
         assert_eq!(app.saved_views_modal.as_ref().unwrap().views.len(), 1);
         assert_eq!(app.saved_views_modal.as_ref().unwrap().views[0].id, "2");
         assert!(app.copied_toast.is_some());
@@ -577,13 +594,22 @@ mod tests {
         // 1. Space toggles item 0
         let space_key = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
         handle_saved_views_modal_key(&mut app, space_key);
-        assert!(app.saved_views_modal.as_ref().unwrap().selected_ids.contains("1"));
+        assert!(
+            app.saved_views_modal
+                .as_ref()
+                .unwrap()
+                .selected_ids
+                .contains("1")
+        );
 
         // 2. Move down and Space toggle item 1
         let down_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
         handle_saved_views_modal_key(&mut app, down_key);
         handle_saved_views_modal_key(&mut app, space_key);
-        assert_eq!(app.saved_views_modal.as_ref().unwrap().selected_ids.len(), 2);
+        assert_eq!(
+            app.saved_views_modal.as_ref().unwrap().selected_ids.len(),
+            2
+        );
 
         // 3. Press 'd' - schedules both selected IDs for deletion
         let d_key = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
@@ -605,10 +631,19 @@ mod tests {
         // 5. 'a' toggles all
         let a_key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
         handle_saved_views_modal_key(&mut app, a_key);
-        assert_eq!(app.saved_views_modal.as_ref().unwrap().selected_ids.len(), 1);
+        assert_eq!(
+            app.saved_views_modal.as_ref().unwrap().selected_ids.len(),
+            1
+        );
         // Pressing 'a' again clears all
         handle_saved_views_modal_key(&mut app, a_key);
-        assert!(app.saved_views_modal.as_ref().unwrap().selected_ids.is_empty());
+        assert!(
+            app.saved_views_modal
+                .as_ref()
+                .unwrap()
+                .selected_ids
+                .is_empty()
+        );
     }
 
     #[test]
@@ -653,7 +688,15 @@ mod tests {
         let cmd = restore_saved_view(&mut app, view.clone());
 
         assert!(cmd.is_some());
-        if let Some(Command::ExecuteQuery { query, catalog, schema, table, is_paginated, .. }) = cmd {
+        if let Some(Command::ExecuteQuery {
+            query,
+            catalog,
+            schema,
+            table,
+            is_paginated,
+            ..
+        }) = cmd
+        {
             assert_eq!(query, view.query);
             assert_eq!(catalog, "iceberg");
             assert_eq!(schema, "sales");

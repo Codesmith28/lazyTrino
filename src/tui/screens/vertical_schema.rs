@@ -216,8 +216,17 @@ mod tests {
             content.push('\n');
         }
 
-        assert!(content.contains("Nullable"), "Header should contain 'Nullable': {content}");
-        assert!(content.contains("NO"), "Should display 'NO' for id column: {content}");
-        assert!(content.contains("YES"), "Should display 'YES' for email column: {content}");
+        assert!(
+            content.contains("Nullable"),
+            "Header should contain 'Nullable': {content}"
+        );
+        assert!(
+            content.contains("NO"),
+            "Should display 'NO' for id column: {content}"
+        );
+        assert!(
+            content.contains("YES"),
+            "Should display 'YES' for email column: {content}"
+        );
     }
 }

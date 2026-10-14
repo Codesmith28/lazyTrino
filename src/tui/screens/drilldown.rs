@@ -111,7 +111,9 @@ pub fn render(
             Span::styled(table_total_display, theme::info_bold_style()),
         ];
 
-        if depth > 0 && let Some((curr_col, curr_val)) = dd.path.last() {
+        if depth > 0
+            && let Some((curr_col, curr_val)) = dd.path.last()
+        {
             let part_count_display = if let Some(pc) = dd.counts_cache.get(&dd.path) {
                 format!("{} records", crate::app::format_count(*pc))
             } else if dd.current_count_loading {
@@ -125,7 +127,10 @@ pub fn render(
                 format!("Partition ({curr_col}={curr_val}): "),
                 theme::muted_style(),
             ));
-            banner_spans.push(Span::styled(part_count_display, theme::success_bold_style()));
+            banner_spans.push(Span::styled(
+                part_count_display,
+                theme::success_bold_style(),
+            ));
         }
 
         let banner_p = ratatui::widgets::Paragraph::new(Line::from(banner_spans));
@@ -145,7 +150,10 @@ pub fn render(
     }
 
     let items_area = if dd.truncated && content_area.height > 1 {
-        let notice = Rect { height: 1, ..content_area };
+        let notice = Rect {
+            height: 1,
+            ..content_area
+        };
         let list_area = Rect {
             y: content_area.y + 1,
             height: content_area.height.saturating_sub(1),
@@ -262,10 +270,7 @@ mod tests {
     #[test]
     fn drilldown_renders_table_and_partition_counts_in_title_and_banner() {
         let mut counts = HashMap::new();
-        counts.insert(
-            vec![("date".to_string(), "2026-08-06".to_string())],
-            45120,
-        );
+        counts.insert(vec![("date".to_string(), "2026-08-06".to_string())], 45120);
 
         let dd = DrillDownState {
             partition_cols: vec!["date".to_string(), "service".to_string()],

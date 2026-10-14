@@ -36,7 +36,8 @@ pub fn open_column_modal(app: &mut App) {
             .filter(|c| !res.flattened_fields.iter().any(|f| &f.full_name == *c))
             .cloned()
             .collect();
-        let tree_nodes = crate::trino::flatten::build_column_tree(&root_columns, &res.flattened_fields);
+        let tree_nodes =
+            crate::trino::flatten::build_column_tree(&root_columns, &res.flattened_fields);
 
         let cur_col_name = res.columns.get(res.selected_col).map(|s| s.as_str());
         let cursor = if let Some(name) = cur_col_name {
@@ -135,7 +136,9 @@ pub fn handle_column_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
         }
         KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char('f')
             if code == KeyCode::PageDown
-                || key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                || key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
         {
             if let Some(ref mut m) = app.column_modal {
                 let matched = m.filtered_indices();
@@ -150,7 +153,9 @@ pub fn handle_column_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
         }
         KeyCode::PageUp | KeyCode::Char('u') | KeyCode::Char('b')
             if code == KeyCode::PageUp
-                || key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                || key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
         {
             if let Some(ref mut m) = app.column_modal {
                 m.cursor = m.cursor.saturating_sub(10);
@@ -268,7 +273,11 @@ pub fn apply_column_modal(app: &mut App) -> Option<Command> {
             .collect();
 
         // 2. Adjust selected_col if currently pointing to a hidden column
-        if res.columns.get(res.selected_col).is_some_and(|c| res.hidden_columns.contains(c)) {
+        if res
+            .columns
+            .get(res.selected_col)
+            .is_some_and(|c| res.hidden_columns.contains(c))
+        {
             let vis = res.visible_columns();
             if !vis.is_empty() {
                 let closest = vis
@@ -331,14 +340,12 @@ mod tests {
                     "amount".to_string(),
                     "created_at".to_string(),
                 ],
-                rows: vec![
-                    vec![
-                        "1".to_string(),
-                        "active".to_string(),
-                        "100".to_string(),
-                        "2026-01-01".to_string(),
-                    ],
-                ],
+                rows: vec![vec![
+                    "1".to_string(),
+                    "active".to_string(),
+                    "100".to_string(),
+                    "2026-01-01".to_string(),
+                ]],
                 scroll_v: std::cell::Cell::new(0),
                 scroll_h: std::cell::Cell::new(0),
                 selected_row: 0,
@@ -373,18 +380,36 @@ mod tests {
 
         // Toggle at cursor 2 ("amount") -> deselect
         handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
-        assert!(!app.column_modal.as_ref().unwrap().selected_columns.contains("amount"));
+        assert!(
+            !app.column_modal
+                .as_ref()
+                .unwrap()
+                .selected_columns
+                .contains("amount")
+        );
         assert_eq!(app.column_modal.as_ref().unwrap().selected_columns.len(), 3);
 
         // Toggle again to re-select
         handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
-        assert!(app.column_modal.as_ref().unwrap().selected_columns.contains("amount"));
+        assert!(
+            app.column_modal
+                .as_ref()
+                .unwrap()
+                .selected_columns
+                .contains("amount")
+        );
         assert_eq!(app.column_modal.as_ref().unwrap().selected_columns.len(), 4);
 
         // 'a' toggles all off except current cursor item
         handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char('a')));
         assert_eq!(app.column_modal.as_ref().unwrap().selected_columns.len(), 1);
-        assert!(app.column_modal.as_ref().unwrap().selected_columns.contains("amount"));
+        assert!(
+            app.column_modal
+                .as_ref()
+                .unwrap()
+                .selected_columns
+                .contains("amount")
+        );
 
         // 'a' again selects all
         handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char('a')));
@@ -397,7 +422,10 @@ mod tests {
         assert_eq!(app.column_modal.as_ref().unwrap().cursor, 0);
 
         // Esc cancels without changes
-        handle_column_modal_key(&mut self::sample_app_with_results(), KeyEvent::from(KeyCode::Esc));
+        handle_column_modal_key(
+            &mut self::sample_app_with_results(),
+            KeyEvent::from(KeyCode::Esc),
+        );
     }
 
     #[test]
@@ -462,7 +490,13 @@ mod tests {
 
         // Space toggles the filtered item (status)
         handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
-        assert!(!app.column_modal.as_ref().unwrap().selected_columns.contains("status"));
+        assert!(
+            !app.column_modal
+                .as_ref()
+                .unwrap()
+                .selected_columns
+                .contains("status")
+        );
 
         // Press Esc to clear search
         handle_column_modal_key(&mut app, KeyEvent::from(KeyCode::Esc));
@@ -508,4 +542,3 @@ mod tests {
         assert_eq!(m.selected_columns.len(), 4);
     }
 }
-

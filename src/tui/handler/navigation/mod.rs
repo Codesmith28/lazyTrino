@@ -218,7 +218,9 @@ pub fn get_selected(screen: &Screen) -> Option<usize> {
 pub mod tests {
     use super::drilldown::*;
     use super::*;
-    use crate::app::{ACTIONS, Action, ActionState, DrillDownState, Mode, ResultsState, TableRecon};
+    use crate::app::{
+        ACTIONS, Action, ActionState, DrillDownState, Mode, ResultsState, TableRecon,
+    };
     use crate::config::ConnectionConfig;
     use crate::trino::client::TrinoClient;
     use crate::trino::queries;
@@ -626,14 +628,8 @@ pub mod tests {
         assert!(dd.path.is_empty());
         assert_eq!(dd.selected, 0);
         assert!(s.results.is_none());
-        let expected_parent_query = queries::distinct_partition_values(
-            "datalake",
-            "tenant",
-            "events",
-            &[],
-            "date",
-            200,
-        );
+        let expected_parent_query =
+            queries::distinct_partition_values("datalake", "tenant", "events", &[], "date", 200);
         assert_eq!(s.query_buffer, expected_parent_query);
     }
 
@@ -735,7 +731,9 @@ pub mod tests {
             assert_eq!(state.query_buffer, expected_query);
         }
 
-        for (expected_idx, (_, _, action)) in ACTIONS.iter().enumerate().take(ACTIONS.len() - 1).rev() {
+        for (expected_idx, (_, _, action)) in
+            ACTIONS.iter().enumerate().take(ACTIONS.len() - 1).rev()
+        {
             actions_keys(&mut app, KeyEvent::from(KeyCode::Char('k')));
             let Screen::Actions(state) = &app.screen else {
                 panic!("expected actions screen");
@@ -1193,9 +1191,11 @@ pub mod tests {
                 query_buffer: "SELECT id, status, amount FROM orders".to_string(),
                 query_cursor: 37,
                 columns: vec!["id".to_string(), "status".to_string(), "amount".to_string()],
-                rows: vec![
-                    vec!["1".to_string(), "active".to_string(), "100".to_string()],
-                ],
+                rows: vec![vec![
+                    "1".to_string(),
+                    "active".to_string(),
+                    "100".to_string(),
+                ]],
                 scroll_v: std::cell::Cell::new(0),
                 scroll_h: std::cell::Cell::new(0),
                 selected_row: 0,
@@ -1279,29 +1279,39 @@ pub mod tests {
 
         // Page down
         actions_keys(&mut app, KeyEvent::from(KeyCode::PageDown));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_row, 15);
 
         // Page down again
         actions_keys(&mut app, KeyEvent::from(KeyCode::PageDown));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_row, 30);
 
         // Page up
         actions_keys(&mut app, KeyEvent::from(KeyCode::PageUp));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_row, 15);
 
         // Ctrl+d (page down)
         let ctrl_d = KeyEvent::new(KeyCode::Char('d'), crossterm::event::KeyModifiers::CONTROL);
         actions_keys(&mut app, ctrl_d);
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_row, 30);
 
         // Ctrl+u (page up)
         let ctrl_u = KeyEvent::new(KeyCode::Char('u'), crossterm::event::KeyModifiers::CONTROL);
         actions_keys(&mut app, ctrl_u);
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_row, 15);
     }
 
@@ -1324,88 +1334,127 @@ pub mod tests {
         // 1. Ctrl+Right moves 5 columns right
         let ctrl_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::CONTROL);
         actions_keys(&mut app, ctrl_right);
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
 
         // 2. Ctrl+l moves 5 columns right
         let ctrl_l = KeyEvent::new(KeyCode::Char('l'), crossterm::event::KeyModifiers::CONTROL);
         actions_keys(&mut app, ctrl_l);
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 10);
 
         // 3. Ctrl+Left moves 5 columns left
         let ctrl_left = KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::CONTROL);
         actions_keys(&mut app, ctrl_left);
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
 
         // 4. End jumps to last column (19)
         actions_keys(&mut app, KeyEvent::from(KeyCode::End));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 19);
 
         // 5. Home jumps to first column (0)
         actions_keys(&mut app, KeyEvent::from(KeyCode::Home));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
 
         // 6. '$' jumps to last column
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('$')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 19);
 
         // 7. '0' jumps to first column
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('0')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
 
         // 8. Shift+Right moves 5 columns right
         let shift_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::SHIFT);
         actions_keys(&mut app, shift_right);
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
 
         // 9. 'L' moves 5 columns right
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('L')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 10);
 
         // 10. 'H' moves 5 columns left
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('H')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
 
         // 11. Shift+Left moves 5 columns left
         let shift_left = KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::SHIFT);
         actions_keys(&mut app, shift_left);
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
 
         // 12. ']' moves 1 column right and '[' moves 1 column left
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char(']')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 1);
 
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('[')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
 
         // 13. '>' moves 5 columns right and '<' moves 5 columns left
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
 
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('<')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
 
         // 14. Test global handle_key_sync with '0' when number_buffer is empty
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>'))); // col 5
         assert!(app.number_buffer.is_empty());
         crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('0')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
-        assert_eq!(state.results.as_ref().unwrap().selected_col, 0, "'0' with empty buffer must jump to column 0");
-        assert!(app.number_buffer.is_empty(), "number_buffer must remain empty when '0' is pressed alone");
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(
+            state.results.as_ref().unwrap().selected_col,
+            0,
+            "'0' with empty buffer must jump to column 0"
+        );
+        assert!(
+            app.number_buffer.is_empty(),
+            "number_buffer must remain empty when '0' is pressed alone"
+        );
     }
 
     #[test]
@@ -1422,8 +1471,13 @@ pub mod tests {
 
         // Press 'S': should toggle sort to Desc (NOT switch to Schema!)
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('S')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
-        assert_eq!(state.selected, 0, "Selected menu action must remain TableView (0)");
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(
+            state.selected, 0,
+            "Selected menu action must remain TableView (0)"
+        );
         assert_eq!(
             state.results.as_ref().unwrap().sort,
             Some(("event_type".to_string(), crate::app::SortDirection::Desc))
@@ -1431,7 +1485,9 @@ pub mod tests {
 
         // Press 'S' again: Asc
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('S')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(
             state.results.as_ref().unwrap().sort,
             Some(("event_type".to_string(), crate::app::SortDirection::Asc))
@@ -1439,7 +1495,9 @@ pub mod tests {
 
         // Press 's' (lowercase): None
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('s')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.results.as_ref().unwrap().sort, None);
     }
 
@@ -1477,7 +1535,9 @@ pub mod tests {
 
         // 'e' triggers Schema
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('e')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.selected, schema_idx);
 
         // 'i' is no longer assigned to any action
@@ -1485,22 +1545,30 @@ pub mod tests {
             s.selected = 0;
         }
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('i')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.selected, 0, "'i' should not trigger any action");
 
         // 'p' triggers Partitions
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('p')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.selected, partitions_idx);
 
         // 't' triggers Show Stats
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('t')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.selected, stats_idx);
 
         // 'm' triggers Sample Mode
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('m')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert_eq!(state.selected, sample_idx);
     }
 
@@ -1525,13 +1593,20 @@ pub mod tests {
 
         // 1. Shift+V enters visual line mode
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('V')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         let res = state.results.as_ref().unwrap();
-        assert_eq!(res.visual_mode, crate::app::VisualMode::Line { anchor_row: 0 });
+        assert_eq!(
+            res.visual_mode,
+            crate::app::VisualMode::Line { anchor_row: 0 }
+        );
 
         // 2. 'j' moves cursor down to row 1, expanding selection to rows 0..=1
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         let res = state.results.as_ref().unwrap();
         assert_eq!(res.selected_row, 1);
         assert!(res.is_cell_selected(0, 0));
@@ -1542,7 +1617,9 @@ pub mod tests {
 
         // 3. 'y' yanks the 2 rows as TSV and exits visual mode
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('y')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         let res = state.results.as_ref().unwrap();
         assert_eq!(res.visual_mode, crate::app::VisualMode::None);
         let toast = app.copied_toast.as_ref().unwrap().0.clone();
@@ -1571,7 +1648,9 @@ pub mod tests {
         // 1. Ctrl+v enters visual block mode
         let ctrl_v = KeyEvent::new(KeyCode::Char('v'), crossterm::event::KeyModifiers::CONTROL);
         actions_keys(&mut app, ctrl_v);
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         let res = state.results.as_ref().unwrap();
         assert_eq!(
             res.visual_mode,
@@ -1584,7 +1663,9 @@ pub mod tests {
         // 2. 'j' moves down and 'l' moves right to (1, 1)
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         let res = state.results.as_ref().unwrap();
         assert_eq!(res.selected_row, 1);
         assert_eq!(res.selected_col, 1);
@@ -1596,7 +1677,9 @@ pub mod tests {
 
         // 3. 'o' swaps anchor and cursor
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('o')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         let res = state.results.as_ref().unwrap();
         assert_eq!(res.selected_row, 0);
         assert_eq!(res.selected_col, 0);
@@ -1610,7 +1693,9 @@ pub mod tests {
 
         // 4. Esc exits visual mode but stays in MainViewer
         actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         let res = state.results.as_ref().unwrap();
         assert_eq!(res.visual_mode, crate::app::VisualMode::None);
         assert_eq!(app.active_panel, ActivePanel::MainViewer);
@@ -1666,9 +1751,14 @@ pub mod tests {
         // Shift+Down enters visual line mode
         let shift_down = KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::SHIFT);
         actions_keys(&mut app, shift_down);
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         let res = state.results.as_ref().unwrap();
-        assert_eq!(res.visual_mode, crate::app::VisualMode::Line { anchor_row: 0 });
+        assert_eq!(
+            res.visual_mode,
+            crate::app::VisualMode::Line { anchor_row: 0 }
+        );
         assert_eq!(res.selected_row, 1);
 
         // Esc exits visual mode
@@ -1677,7 +1767,9 @@ pub mod tests {
         // Shift+Right enters visual block mode
         let shift_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::SHIFT);
         actions_keys(&mut app, shift_right);
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         let res = state.results.as_ref().unwrap();
         assert_eq!(
             res.visual_mode,
@@ -1688,4 +1780,3 @@ pub mod tests {
         );
     }
 }
-

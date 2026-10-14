@@ -73,24 +73,31 @@ fn render_numeric_mode(frame: &mut Frame, area: Rect, modal: &FilterModalState) 
     // Tab row
     let tab_line = Line::from(vec![
         Span::styled(" [ 1: Distinct Values ] ", theme::muted_style()),
-        Span::styled(" [● 2: Numeric Comparator (<, <=, >, >=, =)] ", theme::warning_bold_style()),
+        Span::styled(
+            " [● 2: Numeric Comparator (<, <=, >, >=, =)] ",
+            theme::warning_bold_style(),
+        ),
         Span::styled("  (Tab to switch)", theme::muted_style()),
     ]);
     frame.render_widget(Paragraph::new(tab_line), tab_area);
 
     // Operator row
-    let mut op_spans = vec![
-        Span::styled(" Operator:  ", theme::bold_text_style()),
-    ];
+    let mut op_spans = vec![Span::styled(" Operator:  ", theme::bold_text_style())];
     for (idx, op) in NumericOp::ALL.iter().enumerate() {
         if idx > 0 {
             op_spans.push(Span::raw("  "));
         }
         let is_selected = *op == modal.numeric_op;
         if is_selected {
-            op_spans.push(Span::styled(format!("▶[ {} ]◀", op.as_str()), theme::selection_style()));
+            op_spans.push(Span::styled(
+                format!("▶[ {} ]◀", op.as_str()),
+                theme::selection_style(),
+            ));
         } else {
-            op_spans.push(Span::styled(format!("[ {} ]", op.as_str()), theme::muted_style()));
+            op_spans.push(Span::styled(
+                format!("[ {} ]", op.as_str()),
+                theme::muted_style(),
+            ));
         }
     }
     let op_line1 = Line::from(op_spans);
@@ -112,15 +119,24 @@ fn render_numeric_mode(frame: &mut Frame, area: Rect, modal: &FilterModalState) 
 
     let val_line = if modal.numeric_input.is_empty() {
         Line::from(vec![
-            Span::styled(format!(" [ {} ] ", modal.numeric_op.as_str()), theme::warning_bold_style()),
-            Span::styled("Type number (e.g. 100, 25.5, -5) or condition (e.g. >= 50)... ", theme::muted_style()),
+            Span::styled(
+                format!(" [ {} ] ", modal.numeric_op.as_str()),
+                theme::warning_bold_style(),
+            ),
+            Span::styled(
+                "Type number (e.g. 100, 25.5, -5) or condition (e.g. >= 50)... ",
+                theme::muted_style(),
+            ),
             Span::styled("█", theme::warning_bold_style()),
         ])
     } else {
         let has_typed_op = NumericOp::from_str_prefix(&modal.numeric_input).is_some();
         let mut spans = Vec::new();
         if !has_typed_op {
-            spans.push(Span::styled(format!(" [ {} ] ", modal.numeric_op.as_str()), theme::warning_bold_style()));
+            spans.push(Span::styled(
+                format!(" [ {} ] ", modal.numeric_op.as_str()),
+                theme::warning_bold_style(),
+            ));
         }
         spans.push(Span::styled(&modal.numeric_input, theme::bold_text_style()));
         spans.push(Span::styled("█", theme::warning_bold_style()));
@@ -136,27 +152,24 @@ fn render_numeric_mode(frame: &mut Frame, area: Rect, modal: &FilterModalState) 
         ])
     } else {
         match modal.parse_numeric_filter() {
-            Ok(Some((op, _val, raw))) => {
-                Line::from(vec![
-                    Span::styled(" SQL Filter: ", theme::muted_style()),
-                    Span::styled(
-                        format!("\"{}\" {} {}", modal.column_name, op.as_str(), raw),
-                        theme::warning_bold_style(),
-                    ),
-                ])
-            }
-            Ok(None) => {
-                Line::from(vec![
-                    Span::styled(" SQL Filter: ", theme::muted_style()),
-                    Span::styled("(no filter — shows all rows; press Enter to clear)", theme::muted_style()),
-                ])
-            }
-            Err(err) => {
-                Line::from(vec![
-                    Span::styled(" ⚠ ", theme::error_bold_style()),
-                    Span::styled(err, theme::error_style()),
-                ])
-            }
+            Ok(Some((op, _val, raw))) => Line::from(vec![
+                Span::styled(" SQL Filter: ", theme::muted_style()),
+                Span::styled(
+                    format!("\"{}\" {} {}", modal.column_name, op.as_str(), raw),
+                    theme::warning_bold_style(),
+                ),
+            ]),
+            Ok(None) => Line::from(vec![
+                Span::styled(" SQL Filter: ", theme::muted_style()),
+                Span::styled(
+                    "(no filter — shows all rows; press Enter to clear)",
+                    theme::muted_style(),
+                ),
+            ]),
+            Err(err) => Line::from(vec![
+                Span::styled(" ⚠ ", theme::error_bold_style()),
+                Span::styled(err, theme::error_style()),
+            ]),
         }
     };
     frame.render_widget(Paragraph::new(preview_line), preview_area);
@@ -227,7 +240,10 @@ fn render_values_mode(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
     if let Some(t_area) = tab_area {
         let tab_line = Line::from(vec![
             Span::styled(" [● 1: Distinct Values] ", theme::warning_bold_style()),
-            Span::styled(" [ 2: Numeric Comparator (<, <=, >, >=, =) ] ", theme::muted_style()),
+            Span::styled(
+                " [ 2: Numeric Comparator (<, <=, >, >=, =) ] ",
+                theme::muted_style(),
+            ),
             Span::styled("  (Tab to switch)", theme::muted_style()),
         ]);
         frame.render_widget(Paragraph::new(tab_line), t_area);
@@ -358,7 +374,10 @@ fn render_values_mode(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
     let hint = if modal.is_searching {
         Line::from(vec![
             Span::styled(" [Typing] ", theme::warning_bold_style()),
-            Span::styled("Enter:done/apply • Esc:clear search • Bksp:del", theme::muted_style()),
+            Span::styled(
+                "Enter:done/apply • Esc:clear search • Bksp:del",
+                theme::muted_style(),
+            ),
         ])
     } else if modal.is_numeric_col {
         Line::from(vec![

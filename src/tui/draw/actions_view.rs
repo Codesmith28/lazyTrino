@@ -130,12 +130,7 @@ fn render_results_count_spans(spans: &mut Vec<Span>, res_state: &ResultsState) {
     }
 }
 
-pub fn render_actions_count_box(
-    frame: &mut Frame,
-    area: Rect,
-    app: &App,
-    state: &ActionState,
-) {
+pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state: &ActionState) {
     let title = if !state.table.is_empty() {
         if let Some(ref dd) = state.drilldown
             && !dd.path.is_empty()
@@ -213,7 +208,9 @@ pub fn render_actions_count_box(
                     spans.push(Span::styled("Partition hierarchy", theme::text_style()));
                 }
 
-                if depth > 0 && let Some(parent_cnt) = dd.counts_cache.get(&dd.path) {
+                if depth > 0
+                    && let Some(parent_cnt) = dd.counts_cache.get(&dd.path)
+                {
                     spans.push(Span::styled(" of ", theme::secondary_style()));
                     spans.push(Span::styled(
                         crate::app::format_count(*parent_cnt),
@@ -247,7 +244,12 @@ pub fn render_actions_count_box(
                     .drilldown
                     .as_ref()
                     .and_then(|d| d.table_count)
-                    .or_else(|| state.results.as_ref().and_then(|r| r.table_count.or(r.total_count)));
+                    .or_else(|| {
+                        state
+                            .results
+                            .as_ref()
+                            .and_then(|r| r.table_count.or(r.total_count))
+                    });
                 if let Some(tot) = table_total {
                     spans.push(Span::styled(" of ", theme::secondary_style()));
                     spans.push(Span::styled(
@@ -264,7 +266,12 @@ pub fn render_actions_count_box(
                 .drilldown
                 .as_ref()
                 .and_then(|d| d.table_count)
-                .or_else(|| state.results.as_ref().and_then(|r| r.table_count.or(r.total_count)));
+                .or_else(|| {
+                    state
+                        .results
+                        .as_ref()
+                        .and_then(|r| r.table_count.or(r.total_count))
+                });
             spans.push(Span::styled(
                 crate::app::format_count(levels),
                 theme::bold_text_style(),
@@ -287,7 +294,12 @@ pub fn render_actions_count_box(
                 .drilldown
                 .as_ref()
                 .and_then(|d| d.table_count)
-                .or_else(|| state.results.as_ref().and_then(|r| r.table_count.or(r.total_count)));
+                .or_else(|| {
+                    state
+                        .results
+                        .as_ref()
+                        .and_then(|r| r.table_count.or(r.total_count))
+                });
             spans.push(Span::styled(
                 crate::app::format_count(cols),
                 theme::bold_text_style(),
@@ -333,7 +345,12 @@ pub fn render_actions_count_box(
                     .drilldown
                     .as_ref()
                     .and_then(|d| d.table_count)
-                    .or_else(|| state.results.as_ref().and_then(|r| r.table_count.or(r.total_count)));
+                    .or_else(|| {
+                        state
+                            .results
+                            .as_ref()
+                            .and_then(|r| r.table_count.or(r.total_count))
+                    });
                 if let Some(tot) = table_total {
                     spans.push(Span::styled(" of ", theme::secondary_style()));
                     spans.push(Span::styled(
@@ -351,12 +368,7 @@ pub fn render_actions_count_box(
     frame.render_widget(p, inner);
 }
 
-pub fn render_phase1_count_box(
-    frame: &mut Frame,
-    area: Rect,
-    screen: &Screen,
-    search: &str,
-) {
+pub fn render_phase1_count_box(frame: &mut Frame, area: Rect, screen: &Screen, search: &str) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -575,7 +587,7 @@ pub fn render_placeholder_preview(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{backend::TestBackend, style::Modifier, Terminal};
+    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
 
     #[test]
     fn test_render_count_box_paginated_with_total_and_filters() {

@@ -204,10 +204,7 @@ pub fn copy_results_selection_or_cell(app: &mut App) {
             } else {
                 cell_val
             };
-            app.copied_toast = Some((
-                format!("Copied cell: {summary}"),
-                std::time::Instant::now(),
-            ));
+            app.copied_toast = Some((format!("Copied cell: {summary}"), std::time::Instant::now()));
         }
     }
 }
@@ -226,9 +223,10 @@ pub fn yank_whole_row(app: &mut App) {
 
     let (min_r, max_r) = match res.visual_mode {
         crate::app::VisualMode::Line { anchor_row }
-        | crate::app::VisualMode::Block { anchor_row, .. } => {
-            (anchor_row.min(res.selected_row), anchor_row.max(res.selected_row))
-        }
+        | crate::app::VisualMode::Block { anchor_row, .. } => (
+            anchor_row.min(res.selected_row),
+            anchor_row.max(res.selected_row),
+        ),
         crate::app::VisualMode::None => (res.selected_row, res.selected_row),
     };
     let max_r = max_r.min(res.rows.len().saturating_sub(1));
@@ -278,8 +276,17 @@ mod tests {
     #[test]
     fn test_format_csv_row_multi_col_escapes_commas_and_quotes() {
         assert_eq!(format_csv_row(["col1", "col2"]), "col1,col2");
-        assert_eq!(format_csv_row(["hello, world", "normal"]), "\"hello, world\",normal");
-        assert_eq!(format_csv_row(["he said \"hi\"", "bye"]), "\"he said \"\"hi\"\"\",bye");
-        assert_eq!(format_csv_row(["line1\nline2", "ok"]), "\"line1\nline2\",ok");
+        assert_eq!(
+            format_csv_row(["hello, world", "normal"]),
+            "\"hello, world\",normal"
+        );
+        assert_eq!(
+            format_csv_row(["he said \"hi\"", "bye"]),
+            "\"he said \"\"hi\"\"\",bye"
+        );
+        assert_eq!(
+            format_csv_row(["line1\nline2", "ok"]),
+            "\"line1\nline2\",ok"
+        );
     }
 }
