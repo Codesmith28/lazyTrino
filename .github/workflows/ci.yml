@@ -150,13 +150,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Verify Git checkout
+        run: |
+          set -euo pipefail
+          pwd
+          git rev-parse --show-toplevel
+          git status --short
 
       - name: Inspect release eligibility
         id: inspect
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
+
           # 1. Fetch merged PR title and body for the commit
           PR_JSON=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0] // empty' || true)
           PR_TITLE=$(echo "$PR_JSON" | jq -r '.title // empty')
@@ -196,7 +208,7 @@ jobs:
 
           # 6. Create DRAFT release with PR body as release notes
           if [ -n "$PR_BODY" ]; then
-            echo "$PR_BODY" > /tmp/release_notes.md
+            printf '%s\n' "$PR_BODY" > /tmp/release_notes.md
             gh release create "$TAG" --draft --title "$TAG" -F /tmp/release_notes.md
           else
             gh release create "$TAG" --draft --title "$TAG" --generate-notes
@@ -225,6 +237,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify Git checkout
+        run: |
+          set -euo pipefail
+          pwd
+          git rev-parse --show-toplevel
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -242,7 +262,7 @@ jobs:
         with:
           bin: lazyTrino
           target: ${{ matrix.target }}
-          archive: $bin-$tag-$target
+          archive: lazyTrino-${{ needs.prepare-release.outputs.tag }}-${{ matrix.target }}
           ref: refs/tags/${{ needs.prepare-release.outputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -257,12 +277,22 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify Git checkout
+        run: |
+          set -euo pipefail
+          pwd
+          git rev-parse --show-toplevel
 
       - name: Transition draft release to published
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
           gh release edit "${{ needs.prepare-release.outputs.tag }}" --draft=false --latest
           echo "Release ${{ needs.prepare-release.outputs.tag }} published successfully!"
 
@@ -277,10 +307,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
 
       - name: Delete draft release and tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           gh release delete "${{ needs.prepare-release.outputs.tag }}" --yes --cleanup-tag || true
