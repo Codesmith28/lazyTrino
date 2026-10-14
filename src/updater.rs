@@ -244,7 +244,9 @@ pub async fn run_self_update() -> Result<()> {
         .build()
         .context("Failed to initialize HTTP client")?;
 
-    let auth_token = env::var("GITHUB_TOKEN").or_else(|_| env::var("GH_TOKEN")).ok();
+    let auth_token = env::var("GITHUB_TOKEN")
+        .or_else(|_| env::var("GH_TOKEN"))
+        .ok();
     let api_url = format!("https://api.github.com/repos/{REPO}/releases/latest");
     let mut req = client.get(&api_url);
     if let Some(ref token) = auth_token {
@@ -480,10 +482,10 @@ mod tests {
         let tag = url.split("/releases/tag/").nth(1).unwrap();
         assert_eq!(tag, "v0.2.0");
 
-        let url_with_query = "https://github.com/Codesmith28/lazyTrino/releases/tag/v1.0.0?ref=xyz#hash";
+        let url_with_query =
+            "https://github.com/Codesmith28/lazyTrino/releases/tag/v1.0.0?ref=xyz#hash";
         let tag_part = url_with_query.split("/releases/tag/").nth(1).unwrap();
         let cleaned = tag_part.split(['?', '#']).next().unwrap();
         assert_eq!(cleaned, "v1.0.0");
     }
 }
-

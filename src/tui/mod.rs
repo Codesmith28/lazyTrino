@@ -91,7 +91,9 @@ async fn run_loop(
         app.frame_count += 1;
 
         while let Ok(result) = rx.try_recv() {
-            handler::handle_async_result(app, result);
+            if let Some(cmd) = handler::handle_async_result(app, result) {
+                handler::dispatch_command(app, cmd, &tx);
+            }
         }
 
         terminal.draw(|frame| draw::ui(frame, app))?;

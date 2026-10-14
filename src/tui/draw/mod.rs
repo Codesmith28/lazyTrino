@@ -216,10 +216,18 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
                 Screen::Actions(a) => a.table.as_str(),
                 _ => "",
             };
+            let (is_metadata_loading, is_ddl_loading, has_pending_action) = match effective_screen {
+                Screen::Actions(a) => (
+                    a.metadata_loading,
+                    a.ddl_loading,
+                    a.pending_action.is_some(),
+                ),
+                _ => (false, false, false),
+            };
 
             match action {
                 crate::app::Action::Partitions => {
-                    if app.loading {
+                    if app.loading || (is_metadata_loading && has_pending_action) {
                         let title = format!(" Preview — {table_name} (Partitions) ");
                         let block = Block::default()
                             .title(title)
@@ -259,7 +267,7 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
                     }
                 }
                 crate::app::Action::Schema => {
-                    if app.loading {
+                    if app.loading || (is_metadata_loading && has_pending_action) {
                         let title = format!(" Preview — {table_name} (Schema) ");
                         let block = Block::default()
                             .title(title)
@@ -329,7 +337,7 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
                         Screen::Actions(a) => a.metadata.as_ref().map(|m| m.ddl_text.clone()),
                         _ => None,
                     };
-                    if app.loading {
+                    if app.loading || (is_ddl_loading && has_pending_action) {
                         let title = format!(" Preview — {table_name} (Table DDL) ");
                         let block = Block::default()
                             .title(title)

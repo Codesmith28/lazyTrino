@@ -504,7 +504,10 @@ pub fn render_default_results_preview(
                 preview_is_active,
                 app,
             );
-        } else if is_loading {
+        } else if is_loading
+            || (state.ddl_loading && state.pending_action.is_some())
+            || (state.metadata_loading && state.pending_action.is_some())
+        {
             let title = format!(
                 " Preview — {} ({}) ",
                 table_name,
@@ -517,9 +520,16 @@ pub fn render_default_results_preview(
                 .border_style(theme::border_style(preview_is_active));
             let inner = block.inner(preview_pane_area);
             frame.render_widget(block, preview_pane_area);
+            let msg = if state.ddl_loading {
+                "ANALYZING TABLE STRUCTURE & PARTITIONS..."
+            } else if state.metadata_loading {
+                "FETCHING TABLE METADATA..."
+            } else {
+                "EXECUTING TRINO QUERY..."
+            };
             let spin_text = Paragraph::new(Line::from(vec![
                 Span::styled(format!(" [{spin}] "), theme::warning_bold_style()),
-                Span::styled("EXECUTING TRINO QUERY...", theme::info_bold_style()),
+                Span::styled(msg, theme::info_bold_style()),
             ]))
             .alignment(Alignment::Center);
             frame.render_widget(spin_text, inner);

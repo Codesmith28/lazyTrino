@@ -207,6 +207,7 @@ pub fn select_current_item(app: &mut App) -> Option<Command> {
                 schema: schema.clone(),
                 table: table.clone(),
                 selected: 0,
+                pending_action: Some(0),
                 query_buffer: default_query,
                 query_cursor: query_len,
                 results: None,

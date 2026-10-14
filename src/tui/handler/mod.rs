@@ -66,7 +66,7 @@ pub fn dispatch_command(
     commands::dispatch_command(app, cmd, tx)
 }
 
-pub fn handle_async_result(app: &mut App, result: AsyncResult) {
+pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command> {
     commands::handle_async_result(app, result)
 }
 
