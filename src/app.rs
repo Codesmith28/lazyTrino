@@ -308,6 +308,7 @@ pub struct ResultsState {
     pub sort: Option<(String, SortDirection)>,
     pub unsorted_rows: Option<Vec<Vec<String>>>,
     pub visual_mode: VisualMode,
+    pub flattened_fields: Vec<crate::trino::flatten::FlattenedField>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -581,6 +582,116 @@ impl ResultsState {
         }
         self.selected_row = 0;
         self.scroll_v.set(0);
+    }
+
+    pub fn auto_flatten(&mut self, schema_cols: &[VerticalColumn]) {
+        if self.columns.is_empty() || self.rows.is_empty() {
+            return;
+        }
+
+        let orig_columns = self.columns.clone();
+        let mut new_fields = Vec::new();
+
+        for (col_idx, col_name) in orig_columns.iter().enumerate() {
+            if col_name.contains('.') {
+                continue;
+            }
+
+            let data_type = schema_cols
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(col_name))
+                .map(|c| c.data_type.as_str())
+                .unwrap_or("");
+
+            let sample_values: Vec<String> = self
+                .rows
+                .iter()
+                .filter_map(|r| r.get(col_idx).cloned())
+                .take(50)
+                .collect();
+
+            if let Some(nested_type) =
+                crate::trino::flatten::detect_nested_type(col_name, data_type, &sample_values)
+            {
+                let paths =
+                    crate::trino::flatten::discover_nested_paths(&sample_values, nested_type);
+                for path in paths {
+                    let field =
+                        crate::trino::flatten::FlattenedField::new(col_name, &path, nested_type);
+                    if !self.columns.contains(&field.full_name) {
+                        new_fields.push(field);
+                    }
+                }
+            }
+        }
+
+        if new_fields.is_empty() {
+            return;
+        }
+
+        for field in &new_fields {
+            let parent_idx = self.columns.iter().position(|c| c == &field.parent_col);
+            let Some(p_idx) = parent_idx else { continue };
+
+            self.columns.push(field.full_name.clone());
+            for row in &mut self.rows {
+                let parent_raw = row.get(p_idx).map(|s| s.as_str()).unwrap_or("");
+                let extracted = crate::trino::flatten::extract_nested_value(
+                    parent_raw,
+                    &field.path,
+                    field.nested_type,
+                );
+                row.push(extracted);
+            }
+            if let Some(ref mut unfilt) = self.unfiltered_rows {
+                for row in unfilt {
+                    let parent_raw = row.get(p_idx).map(|s| s.as_str()).unwrap_or("");
+                    let extracted = crate::trino::flatten::extract_nested_value(
+                        parent_raw,
+                        &field.path,
+                        field.nested_type,
+                    );
+                    row.push(extracted);
+                }
+            }
+        }
+
+        self.flattened_fields.extend(new_fields);
+    }
+
+    pub fn column_expr_map(&self) -> std::collections::HashMap<String, String> {
+        self.flattened_fields
+            .iter()
+            .map(|f| (f.full_name.clone(), f.expr_sql.clone()))
+            .collect()
+    }
+
+    pub fn extend_rows_with_flattening(&mut self, mut new_rows: Vec<Vec<String>>) {
+        if !self.flattened_fields.is_empty() {
+            for row in &mut new_rows {
+                for field in &self.flattened_fields {
+                    let p_idx = self.columns.iter().position(|c| c == &field.parent_col);
+                    let val = if let Some(idx) = p_idx {
+                        let parent_raw = row.get(idx).map(|s| s.as_str()).unwrap_or("");
+                        crate::trino::flatten::extract_nested_value(
+                            parent_raw,
+                            &field.path,
+                            field.nested_type,
+                        )
+                    } else {
+                        String::new()
+                    };
+                    row.push(val);
+                }
+            }
+        }
+        self.rows.extend(new_rows.clone());
+        if let Some(ref mut unfilt) = self.unfiltered_rows {
+            unfilt.extend(new_rows.clone());
+        }
+        if let Some(ref mut unsorted) = self.unsorted_rows {
+            unsorted.extend(new_rows);
+        }
     }
 }
 
@@ -887,18 +998,33 @@ pub struct ColumnModalState {
     pub scroll: usize,
     pub search_query: String,
     pub is_searching: bool,
+    pub tree_nodes: Vec<crate::trino::flatten::ColumnTreeNode>,
 }
 
 impl ColumnModalState {
     pub fn filtered_indices(&self) -> Vec<usize> {
-        if self.search_query.is_empty() {
-            (0..self.columns.len()).collect()
+        if self.tree_nodes.is_empty() {
+            if self.search_query.is_empty() {
+                (0..self.columns.len()).collect()
+            } else {
+                let q = self.search_query.to_lowercase();
+                self.columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.to_lowercase().contains(&q))
+                    .map(|(i, _)| i)
+                    .collect()
+            }
+        } else if self.search_query.is_empty() {
+            (0..self.tree_nodes.len()).collect()
         } else {
             let q = self.search_query.to_lowercase();
-            self.columns
+            self.tree_nodes
                 .iter()
                 .enumerate()
-                .filter(|(_, c)| c.to_lowercase().contains(&q))
+                .filter(|(_, node)| {
+                    node.name.to_lowercase().contains(&q) || node.label.to_lowercase().contains(&q)
+                })
                 .map(|(i, _)| i)
                 .collect()
         }
@@ -1303,5 +1429,64 @@ mod tests {
     fn safe_select_columns_falls_back_to_select_star_when_all_columns_unsafe() {
         let cols = vec![vcol("policy_id", "map(varchar, varchar)")];
         assert!(safe_select_columns(&cols).is_empty());
+    }
+
+    #[test]
+    fn test_auto_flatten_and_extend_rows() {
+        let schema_cols = vec![
+            vcol("id", "bigint"),
+            vcol("meta", "json"),
+            vcol("tags", "map(varchar, varchar)"),
+        ];
+
+        let mut res = ResultsState {
+            columns: vec!["id".to_string(), "meta".to_string(), "tags".to_string()],
+            rows: vec![
+                vec![
+                    "1".to_string(),
+                    r#"{"user": "alice", "role": "admin"}"#.to_string(),
+                    "{env=prod, region=us}".to_string(),
+                ],
+                vec![
+                    "2".to_string(),
+                    r#"{"user": "bob", "role": "viewer"}"#.to_string(),
+                    "{env=stage, region=eu}".to_string(),
+                ],
+            ],
+            ..Default::default()
+        };
+
+        res.auto_flatten(&schema_cols);
+
+        // Columns must now include the flattened nested fields
+        assert!(res.columns.contains(&"meta.user".to_string()));
+        assert!(res.columns.contains(&"meta.role".to_string()));
+        assert!(res.columns.contains(&"tags.env".to_string()));
+        assert!(res.columns.contains(&"tags.region".to_string()));
+
+        let user_idx = res.columns.iter().position(|c| c == "meta.user").unwrap();
+        let role_idx = res.columns.iter().position(|c| c == "meta.role").unwrap();
+        let env_idx = res.columns.iter().position(|c| c == "tags.env").unwrap();
+
+        assert_eq!(res.rows[0][user_idx], "alice");
+        assert_eq!(res.rows[0][role_idx], "admin");
+        assert_eq!(res.rows[0][env_idx], "prod");
+
+        assert_eq!(res.rows[1][user_idx], "bob");
+        assert_eq!(res.rows[1][role_idx], "viewer");
+        assert_eq!(res.rows[1][env_idx], "stage");
+
+        // Now test extending with new rows (e.g. infinite scroll page)
+        let new_rows = vec![vec![
+            "3".to_string(),
+            r#"{"user": "charlie", "role": "dev"}"#.to_string(),
+            "{env=dev, region=ap}".to_string(),
+        ]];
+        res.extend_rows_with_flattening(new_rows);
+
+        assert_eq!(res.rows.len(), 3);
+        assert_eq!(res.rows[2][user_idx], "charlie");
+        assert_eq!(res.rows[2][role_idx], "dev");
+        assert_eq!(res.rows[2][env_idx], "dev");
     }
 }

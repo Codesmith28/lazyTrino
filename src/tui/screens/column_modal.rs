@@ -109,35 +109,89 @@ pub fn render(
             .skip(modal.scroll)
             .take(visible_count)
         {
-            let col = &modal.columns[orig_idx];
-            let is_checked = modal.selected_columns.contains(col);
-            let check_mark = if is_checked { "[x] " } else { "[ ] " };
+            let (col_name, label, depth, is_parent, is_checked, is_partially_checked) =
+                if let Some(node) = modal.tree_nodes.get(orig_idx) {
+                    let all_selected = if node.is_parent {
+                        node.children.iter().all(|c| modal.selected_columns.contains(c))
+                    } else {
+                        modal.selected_columns.contains(&node.name)
+                    };
+                    let partial = node.is_parent
+                        && !all_selected
+                        && (modal.selected_columns.contains(&node.name)
+                            || node.children.iter().any(|c| modal.selected_columns.contains(c)));
+                    (
+                        node.name.as_str(),
+                        node.label.as_str(),
+                        node.depth,
+                        node.is_parent,
+                        all_selected,
+                        partial,
+                    )
+                } else {
+                    let col = modal.columns.get(orig_idx).map(|s| s.as_str()).unwrap_or("");
+                    let checked = modal.selected_columns.contains(col);
+                    (col, col, 0, false, checked, false)
+                };
+
+            let check_mark = if is_checked {
+                "[x] "
+            } else if is_partially_checked {
+                "[-] "
+            } else {
+                "[ ] "
+            };
             let is_cursor = v_idx == modal.cursor;
-            let filtered = has_value_filter(col);
+            let filtered = has_value_filter(col_name);
 
-            let prefix_span = Span::styled(
-                check_mark,
-                if is_cursor {
-                    theme::selection_style()
-                } else if is_checked {
-                    theme::success_bold_style()
-                } else {
-                    theme::muted_style()
-                },
-            );
+            let mut line_spans = Vec::new();
 
-            let name_span = Span::styled(
-                col.as_str(),
-                if is_cursor {
-                    theme::selection_style()
-                } else if is_checked {
-                    theme::text_style()
-                } else {
-                    theme::muted_style()
-                },
-            );
+            // Tree indentation
+            if depth > 0 {
+                line_spans.push(Span::styled("  ".repeat(depth), theme::muted_style()));
+                line_spans.push(Span::styled("└── ", theme::muted_style()));
+            }
 
-            let mut line_spans = vec![prefix_span, name_span];
+            let check_style = if is_cursor {
+                theme::selection_style()
+            } else if is_checked {
+                theme::success_bold_style()
+            } else if is_partially_checked {
+                theme::warning_bold_style()
+            } else {
+                theme::muted_style()
+            };
+            line_spans.push(Span::styled(check_mark, check_style));
+
+            let name_style = if is_cursor {
+                theme::selection_style()
+            } else if is_checked {
+                theme::bold_text_style()
+            } else {
+                theme::muted_style()
+            };
+            line_spans.push(Span::styled(label, name_style));
+
+            if is_parent {
+                line_spans.push(Span::styled(
+                    " [▼]",
+                    if is_cursor {
+                        theme::selection_style()
+                    } else {
+                        theme::warning_style()
+                    },
+                ));
+            } else if depth > 0 {
+                line_spans.push(Span::styled(
+                    " (nested)",
+                    if is_cursor {
+                        theme::selection_style()
+                    } else {
+                        theme::muted_style()
+                    },
+                ));
+            }
+
             if filtered {
                 line_spans.push(Span::styled(
                     " [F]",
@@ -179,3 +233,93 @@ pub fn render(
     };
     frame.render_widget(Paragraph::new(hint), hint_area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::trino::flatten::ColumnTreeNode;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_render_tree_view_nodes() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let tree_nodes = vec![
+            ColumnTreeNode {
+                name: "id".to_string(),
+                label: "id".to_string(),
+                depth: 0,
+                is_parent: false,
+                is_expanded: false,
+                children: vec![],
+            },
+            ColumnTreeNode {
+                name: "user_info".to_string(),
+                label: "user_info".to_string(),
+                depth: 0,
+                is_parent: true,
+                is_expanded: true,
+                children: vec!["user_info.name".to_string(), "user_info.age".to_string()],
+            },
+            ColumnTreeNode {
+                name: "user_info.name".to_string(),
+                label: "name".to_string(),
+                depth: 1,
+                is_parent: false,
+                is_expanded: false,
+                children: vec![],
+            },
+            ColumnTreeNode {
+                name: "user_info.age".to_string(),
+                label: "age".to_string(),
+                depth: 1,
+                is_parent: false,
+                is_expanded: false,
+                children: vec![],
+            },
+        ];
+
+        // Partially selected: only "user_info.name" is selected
+        let mut selected = HashSet::new();
+        selected.insert("user_info.name".to_string());
+
+        let modal = ColumnModalState {
+            columns: vec![
+                "id".to_string(),
+                "user_info".to_string(),
+                "user_info.name".to_string(),
+                "user_info.age".to_string(),
+            ],
+            selected_columns: selected,
+            cursor: 1,
+            scroll: 0,
+            search_query: String::new(),
+            is_searching: false,
+            tree_nodes,
+        };
+
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                render(f, area, &modal, |_| false);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+
+        // Check for tree indicators: parent arrow [▼], partial selection [-], and nested tag
+        assert!(content.contains("[▼]"), "Must render parent expand indicator [▼]");
+        assert!(content.contains("[-]"), "Must render partial selection [-] for parent");
+        assert!(content.contains("(nested)"), "Must render (nested) tag for child");
+        assert!(content.contains("[x]"), "Must render [x] for selected child");
+    }
+}
+

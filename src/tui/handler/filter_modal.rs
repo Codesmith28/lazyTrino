@@ -611,12 +611,14 @@ pub fn apply_filter_modal(app: &mut App) -> Option<Command> {
         }
         let base_q = res.base_query.as_ref().unwrap();
 
-        let updated_query = crate::trino::queries::build_query_with_all_filters(
+        let expr_map = res.column_expr_map();
+        let updated_query = crate::trino::queries::build_query_with_all_filters_and_overrides(
             base_q,
             &res.columns,
             &res.hidden_columns,
             &res.column_filters,
             &res.col_distinct_values,
+            Some(&expr_map),
         );
 
         res.query_buffer = updated_query.clone();

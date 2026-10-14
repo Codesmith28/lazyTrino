@@ -244,12 +244,31 @@ pub fn partitions(catalog: &str, schema: &str, table: &str) -> String {
     )
 }
 
-pub fn format_column_filter_predicate(col: &str, filter: &ColumnFilter) -> String {
+pub fn resolve_column_sql_ref(col: &str) -> String {
     let col = col.trim();
-    let col_ref = if col.starts_with('"') || col.contains('(') {
+    if col.starts_with('"') || col.contains('(') || col.contains('[') {
         col.to_string()
+    } else if let Some((parent, child)) = col.split_once('.') {
+        let path = child.split('.').collect::<Vec<_>>().join(".");
+        format!("json_extract_scalar({}, '$.{}')", q(parent), path)
     } else {
         q(col)
+    }
+}
+
+pub fn format_column_filter_predicate(col: &str, filter: &ColumnFilter) -> String {
+    format_column_filter_predicate_with_overrides(col, filter, None)
+}
+
+pub fn format_column_filter_predicate_with_overrides(
+    col: &str,
+    filter: &ColumnFilter,
+    expr_overrides: Option<&HashMap<String, String>>,
+) -> String {
+    let col_ref = if let Some(map) = expr_overrides && let Some(expr) = map.get(col) {
+        expr.clone()
+    } else {
+        resolve_column_sql_ref(col)
     };
 
     match filter {
@@ -257,18 +276,20 @@ pub fn format_column_filter_predicate(col: &str, filter: &ColumnFilter) -> Strin
             format!("{col_ref} {} {}", num.op.as_str(), num.raw_value)
         }
         ColumnFilter::Values(selected_values) => {
-            format_column_filter_values_predicate(col, selected_values)
+            format_column_filter_values_predicate_with_ref(&col_ref, selected_values)
         }
     }
 }
 
 pub fn format_column_filter_values_predicate(col: &str, selected_values: &HashSet<String>) -> String {
-    let col = col.trim();
-    let col_ref = if col.starts_with('"') || col.contains('(') {
-        col.to_string()
-    } else {
-        q(col)
-    };
+    let col_ref = resolve_column_sql_ref(col);
+    format_column_filter_values_predicate_with_ref(&col_ref, selected_values)
+}
+
+pub fn format_column_filter_values_predicate_with_ref(
+    col_ref: &str,
+    selected_values: &HashSet<String>,
+) -> String {
 
     if selected_values.is_empty() {
         return "1 = 0".to_string();
@@ -420,10 +441,21 @@ pub fn split_sql_clauses(sql: &str) -> (&str, Option<&str>, &str) {
     }
 }
 
+
+
 pub fn replace_select_columns(
     head: &str,
     visible_columns: &[String],
     all_columns_count: usize,
+) -> String {
+    replace_select_columns_with_overrides(head, visible_columns, all_columns_count, None)
+}
+
+pub fn replace_select_columns_with_overrides(
+    head: &str,
+    visible_columns: &[String],
+    all_columns_count: usize,
+    expr_overrides: Option<&HashMap<String, String>>,
 ) -> String {
     if visible_columns.len() == all_columns_count || visible_columns.is_empty() {
         return head.to_string();
@@ -461,7 +493,18 @@ pub fn replace_select_columns(
     let from_and_rest = &head[f_pos..];
     let formatted_cols = visible_columns
         .iter()
-        .map(|c| q(c))
+        .map(|c| {
+            if let Some(map) = expr_overrides && let Some(expr) = map.get(c) {
+                format!("{expr} AS {}", q(c))
+            } else if c.starts_with('"') || c.contains('(') || c.contains('[') {
+                c.to_string()
+            } else if let Some((parent, child)) = c.split_once('.') {
+                let path = child.split('.').collect::<Vec<_>>().join(".");
+                format!("json_extract_scalar({}, '$.{}') AS {}", q(parent), path, q(c))
+            } else {
+                q(c)
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -474,6 +517,24 @@ pub fn build_query_with_all_filters(
     hidden_columns: &HashSet<String>,
     column_filters: &HashMap<String, ColumnFilter>,
     col_distinct_values: &HashMap<String, Vec<String>>,
+) -> String {
+    build_query_with_all_filters_and_overrides(
+        base_query,
+        all_columns,
+        hidden_columns,
+        column_filters,
+        col_distinct_values,
+        None,
+    )
+}
+
+pub fn build_query_with_all_filters_and_overrides(
+    base_query: &str,
+    all_columns: &[String],
+    hidden_columns: &HashSet<String>,
+    column_filters: &HashMap<String, ColumnFilter>,
+    col_distinct_values: &HashMap<String, Vec<String>>,
+    expr_overrides: Option<&HashMap<String, String>>,
 ) -> String {
     let mut predicates = Vec::new();
     let mut cols: Vec<&String> = column_filters.keys().collect();
@@ -488,10 +549,18 @@ pub fn build_query_with_all_filters(
                 {
                     continue;
                 }
-                predicates.push(format_column_filter_predicate(col, filter));
+                predicates.push(format_column_filter_predicate_with_overrides(
+                    col,
+                    filter,
+                    expr_overrides,
+                ));
             }
             ColumnFilter::Numeric(_) => {
-                predicates.push(format_column_filter_predicate(col, filter));
+                predicates.push(format_column_filter_predicate_with_overrides(
+                    col,
+                    filter,
+                    expr_overrides,
+                ));
             }
         }
     }
@@ -503,7 +572,12 @@ pub fn build_query_with_all_filters(
         .filter(|c| !hidden_columns.contains(*c))
         .cloned()
         .collect();
-    let updated_head = replace_select_columns(head, &visible_cols, all_columns.len());
+    let updated_head = replace_select_columns_with_overrides(
+        head,
+        &visible_cols,
+        all_columns.len(),
+        expr_overrides,
+    );
 
     let where_clause = match (existing_where, predicates.is_empty()) {
         (Some(orig), false) if !orig.trim().is_empty() => {
@@ -1020,6 +1094,47 @@ mod tests {
         assert_eq!(
             update_query_limit("SELECT * FROM orders;", 200),
             "SELECT * FROM orders LIMIT 200;"
+        );
+    }
+
+    #[test]
+    fn test_build_query_with_flattened_nested_fields() {
+        let base_query = "SELECT * FROM orders OFFSET 0 LIMIT 100";
+        let all_cols = vec![
+            "id".to_string(),
+            "meta.user".to_string(),
+            "tags.env".to_string(),
+            "unwanted".to_string(),
+        ];
+        let mut hidden = HashSet::new();
+        hidden.insert("unwanted".to_string());
+
+        let mut expr_overrides = HashMap::new();
+        expr_overrides.insert(
+            "meta.user".to_string(),
+            "json_extract_scalar(\"meta\", '$.user')".to_string(),
+        );
+        expr_overrides.insert("tags.env".to_string(), "\"tags\"['env']".to_string());
+
+        let mut filters = HashMap::new();
+        let mut user_set = HashSet::new();
+        user_set.insert("alice".to_string());
+        filters.insert("meta.user".to_string(), ColumnFilter::Values(user_set));
+
+        let distinct = HashMap::new();
+
+        let sql = build_query_with_all_filters_and_overrides(
+            base_query,
+            &all_cols,
+            &hidden,
+            &filters,
+            &distinct,
+            Some(&expr_overrides),
+        );
+
+        assert_eq!(
+            sql,
+            "SELECT \"id\", json_extract_scalar(\"meta\", '$.user') AS \"meta.user\", \"tags\"['env'] AS \"tags.env\" FROM orders WHERE json_extract_scalar(\"meta\", '$.user') = 'alice' OFFSET 0 LIMIT 100"
         );
     }
 }

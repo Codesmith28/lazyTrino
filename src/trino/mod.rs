@@ -14,5 +14,6 @@
 
 pub mod client;
 pub mod error;
+pub mod flatten;
 pub mod queries;
 pub mod types;

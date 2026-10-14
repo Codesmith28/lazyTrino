@@ -1050,7 +1050,17 @@ fn handle_column_modal_mouse(
                 if target_idx < matched.len() {
                     modal.cursor = target_idx;
                     let orig_idx = matched[target_idx];
-                    if let Some(col) = modal.columns.get(orig_idx).cloned() {
+                    if !modal.tree_nodes.is_empty() {
+                        let prev_selected = modal.selected_columns.clone();
+                        crate::trino::flatten::toggle_tree_node_selection(
+                            &mut modal.selected_columns,
+                            &modal.tree_nodes,
+                            orig_idx,
+                        );
+                        if modal.selected_columns.is_empty() {
+                            modal.selected_columns = prev_selected;
+                        }
+                    } else if let Some(col) = modal.columns.get(orig_idx).cloned() {
                         if modal.selected_columns.contains(&col) {
                             if modal.selected_columns.len() > 1 {
                                 modal.selected_columns.remove(&col);
@@ -1653,6 +1663,7 @@ mod tests {
             scroll: 0,
             search_query: String::new(),
             is_searching: false,
+            tree_nodes: Vec::new(),
         });
         app.mode = Mode::ColumnModal;
 

@@ -779,6 +779,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     if let Screen::Actions(ref mut a) = app.screen {
                         if a.catalog == catalog && a.schema == schema && a.table == table {
                             let mut res = res_state;
+                            res.auto_flatten(&app.vertical_schema_cols);
                             if let Some(view) = a.pending_view_restore.take() {
                                 for (col, filter) in view.column_filters {
                                     res.column_filters.insert(col, filter.to_column_filter());
@@ -822,6 +823,8 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
                         let query_len = default_query.len();
                         app.clear_mouse_selection();
+                        let mut res_state = res_state;
+                        res_state.auto_flatten(&app.vertical_schema_cols);
                         app.screen = Screen::Actions(ActionState {
                             catalog,
                             schema,
@@ -912,13 +915,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     && action_state.table == table
                     && let Some(state) = action_state.results.as_mut()
                 {
-                    state.rows.extend(new_rows.clone());
-                    if let Some(ref mut unfilt) = state.unfiltered_rows {
-                        unfilt.extend(new_rows.clone());
-                    }
-                    if let Some(ref mut unsorted) = state.unsorted_rows {
-                        unsorted.extend(new_rows);
-                    }
+                    state.extend_rows_with_flattening(new_rows);
                     if state.sort.is_some() {
                         state.apply_sort(&app.vertical_schema_cols);
                     }

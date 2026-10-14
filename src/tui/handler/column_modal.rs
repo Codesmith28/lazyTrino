@@ -31,7 +31,19 @@ pub fn open_column_modal(app: &mut App) {
             .cloned()
             .collect();
 
-        let cursor = res.selected_col.min(columns.len().saturating_sub(1));
+        let root_columns: Vec<String> = columns
+            .iter()
+            .filter(|c| !res.flattened_fields.iter().any(|f| &f.full_name == *c))
+            .cloned()
+            .collect();
+        let tree_nodes = crate::trino::flatten::build_column_tree(&root_columns, &res.flattened_fields);
+
+        let cur_col_name = res.columns.get(res.selected_col).map(|s| s.as_str());
+        let cursor = if let Some(name) = cur_col_name {
+            tree_nodes.iter().position(|n| n.name == name).unwrap_or(0)
+        } else {
+            res.selected_col.min(tree_nodes.len().saturating_sub(1))
+        };
         let scroll = if cursor >= 10 {
             cursor.saturating_sub(9)
         } else {
@@ -45,6 +57,7 @@ pub fn open_column_modal(app: &mut App) {
             scroll,
             search_query: String::new(),
             is_searching: false,
+            tree_nodes,
         });
         app.mode = Mode::ColumnModal;
     }
@@ -169,16 +182,27 @@ pub fn handle_column_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
         KeyCode::Char(' ') => {
             if let Some(ref mut m) = app.column_modal {
                 let matched = m.filtered_indices();
-                if let Some(&orig_idx) = matched.get(m.cursor)
-                    && let Some(col) = m.columns.get(orig_idx).cloned()
-                {
-                    if m.selected_columns.contains(&col) {
+                if let Some(&orig_idx) = matched.get(m.cursor) {
+                    if !m.tree_nodes.is_empty() {
+                        let prev_selected = m.selected_columns.clone();
+                        crate::trino::flatten::toggle_tree_node_selection(
+                            &mut m.selected_columns,
+                            &m.tree_nodes,
+                            orig_idx,
+                        );
                         // Prevent hiding all columns: require at least 1 visible
-                        if m.selected_columns.len() > 1 {
-                            m.selected_columns.remove(&col);
+                        if m.selected_columns.is_empty() {
+                            m.selected_columns = prev_selected;
                         }
-                    } else {
-                        m.selected_columns.insert(col);
+                    } else if let Some(col) = m.columns.get(orig_idx).cloned() {
+                        if m.selected_columns.contains(&col) {
+                            // Prevent hiding all columns: require at least 1 visible
+                            if m.selected_columns.len() > 1 {
+                                m.selected_columns.remove(&col);
+                            }
+                        } else {
+                            m.selected_columns.insert(col);
+                        }
                     }
                 }
             }
@@ -186,8 +210,16 @@ pub fn handle_column_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
         }
         KeyCode::Char('a') | KeyCode::Char('A') => {
             if let Some(ref mut m) = app.column_modal {
-                if m.selected_columns.len() == m.columns.len() {
-                    let cur_col = if let Some(&orig_idx) = m.filtered_indices().get(m.cursor) {
+                let cur_orig_idx = m.filtered_indices().get(m.cursor).copied();
+                if !m.tree_nodes.is_empty() {
+                    crate::trino::flatten::toggle_all_tree_selection(
+                        &mut m.selected_columns,
+                        &m.tree_nodes,
+                        &m.columns,
+                        cur_orig_idx,
+                    );
+                } else if m.selected_columns.len() == m.columns.len() {
+                    let cur_col = if let Some(orig_idx) = cur_orig_idx {
                         m.columns.get(orig_idx).cloned()
                     } else {
                         m.columns.get(m.cursor).cloned()
@@ -255,12 +287,14 @@ pub fn apply_column_modal(app: &mut App) -> Option<Command> {
         }
         let base_q = res.base_query.as_ref().unwrap();
 
-        let updated_query = crate::trino::queries::build_query_with_all_filters(
+        let expr_map = res.column_expr_map();
+        let updated_query = crate::trino::queries::build_query_with_all_filters_and_overrides(
             base_q,
             &res.columns,
             &res.hidden_columns,
             &res.column_filters,
             &res.col_distinct_values,
+            Some(&expr_map),
         );
 
         res.query_buffer = updated_query.clone();
