@@ -66,9 +66,10 @@ const HELP_SECTIONS: &[HelpSection] = &[
         title: "Table View Options & Hotkeys",
         items: &[
             "  v                              Table View Mode (Infinite Scroll grid)",
-            "  c / i                          Table DDL / Info Schema",
+            "  c                              Table DDL",
+            "  e                              Schema (Vertical Columns Inspector)",
             "  t / m                          Show Stats / Sample (20 rows)",
-            "  p / e                          Partitions Tree / Vertical Schema Inspector",
+            "  p                              Partitions Tree",
         ],
     },
     HelpSection {

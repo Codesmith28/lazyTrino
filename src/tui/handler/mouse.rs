@@ -694,8 +694,12 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
                     if idx < app.vertical_schema_cols.len() {
                         let col = &app.vertical_schema_cols[idx];
                         lines.push(format!(
-                            "{}\t{}\t{}\t{}",
-                            col.name, col.data_type, col.key_meta, col.description
+                            "{}\t{}\t{}\t{}\t{}",
+                            col.name,
+                            col.data_type,
+                            col.is_nullable,
+                            col.key_meta,
+                            col.description
                         ));
                     }
                 }

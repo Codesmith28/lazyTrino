@@ -35,11 +35,12 @@ pub struct QueryLogEntry {
     pub error_msg: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct VerticalColumn {
     pub index: usize,
     pub name: String,
     pub data_type: String,
+    pub is_nullable: String,
     pub key_meta: String,
     pub description: String,
 }
@@ -830,21 +831,19 @@ pub struct HelpModalState {
 pub enum Action {
     TableView,
     TableDDL,
-    InfoSchema,
+    Schema,
     ShowStats,
     Sample,
     Partitions,
-    Schema,
 }
 
 pub const ACTIONS: &[(char, &str, Action)] = &[
     ('v', "Table View Mode", Action::TableView),
     ('c', "Table DDL", Action::TableDDL),
-    ('i', "Info Schema", Action::InfoSchema),
+    ('e', "Schema", Action::Schema),
     ('t', "Show Stats", Action::ShowStats),
     ('m', "Sample Mode (20 rows)", Action::Sample),
     ('p', "Partitions", Action::Partitions),
-    ('e', "Schema", Action::Schema),
 ];
 
 impl Action {
@@ -852,13 +851,10 @@ impl Action {
         match self {
             Action::TableView => crate::trino::queries::page_query(catalog, schema, table, 0, 100),
             Action::TableDDL => crate::trino::queries::show_create(catalog, schema, table),
-            Action::InfoSchema => {
-                crate::trino::queries::info_schema_columns(catalog, schema, table)
-            }
+            Action::Schema => crate::trino::queries::describe(catalog, schema, table),
             Action::ShowStats => crate::trino::queries::show_stats(catalog, schema, table),
             Action::Sample => crate::trino::queries::sample(catalog, schema, table),
             Action::Partitions => crate::trino::queries::show_create(catalog, schema, table),
-            Action::Schema => crate::trino::queries::describe(catalog, schema, table),
         }
     }
 }
@@ -1141,10 +1137,7 @@ mod tests {
                 Action::TableDDL,
                 queries::show_create(catalog, schema, table),
             ),
-            (
-                Action::InfoSchema,
-                queries::info_schema_columns(catalog, schema, table),
-            ),
+            (Action::Schema, queries::describe(catalog, schema, table)),
             (
                 Action::ShowStats,
                 queries::show_stats(catalog, schema, table),
@@ -1154,7 +1147,6 @@ mod tests {
                 Action::Partitions,
                 queries::show_create(catalog, schema, table),
             ),
-            (Action::Schema, queries::describe(catalog, schema, table)),
         ];
 
         for (action, expected) in cases {
@@ -1175,6 +1167,7 @@ mod tests {
             index: 0,
             name: name.to_string(),
             data_type: data_type.to_string(),
+            is_nullable: "YES".to_string(),
             key_meta: String::new(),
             description: String::new(),
         }

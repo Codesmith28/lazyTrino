@@ -172,6 +172,7 @@ pub fn dispatch_command(
                                         index: idx + 1,
                                         name,
                                         data_type: dtype,
+                                        is_nullable,
                                         key_meta,
                                         description: comment,
                                     }

@@ -854,6 +854,7 @@ mod tests {
             index: 0,
             name: "price".to_string(),
             data_type: "decimal(10, 2)".to_string(),
+            is_nullable: "YES".to_string(),
             key_meta: String::new(),
             description: String::new(),
         };
@@ -863,6 +864,7 @@ mod tests {
             index: 0,
             name: "price".to_string(),
             data_type: "varchar".to_string(),
+            is_nullable: "YES".to_string(),
             key_meta: String::new(),
             description: String::new(),
         };

@@ -218,7 +218,7 @@ pub fn get_selected(screen: &Screen) -> Option<usize> {
 pub mod tests {
     use super::drilldown::*;
     use super::*;
-    use crate::app::{ACTIONS, ActionState, DrillDownState, Mode, ResultsState, TableRecon};
+    use crate::app::{ACTIONS, Action, ActionState, DrillDownState, Mode, ResultsState, TableRecon};
     use crate::config::ConnectionConfig;
     use crate::trino::client::TrinoClient;
     use crate::trino::queries;
@@ -418,7 +418,15 @@ pub mod tests {
             ..drilldown_action_state(vec!["date"])
         }));
 
-        for idx in [5, 6] {
+        let partitions_idx = ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == Action::Partitions)
+            .unwrap();
+        let schema_idx = ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == Action::Schema)
+            .unwrap();
+        for idx in [partitions_idx, schema_idx] {
             let cmd = trigger_action(&mut app, idx);
             assert!(
                 cmd.is_none(),
@@ -749,13 +757,22 @@ pub mod tests {
             ..Default::default()
         }));
 
-        // Trigger Partitions (index 5)
-        let cmd = trigger_action(&mut app, 5);
+        let partitions_idx = ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == Action::Partitions)
+            .unwrap();
+        let schema_idx = ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == Action::Schema)
+            .unwrap();
+
+        // Trigger Partitions
+        let cmd = trigger_action(&mut app, partitions_idx);
         assert!(cmd.is_none());
         let Screen::Actions(state) = &app.screen else {
             panic!("expected actions screen");
         };
-        assert_eq!(state.selected, 5);
+        assert_eq!(state.selected, partitions_idx);
         assert!(state.results.is_none());
         assert_eq!(
             state.query_buffer,
@@ -767,13 +784,13 @@ pub mod tests {
             state.results = Some(sample_leaf_results_state());
         }
 
-        // Trigger Schema (index 6)
-        let cmd = trigger_action(&mut app, 6);
+        // Trigger Schema
+        let cmd = trigger_action(&mut app, schema_idx);
         assert!(cmd.is_none());
         let Screen::Actions(state) = &app.screen else {
             panic!("expected actions screen");
         };
-        assert_eq!(state.selected, 6);
+        assert_eq!(state.selected, schema_idx);
         assert!(state.results.is_none());
         assert_eq!(
             state.query_buffer,
@@ -1441,25 +1458,50 @@ pub mod tests {
             assert!(key.is_lowercase(), "Key '{key}' must be lowercase");
         }
 
-        // 'e' triggers Schema (index 6)
+        let schema_idx = crate::app::ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == crate::app::Action::Schema)
+            .unwrap();
+        let partitions_idx = crate::app::ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == crate::app::Action::Partitions)
+            .unwrap();
+        let stats_idx = crate::app::ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == crate::app::Action::ShowStats)
+            .unwrap();
+        let sample_idx = crate::app::ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == crate::app::Action::Sample)
+            .unwrap();
+
+        // 'e' triggers Schema
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('e')));
         let Screen::Actions(state) = &app.screen else { panic!() };
-        assert_eq!(state.selected, 6);
+        assert_eq!(state.selected, schema_idx);
 
-        // 'p' triggers Partitions (index 5)
+        // 'i' is no longer assigned to any action
+        if let Screen::Actions(ref mut s) = app.screen {
+            s.selected = 0;
+        }
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('i')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.selected, 0, "'i' should not trigger any action");
+
+        // 'p' triggers Partitions
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('p')));
         let Screen::Actions(state) = &app.screen else { panic!() };
-        assert_eq!(state.selected, 5);
+        assert_eq!(state.selected, partitions_idx);
 
-        // 't' triggers Show Stats (index 3)
+        // 't' triggers Show Stats
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('t')));
         let Screen::Actions(state) = &app.screen else { panic!() };
-        assert_eq!(state.selected, 3);
+        assert_eq!(state.selected, stats_idx);
 
-        // 'm' triggers Sample Mode (index 4)
+        // 'm' triggers Sample Mode
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('m')));
         let Screen::Actions(state) = &app.screen else { panic!() };
-        assert_eq!(state.selected, 4);
+        assert_eq!(state.selected, sample_idx);
     }
 }
 

@@ -70,8 +70,12 @@ pub fn copy_active_pane_content(app: &mut App) {
                             .iter()
                             .map(|col| {
                                 format!(
-                                    "{}\t{}\t{}\t{}",
-                                    col.name, col.data_type, col.key_meta, col.description
+                                    "{}\t{}\t{}\t{}\t{}",
+                                    col.name,
+                                    col.data_type,
+                                    col.is_nullable,
+                                    col.key_meta,
+                                    col.description
                                 )
                             })
                             .collect::<Vec<_>>()
