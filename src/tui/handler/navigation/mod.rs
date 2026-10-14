@@ -260,6 +260,9 @@ pub mod tests {
     fn sample_app(screen: Screen) -> App {
         let mut app = App::new(sample_config(), false);
         app.clear_mouse_selection();
+        if matches!(screen, Screen::Actions(_)) {
+            app.set_active_panel(ActivePanel::MenuPane);
+        }
         app.screen = screen;
         app
     }
@@ -1556,14 +1559,27 @@ pub mod tests {
             .position(|(_, _, a)| *a == crate::app::Action::Sample)
             .unwrap();
 
-        // 'e' triggers Schema
+        // 'e' triggers Schema from MenuPane
+        app.active_panel = ActivePanel::MenuPane;
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('e')));
         let Screen::Actions(state) = &app.screen else {
             panic!()
         };
         assert_eq!(state.selected, schema_idx);
 
+        // In MainViewer, hotkeys like 'p' must NOT trigger action changes
+        assert_eq!(app.active_panel, ActivePanel::MainViewer);
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('p')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(
+            state.selected, schema_idx,
+            "Menu action hotkeys must not trigger when active panel is MainViewer"
+        );
+
         // 'i' is no longer assigned to any action
+        app.active_panel = ActivePanel::MenuPane;
         if let Screen::Actions(ref mut s) = app.screen {
             s.selected = 0;
         }
@@ -1573,21 +1589,24 @@ pub mod tests {
         };
         assert_eq!(state.selected, 0, "'i' should not trigger any action");
 
-        // 'p' triggers Partitions
+        // 'p' triggers Partitions from MenuPane
+        app.active_panel = ActivePanel::MenuPane;
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('p')));
         let Screen::Actions(state) = &app.screen else {
             panic!()
         };
         assert_eq!(state.selected, partitions_idx);
 
-        // 't' triggers Show Stats
+        // 't' triggers Show Stats from MenuPane
+        app.active_panel = ActivePanel::MenuPane;
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('t')));
         let Screen::Actions(state) = &app.screen else {
             panic!()
         };
         assert_eq!(state.selected, stats_idx);
 
-        // 'm' triggers Sample Mode
+        // 'm' triggers Sample Mode from MenuPane
+        app.active_panel = ActivePanel::MenuPane;
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('m')));
         let Screen::Actions(state) = &app.screen else {
             panic!()

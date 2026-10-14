@@ -288,6 +288,12 @@ pub fn apply_column_modal(app: &mut App) -> Option<Command> {
                 res.selected_col = closest;
             }
         }
+        if let Some((ref sort_col, _)) = res.sort
+            && res.hidden_columns.contains(sort_col)
+        {
+            res.sort = None;
+            res.apply_sort(&app.vertical_schema_cols);
+        }
         res.scroll_h.set(0);
 
         // 3. Update query in query cell

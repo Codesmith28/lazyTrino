@@ -867,8 +867,16 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                                     res.hidden_columns.insert(col);
                                 }
                                 if let Some((col, dir)) = view.sort {
-                                    res.sort = Some((col, dir.into()));
+                                    res.sort = Some((col.clone(), dir.into()));
                                     res.apply_sort(&app.vertical_schema_cols);
+                                    if let Some(pos) = res.columns.iter().position(|c| c == &col) {
+                                        res.selected_col = pos;
+                                    }
+                                }
+                                if let Some(col_name) = res.columns.get(res.selected_col)
+                                    && !res.is_column_visible(col_name)
+                                {
+                                    res.selected_col = res.first_visible_col();
                                 }
                                 if !res.column_filters.is_empty() {
                                     if res.unfiltered_rows.is_none() {

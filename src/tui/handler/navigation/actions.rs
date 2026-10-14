@@ -215,71 +215,72 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
         .contains(crossterm::event::KeyModifiers::SHIFT);
     let is_alt = key.modifiers.contains(crossterm::event::KeyModifiers::ALT);
 
-    if !is_ctrl
-        && let KeyCode::Char(c) = code
-        && let Some(pos) = ACTIONS.iter().position(|(k, _, _)| *k == c)
-    {
-        return trigger_action(app, pos);
-    }
-
     let safe_columns = crate::app::safe_select_columns(&app.vertical_schema_cols);
     if let Screen::Actions(ref mut s) = app.screen {
         match app.active_panel {
-            ActivePanel::MenuPane => match code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    s.selected = (s.selected + 1) % ACTIONS.len();
-                    s.results = None;
-                    s.drilldown = None;
-                    let action = &ACTIONS[s.selected].2;
-                    let query = action.build_query(&s.catalog, &s.schema, &s.table);
-                    s.query_cursor = query.len();
-                    s.query_buffer = query;
-                    None
+            ActivePanel::MenuPane => {
+                if !is_ctrl
+                    && let KeyCode::Char(c) = code
+                    && let Some(pos) = ACTIONS.iter().position(|(k, _, _)| *k == c)
+                {
+                    return trigger_action(app, pos);
                 }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    s.selected = if s.selected == 0 {
-                        ACTIONS.len() - 1
-                    } else {
-                        s.selected - 1
-                    };
-                    s.results = None;
-                    s.drilldown = None;
-                    let action = &ACTIONS[s.selected].2;
-                    let query = action.build_query(&s.catalog, &s.schema, &s.table);
-                    s.query_cursor = query.len();
-                    s.query_buffer = query;
-                    None
-                }
-                KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
-                    let idx = s.selected;
-                    trigger_action(app, idx)
-                }
-                KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
-                    super::go_back(app);
-                    None
-                }
-                KeyCode::Char('y') => {
-                    copy_active_pane_content(app);
-                    None
-                }
-                KeyCode::Char('C') => {
-                    if s.results.is_some() {
-                        crate::tui::handler::column_modal::open_column_modal(app);
+                match code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        s.selected = (s.selected + 1) % ACTIONS.len();
+                        s.results = None;
+                        s.drilldown = None;
+                        let action = &ACTIONS[s.selected].2;
+                        let query = action.build_query(&s.catalog, &s.schema, &s.table);
+                        s.query_cursor = query.len();
+                        s.query_buffer = query;
+                        None
                     }
-                    None
-                }
-                KeyCode::Char('S') => {
-                    if let Some(ref mut res) = s.results {
-                        res.toggle_sort(&app.vertical_schema_cols);
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        s.selected = if s.selected == 0 {
+                            ACTIONS.len() - 1
+                        } else {
+                            s.selected - 1
+                        };
+                        s.results = None;
+                        s.drilldown = None;
+                        let action = &ACTIONS[s.selected].2;
+                        let query = action.build_query(&s.catalog, &s.schema, &s.table);
+                        s.query_cursor = query.len();
+                        s.query_buffer = query;
+                        None
                     }
-                    None
+                    KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+                        let idx = s.selected;
+                        trigger_action(app, idx)
+                    }
+                    KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
+                        super::go_back(app);
+                        None
+                    }
+                    KeyCode::Char('y') => {
+                        copy_active_pane_content(app);
+                        None
+                    }
+                    KeyCode::Char('C') => {
+                        if s.results.is_some() {
+                            crate::tui::handler::column_modal::open_column_modal(app);
+                        }
+                        None
+                    }
+                    KeyCode::Char('S') => {
+                        if let Some(ref mut res) = s.results {
+                            res.toggle_sort(&app.vertical_schema_cols);
+                        }
+                        None
+                    }
+                    KeyCode::Char('A') | KeyCode::Char('a') => {
+                        crate::tui::handler::applied_filters_modal::open_applied_filters_modal(app);
+                        None
+                    }
+                    _ => None,
                 }
-                KeyCode::Char('A') | KeyCode::Char('a') => {
-                    crate::tui::handler::applied_filters_modal::open_applied_filters_modal(app);
-                    None
-                }
-                _ => None,
-            },
+            }
             ActivePanel::MainViewer => {
                 let in_drilldown = s.drilldown.is_some()
                     && s.selected < ACTIONS.len()
@@ -524,7 +525,17 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
-                        KeyCode::Char('v') | KeyCode::Char('V') if is_ctrl => {
+                        KeyCode::Char('v') => {
+                            if let Some(ref mut res) = s.results {
+                                if matches!(res.visual_mode, crate::app::VisualMode::Block { .. }) {
+                                    res.exit_visual_mode();
+                                } else {
+                                    res.enter_visual_block();
+                                }
+                            }
+                            None
+                        }
+                        KeyCode::Char('V') if is_ctrl => {
                             if let Some(ref mut res) = s.results {
                                 if matches!(res.visual_mode, crate::app::VisualMode::Block { .. }) {
                                     res.exit_visual_mode();

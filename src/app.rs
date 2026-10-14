@@ -520,6 +520,11 @@ impl ResultsState {
         if self.columns.is_empty() || self.rows.is_empty() {
             return;
         }
+        if let Some(col_name) = self.columns.get(self.selected_col)
+            && !self.is_column_visible(col_name)
+        {
+            self.selected_col = self.first_visible_col();
+        }
         let col_idx = self.selected_col.min(self.columns.len().saturating_sub(1));
         let col_name = self.columns[col_idx].clone();
 

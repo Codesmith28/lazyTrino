@@ -170,7 +170,7 @@ pub fn compute_column_width(
         header_len += 2;
     }
     let raw_width = (header_len.max(max_data) as u16).max(8);
-    let max_allowed = (available_width / 2).max(15) as u16;
+    let max_allowed = (available_width / 2).max(header_len).max(15) as u16;
     raw_width.min(max_allowed) as usize
 }
 
@@ -856,12 +856,7 @@ pub fn render(
                 _ => "",
             };
             let filter_indicator = if has_filter { " [F]" } else { "" };
-            let cursor_indicator = if is_selected_col && is_active {
-                "▼ "
-            } else {
-                ""
-            };
-            let display_name = format!("{cursor_indicator}{c}{filter_indicator}{sort_indicator}");
+            let display_name = format!("{c}{filter_indicator}{sort_indicator}");
             let style = if is_selected_col && is_active {
                 theme::warning_bold_style().add_modifier(Modifier::UNDERLINED)
             } else if is_selected_col {
@@ -2068,6 +2063,172 @@ mod tests {
         assert!(
             highlighted_cells_count > 0,
             "Empty cell must still have highlighted background block"
+        );
+    }
+
+    #[test]
+    fn test_toggle_sort_and_render_triangle_with_filtered_columns() {
+        use std::collections::HashSet;
+
+        let mut hidden = HashSet::new();
+        hidden.insert("id".to_string());
+
+        let mut filters = std::collections::HashMap::new();
+        let mut filter_vals = HashSet::new();
+        filter_vals.insert("ACTIVE".to_string());
+        filters.insert(
+            "status".to_string(),
+            crate::app::ColumnFilter::Values(filter_vals),
+        );
+
+        let mut state = ResultsState {
+            columns: vec!["id".to_string(), "status".to_string(), "amount".to_string()],
+            rows: vec![
+                vec!["1".to_string(), "ACTIVE".to_string(), "100".to_string()],
+                vec!["2".to_string(), "ACTIVE".to_string(), "200".to_string()],
+            ],
+            hidden_columns: hidden,
+            column_filters: filters,
+            selected_col: 1, // "status"
+            selected_row: 0,
+            ..Default::default()
+        };
+
+        let backend = TestBackend::new(120, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+
+        // Frame 1: Not sorted yet -> no triangle
+        terminal
+            .draw(|f| {
+                render(
+                    f,
+                    Rect::new(0, 0, 120, 10),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let col_header_0: String = (1..25)
+            .map(|x| buf.cell((x, 1)).unwrap().symbol())
+            .collect();
+        assert!(
+            col_header_0.contains("status [F]"),
+            "Should show status [F]"
+        );
+        assert!(
+            !col_header_0.contains("▼"),
+            "No sort triangle when unsorted in: {col_header_0}"
+        );
+        assert!(
+            !col_header_0.contains("▲"),
+            "No sort triangle when unsorted in: {col_header_0}"
+        );
+
+        // Toggle 1: Descending -> ▼
+        state.toggle_sort(&[]);
+        assert_eq!(
+            state.sort,
+            Some(("status".to_string(), crate::app::SortDirection::Desc))
+        );
+        terminal
+            .draw(|f| {
+                render(
+                    f,
+                    Rect::new(0, 0, 120, 10),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let col_header_1: String = (1..25)
+            .map(|x| buf.cell((x, 1)).unwrap().symbol())
+            .collect();
+        assert!(
+            col_header_1.contains("status [F] ▼"),
+            "Must show descending triangle ▼: {col_header_1}"
+        );
+        assert!(
+            !col_header_1.contains("▲"),
+            "Must not show ascending triangle ▲ in: {col_header_1}"
+        );
+
+        // Toggle 2: Ascending -> ▲
+        state.toggle_sort(&[]);
+        assert_eq!(
+            state.sort,
+            Some(("status".to_string(), crate::app::SortDirection::Asc))
+        );
+        terminal
+            .draw(|f| {
+                render(
+                    f,
+                    Rect::new(0, 0, 120, 10),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let col_header_2: String = (1..25)
+            .map(|x| buf.cell((x, 1)).unwrap().symbol())
+            .collect();
+        assert!(
+            col_header_2.contains("status [F] ▲"),
+            "Must show ascending triangle ▲: {col_header_2}"
+        );
+        assert!(
+            !col_header_2.contains("▼"),
+            "Must not show descending triangle ▼ in: {col_header_2}"
+        );
+
+        // Toggle 3: None -> no triangle
+        state.toggle_sort(&[]);
+        assert_eq!(state.sort, None);
+        terminal
+            .draw(|f| {
+                render(
+                    f,
+                    Rect::new(0, 0, 120, 10),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let col_header_3: String = (1..25)
+            .map(|x| buf.cell((x, 1)).unwrap().symbol())
+            .collect();
+        assert!(
+            col_header_3.contains("status [F]"),
+            "Should show status [F]"
+        );
+        assert!(
+            !col_header_3.contains("▼"),
+            "No sort triangle when cleared in: {col_header_3}"
+        );
+        assert!(
+            !col_header_3.contains("▲"),
+            "No sort triangle when cleared in: {col_header_3}"
+        );
+
+        // Test snap from hidden column: set selected_col to 0 ("id", hidden)
+        state.selected_col = 0;
+        state.toggle_sort(&[]);
+        assert_eq!(
+            state.sort,
+            Some(("status".to_string(), crate::app::SortDirection::Desc)),
+            "toggle_sort must snap to visible column and sort it"
         );
     }
 }
