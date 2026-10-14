@@ -23,6 +23,7 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     RED='\033[0;31m'
     BOLD='\033[1m'
     DIM='\033[2m'
+    ITALIC='\033[3m'
     RESET='\033[0m'
 else
     CYAN=''
@@ -31,6 +32,7 @@ else
     RED=''
     BOLD=''
     DIM=''
+    ITALIC=''
     RESET=''
 fi
 
@@ -51,52 +53,53 @@ error() {
 }
 
 print_banner() {
-    printf "${CYAN}${BOLD}"
-    cat << 'EOF'
-  _                      _____     _             
- | |                    |_   _|   (_)            
- | | __ _ _____   _ ______| | _ __ _ _ __   ___  
- | |/ _` |_  / | | |______| || '__| | '_ \ / _ \ 
- | | (_| |/ /| |_| |      | || |  | | | | | (_) |
- |_|\__,_/___|\__, |      \_/|_|  |_|_| |_|\___/ 
-               __/ |                             
-              |___/                              
+    printf "${CYAN}${BOLD}${ITALIC}"
+    cat <<'EOF'
+ _                      _____    _             
+| |                    |_   _|  (_)            
+| | __ _ _____   _ ______| |_ __ _ _ __   ___  
+| |/ _` |_  / | | |______| | '__| | '_ \ / _ \ 
+| | (_| |/ /| |_| |      | | |  | | | | | (_) |
+|_|\__,_/___|\__, |      \_/_|  |_|_| |_|\___/ 
+              __/ |                            
+             |___/                             
+
 EOF
     printf "${RESET}\n"
-    printf "${DIM}Interactive Terminal UI for Trino & Presto${RESET}\n\n"
+    printf "${DIM}${ITALIC}Interactive Terminal UI for Trino & Presto${RESET}\n\n"
 }
 
 detect_os() {
     OS="$(uname -s)"
     case "$OS" in
-        Linux|linux)
-            OS="linux"
-            ;;
-        Darwin|darwin)
-            OS="darwin"
-            ;;
-        *)
-            error "Unsupported operating system: $OS"
-            error "lazyTrino currently supports Linux and macOS (Darwin)."
-            exit 1
-            ;;
+    Linux | linux)
+        OS="linux"
+        ;;
+    Darwin | darwin)
+        OS="darwin"
+        ;;
+    *)
+        error "Unsupported operating system: $OS"
+        error "lazyTrino currently supports Linux and macOS (Darwin)."
+        exit 1
+        ;;
     esac
 }
 
 detect_arch() {
     ARCH="$(uname -m)"
     case "$ARCH" in
-        x86_64|amd64)
-            ARCH="x86_64"
-            ;;
-        aarch64|arm64)
-            ARCH="aarch64"
-            ;;
-        *)
-            error "Unsupported architecture: $ARCH"
-            error "lazyTrino currently supports x86_64 and aarch64 (ARM64)."
-            exit 1
-            ;;
+    x86_64 | amd64)
+        ARCH="x86_64"
+        ;;
+    aarch64 | arm64)
+        ARCH="aarch64"
+        ;;
+    *)
+        error "Unsupported architecture: $ARCH"
+        error "lazyTrino currently supports x86_64 and aarch64 (ARM64)."
+        exit 1
+        ;;
     esac
 }
 
@@ -279,13 +282,13 @@ main() {
 
     # Check if INSTALL_DIR is in PATH
     case ":${PATH}:" in
-        *:"${INSTALL_DIR}":*)
-            ;;
-        *)
-            warn "Note: ${INSTALL_DIR} is not currently in your PATH."
-            printf "  Add it to your shell configuration by running:\n\n"
-            printf "    ${BOLD}export PATH=\"%s:\$PATH\"${RESET}\n\n" "$INSTALL_DIR"
-            ;;
+    *:"${INSTALL_DIR}":*)
+        ;;
+    *)
+        warn "Note: ${INSTALL_DIR} is not currently in your PATH."
+        printf "  Add it to your shell configuration by running:\n\n"
+        printf "    ${BOLD}export PATH=\"%s:\$PATH\"${RESET}\n\n" "$INSTALL_DIR"
+        ;;
     esac
 
     printf "${CYAN}➜${RESET} Run ${BOLD}lazyTrino --help${RESET} or ${BOLD}lazyTrino${RESET} to get started.\n\n"
