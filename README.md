@@ -6,7 +6,13 @@
 
 **lazyTrino** is a terminal user interface (TUI) for browsing Trino and Presto catalogs, schemas, tables, metadata, and query results with keyboard-driven navigation, vim shortcuts, interactive modals, and mouse support.
 
-Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[Crossterm](https://github.com/crossterm-rs/crossterm)**.
+### ⚡ Quick Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Codesmith28/lazyTrino/main/install.sh | bash
+```
+
+> Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[Crossterm](https://github.com/crossterm-rs/crossterm)**. Pre-compiled binaries for macOS, Linux, and Windows are available on [GitHub Releases](https://github.com/Codesmith28/lazyTrino/releases).
 
 ---
 
@@ -19,23 +25,23 @@ Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[C
 ## Layout Overview
 
 ```
-+----------------------------+---------------------------------------------------------------+
-| Menu - <table_name>        | Table Query Bar [Press q or : to write query]                 |
-| (Resizable Split)          | SQL > SELECT * FROM "iceberg"."sales"."orders" LIMIT 100      |
-|                            +---------------------------------------------------------------+
-| > [v] Table View Mode      | iceberg > sales > orders | 100 records | sorted by id desc    |
-|                            +---------------------------------------------------------------+
-|   [c] Table DDL            | +----+-------------+-------------------------+--------------+ |
-|   [s] Schema & Info        | | id | customer_id | order_date              | total_amount | |
-|   [t] Show Stats           | +----+-------------+-------------------------+--------------+ |
-|   [m] Sample (20 rows)     | | 99 | C-1042      | 2026-10-14 09:12:00 UTC |     1,420.50 | |
-|   [p] Partitions           | | 98 | C-0819      | 2026-10-14 08:45:22 UTC |       310.00 | |
-|                            | +----+-------------+-------------------------+--------------+ |
-+----------------------------+---------------------------------------------------------------+
-| Query Inspector & Audit Logs [Status: SUCCESS | Duration: 38ms | Rows: 100]                |
-+--------------------------------------------------------------------------------------------+
-| Footer Hints [j/k:rows  h/l:cols  V:line  ^V:block  y:yank  C:cols  F:filter  S:sort]      |
-+--------------------------------------------------------------------------------------------+
++------------------------+---------------------------------------------------------------+
+| Menu - orders          | Table Query Bar [Press q or : to write query]                 |
+| (Resizable Split)      | SQL > SELECT * FROM "iceberg"."sales"."orders" LIMIT 100      |
+|                        +---------------------------------------------------------------+
+| > [v] Table View       | iceberg > sales > orders | 100 records | sorted by id desc    |
+|                        +---------------------------------------------------------------+
+|   [c] Table DDL        | +----+-------------+-------------------------+--------------+ |
+|   [s] Schema & Info    | | id | customer_id | order_date              | total_amount | |
+|   [t] Show Stats       | +----+-------------+-------------------------+--------------+ |
+|   [m] Sample (20 rows) | | 99 | C-1042      | 2026-10-14 09:12:00 UTC |     1,420.50 | |
+|   [p] Partitions       | | 98 | C-0819      | 2026-10-14 08:45:22 UTC |       310.00 | |
+|                        | +----+-------------+-------------------------+--------------+ |
++------------------------+---------------------------------------------------------------+
+| Query Inspector & Audit Logs [Status: SUCCESS | Duration: 38ms | Rows: 100]            |
++----------------------------------------------------------------------------------------+
+| Footer Hints [j/k:rows  h/l:cols  V:line  ^V:block  y:yank  C:cols  F:filter  S:sort]  |
++----------------------------------------------------------------------------------------+
 ```
 
 ---
