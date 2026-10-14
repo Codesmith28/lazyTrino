@@ -81,6 +81,11 @@ fn open_log_file(path: &Path) -> io::Result<std::fs::File> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = config::CliArgs::parse();
+
+    if args.update {
+        return lazy_trino::updater::run_self_update().await;
+    }
+
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(args.log_level.unwrap_or_default().as_str()));
 
