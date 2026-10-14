@@ -34,6 +34,14 @@ const PASSWORD_ENV_VAR: &str = "LAZYTRINO_PASSWORD";
 pub struct ConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "query_cache_size",
+        alias = "cache_limit",
+        alias = "cache_size"
+    )]
+    pub query_cache_limit: Option<usize>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, StoredConnectionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -48,6 +56,14 @@ pub struct StoredConnectionConfig {
     pub user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "query_cache_size",
+        alias = "cache_limit",
+        alias = "cache_size"
+    )]
+    pub query_cache_limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -112,6 +128,7 @@ pub fn save_last_used(url: &str, user: &str) -> Result<()> {
         url: Some(url.to_string()),
         user: Some(user.to_string()),
         password: None,
+        query_cache_limit: None,
     });
 
     let contents = toml::to_string_pretty(&config).context("failed to serialize config file")?;
@@ -178,11 +195,18 @@ fn resolve_profile_with_env(
         default_config.password,
     );
 
+    let query_cache_limit = args
+        .query_cache_limit
+        .or_else(|| selected_profile.and_then(|p| p.query_cache_limit))
+        .or_else(|| config_file.and_then(|c| c.query_cache_limit))
+        .unwrap_or(default_config.query_cache_limit);
+
     ResolvedConnectionConfig {
         config: ConnectionConfig {
             url,
             user,
             password,
+            query_cache_limit,
         },
         auto_connect: url_source >= ValueSource::Profile && user_source >= ValueSource::Profile,
         selected_profile: selected_profile_name,
@@ -309,9 +333,37 @@ user = "recent"
                 url: "http://env-host:8080".to_string(),
                 user: "cli-user".to_string(),
                 password: "env-password".to_string(),
+                query_cache_limit: crate::config::DEFAULT_QUERY_CACHE_LIMIT,
             }
         );
         assert!(resolved.auto_connect);
+    }
+
+    #[test]
+    fn parses_and_resolves_query_cache_limit() {
+        let config_toml = r#"
+default_profile = "local"
+query_cache_limit = 15
+
+[profiles.local]
+url = "http://localhost:8080"
+user = "trino"
+query_cache_size = 25
+"#;
+        let config: ConfigFile = toml::from_str(config_toml).unwrap();
+        assert_eq!(config.query_cache_limit, Some(15));
+        assert_eq!(config.profiles["local"].query_cache_limit, Some(25));
+
+        let mut cli_args = args();
+        cli_args.profile = Some("local".to_string());
+        let resolved = resolve_profile_with_env(&cli_args, Some(&config), EnvOverrides::default());
+        assert_eq!(resolved.config.query_cache_limit, 25);
+
+        // CLI arg overrides profile
+        cli_args.query_cache_limit = Some(50);
+        let resolved_cli =
+            resolve_profile_with_env(&cli_args, Some(&config), EnvOverrides::default());
+        assert_eq!(resolved_cli.config.query_cache_limit, 50);
     }
 
     #[test]

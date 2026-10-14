@@ -167,6 +167,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                         table_count_loading: true,
                         counts_cache: std::collections::HashMap::new(),
                         current_count_loading: true,
+                        path_cursors: std::collections::HashMap::new(),
                     });
                     Some(Command::FetchPartitionLevel {
                         catalog: s.catalog.clone(),
@@ -273,6 +274,10 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                     }
                     None
                 }
+                KeyCode::Char('A') | KeyCode::Char('a') => {
+                    crate::tui::handler::applied_filters_modal::open_applied_filters_modal(app);
+                    None
+                }
                 _ => None,
             },
             ActivePanel::MainViewer => {
@@ -291,6 +296,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                     && !items.is_empty()
                                 {
                                     dd.selected = (dd.selected + 1).min(items.len() - 1);
+                                    dd.path_cursors.insert(dd.path.clone(), dd.selected);
                                 }
                             }
                             maybe_fetch_selected_partition_count(s)
@@ -298,6 +304,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         KeyCode::Char('k') | KeyCode::Up => {
                             if let Some(dd) = s.drilldown.as_mut() {
                                 dd.selected = dd.selected.saturating_sub(1);
+                                dd.path_cursors.insert(dd.path.clone(), dd.selected);
                             }
                             maybe_fetch_selected_partition_count(s)
                         }
@@ -311,6 +318,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 {
                                     dd.selected =
                                         (dd.selected + 15).min(items.len().saturating_sub(1));
+                                    dd.path_cursors.insert(dd.path.clone(), dd.selected);
                                 }
                             }
                             maybe_fetch_selected_partition_count(s)
@@ -320,12 +328,14 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         {
                             if let Some(dd) = s.drilldown.as_mut() {
                                 dd.selected = dd.selected.saturating_sub(15);
+                                dd.path_cursors.insert(dd.path.clone(), dd.selected);
                             }
                             maybe_fetch_selected_partition_count(s)
                         }
                         KeyCode::Char('g') | KeyCode::Home | KeyCode::Char('0') => {
                             if let Some(dd) = s.drilldown.as_mut() {
                                 dd.selected = 0;
+                                dd.path_cursors.insert(dd.path.clone(), dd.selected);
                             }
                             maybe_fetch_selected_partition_count(s)
                         }
@@ -334,6 +344,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 let depth = dd.depth();
                                 if let Some(items) = dd.levels_cache.get(depth) {
                                     dd.selected = items.len().saturating_sub(1);
+                                    dd.path_cursors.insert(dd.path.clone(), dd.selected);
                                 }
                             }
                             maybe_fetch_selected_partition_count(s)
@@ -347,6 +358,12 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         }
                         KeyCode::Char('y') => {
                             copy_active_pane_content(app);
+                            None
+                        }
+                        KeyCode::Char('A') | KeyCode::Char('a') => {
+                            crate::tui::handler::applied_filters_modal::open_applied_filters_modal(
+                                app,
+                            );
                             None
                         }
                         _ => None,
@@ -655,6 +672,12 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
+                        KeyCode::Char('A') | KeyCode::Char('a') => {
+                            crate::tui::handler::applied_filters_modal::open_applied_filters_modal(
+                                app,
+                            );
+                            None
+                        }
                         KeyCode::Char('C') => {
                             if s.results.is_some() {
                                 crate::tui::handler::column_modal::open_column_modal(app);
@@ -668,11 +691,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('q') | KeyCode::Char(':') => {
-                            if s.selected < ACTIONS.len()
-                                && matches!(ACTIONS[s.selected].2, Action::TableView)
-                            {
-                                app.mode = Mode::QueryInput;
-                            }
+                            app.mode = Mode::QueryInput;
                             None
                         }
                         KeyCode::Char('y') => {

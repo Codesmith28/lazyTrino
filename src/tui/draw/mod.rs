@@ -45,27 +45,11 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(outer_chunks[1]);
 
     if !is_in_table {
-        // Phase 1: Default All Tables View (Connect, Catalog, Schema, Table) -> Default 60% list ratio
-        let list_pct = if app.main_panel_pct <= 30 {
-            60
-        } else {
-            app.main_panel_pct
-        };
-        let main_chunks = Layout::horizontal([
-            Constraint::Percentage(list_pct),
-            Constraint::Percentage(100 - list_pct),
-        ])
-        .split(outer_chunks[0]);
-
-        screens::help::render_side_panel(frame, main_chunks[1]);
-
-        let is_connect = matches!(effective_screen, Screen::Connect(_));
-        let main = if is_connect {
-            main_chunks[0]
-        } else {
+        if let Screen::Table(state) = effective_screen {
+            // Browsing tables: full width without the help & keybindings side panel
             let search_active =
                 matches!(app.mode, Mode::Search) && !matches!(app.screen, Screen::Help);
-            let inner_w = main_chunks[0].width.saturating_sub(2).max(1) as usize;
+            let inner_w = outer_chunks[0].width.saturating_sub(2).max(1) as usize;
             let search_height = if search_active {
                 let total_chars = 3 + app.search_query.len();
                 let lines = total_chars.div_ceil(inner_w);
@@ -79,70 +63,100 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
                 Constraint::Length(3),
                 Constraint::Min(0),
             ])
-            .split(main_chunks[0]);
+            .split(outer_chunks[0]);
 
             render_search_bar(frame, left_chunks[0], app);
             render_phase1_count_box(frame, left_chunks[1], effective_screen, &app.search_query);
-            left_chunks[2]
-        };
+            screens::table::render(
+                frame,
+                left_chunks[2],
+                state,
+                if matches!(app.screen, Screen::Help) {
+                    ""
+                } else {
+                    &app.search_query
+                },
+                true,
+                app,
+            );
+        } else {
+            // Phase 1: Connect, Catalog, Schema -> Default 60% list ratio + Help side panel (Resizable 20-80%)
+            let list_pct = app.main_panel_pct.clamp(20, 80);
+            let main_chunks = Layout::horizontal([
+                Constraint::Percentage(list_pct),
+                Constraint::Percentage(100 - list_pct),
+            ])
+            .split(outer_chunks[0]);
 
-        let main_is_active = true;
+            screens::help::render_side_panel(frame, main_chunks[1]);
 
-        match effective_screen {
-            Screen::Connect(state) => {
-                screens::connect::render(frame, main, state, spinner(app));
+            let is_connect = matches!(effective_screen, Screen::Connect(_));
+            let main = if is_connect {
+                main_chunks[0]
+            } else {
+                let search_active =
+                    matches!(app.mode, Mode::Search) && !matches!(app.screen, Screen::Help);
+                let inner_w = main_chunks[0].width.saturating_sub(2).max(1) as usize;
+                let search_height = if search_active {
+                    let total_chars = 3 + app.search_query.len();
+                    let lines = total_chars.div_ceil(inner_w);
+                    (lines as u16 + 2).clamp(3, 8)
+                } else {
+                    3
+                };
+
+                let left_chunks = Layout::vertical([
+                    Constraint::Length(search_height),
+                    Constraint::Length(3),
+                    Constraint::Min(0),
+                ])
+                .split(main_chunks[0]);
+
+                render_search_bar(frame, left_chunks[0], app);
+                render_phase1_count_box(frame, left_chunks[1], effective_screen, &app.search_query);
+                left_chunks[2]
+            };
+
+            let main_is_active = true;
+
+            match effective_screen {
+                Screen::Connect(state) => {
+                    screens::connect::render(frame, main, state, spinner(app));
+                }
+                Screen::Catalog(state) => {
+                    screens::catalog::render(
+                        frame,
+                        main,
+                        state,
+                        if matches!(app.screen, Screen::Help) {
+                            ""
+                        } else {
+                            &app.search_query
+                        },
+                        main_is_active,
+                        app,
+                    );
+                }
+                Screen::Schema(state) => {
+                    screens::schema::render(
+                        frame,
+                        main,
+                        state,
+                        if matches!(app.screen, Screen::Help) {
+                            ""
+                        } else {
+                            &app.search_query
+                        },
+                        main_is_active,
+                        app,
+                    );
+                }
+                _ => {}
             }
-            Screen::Catalog(state) => {
-                screens::catalog::render(
-                    frame,
-                    main,
-                    state,
-                    if matches!(app.screen, Screen::Help) {
-                        ""
-                    } else {
-                        &app.search_query
-                    },
-                    main_is_active,
-                    app,
-                );
-            }
-            Screen::Schema(state) => {
-                screens::schema::render(
-                    frame,
-                    main,
-                    state,
-                    if matches!(app.screen, Screen::Help) {
-                        ""
-                    } else {
-                        &app.search_query
-                    },
-                    main_is_active,
-                    app,
-                );
-            }
-            Screen::Table(state) => {
-                screens::table::render(
-                    frame,
-                    main,
-                    state,
-                    if matches!(app.screen, Screen::Help) {
-                        ""
-                    } else {
-                        &app.search_query
-                    },
-                    main_is_active,
-                    app,
-                );
-            }
-            _ => {}
         }
     } else {
-        // Phase 2: Inside Table View -> Default 15% Menu : 85% Preview (Resizable)
-        let menu_pct = if app.main_panel_pct > 30 {
-            15
-        } else {
-            app.main_panel_pct.clamp(8, 30)
-        };
+        // Phase 2: Inside Table View -> Default 18% Menu : 82% Preview (Resizable 10-60%)
+        let menu_pct = app.actions_panel_pct.clamp(10, 60);
         let main_chunks = Layout::horizontal([
             Constraint::Percentage(menu_pct),
             Constraint::Percentage(100 - menu_pct),
@@ -437,6 +451,9 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
     }
     if let Some(ref prompt) = app.save_view_prompt {
         screens::saved_views_modal::render_save_prompt(frame, frame.area(), prompt);
+    }
+    if let Some(ref modal) = app.applied_filters_modal {
+        screens::applied_filters_modal::render(frame, frame.area(), modal);
     }
 }
 
@@ -782,6 +799,88 @@ pub mod count_box_layout_regression {
         assert!(
             count_line.contains("1 rows loaded of 25,000 total"),
             "count line must contain formatted numbers: {count_line}"
+        );
+    }
+}
+
+#[cfg(test)]
+pub mod table_browse_full_width_regression {
+    use super::*;
+    use crate::app::{CatalogState, TableState};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn table_browse_renders_full_width_without_help_side_panel() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.screen = Screen::Table(TableState {
+            catalog: "iceberg".into(),
+            schema: "analytics".into(),
+            items: vec!["customer_events".into(), "user_orders".into()],
+            selected: 0,
+        });
+
+        let width = 120u16;
+        let height = 30u16;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        // 1. Verify "Help & Keybindings" is NOT rendered on table browse screen
+        let mut found_help_panel = false;
+        for y in 0..height {
+            let row_str: String = (0..width)
+                .map(|x| buf.cell((x, y)).unwrap().symbol())
+                .collect();
+            if row_str.contains("Help & Keybindings") {
+                found_help_panel = true;
+                break;
+            }
+        }
+        assert!(
+            !found_help_panel,
+            "Help & Keybindings side panel must not be rendered when browsing tables"
+        );
+
+        // 2. Verify table list extends to the right edge of the screen
+        let mut found_table_title = false;
+        for y in 0..height {
+            let row_str: String = (0..width)
+                .map(|x| buf.cell((x, y)).unwrap().symbol())
+                .collect();
+            if row_str.contains("Tables — iceberg.analytics") {
+                found_table_title = true;
+                // Right border should be at width - 1
+                assert_eq!(
+                    buf.cell((width - 1, y)).unwrap().symbol(),
+                    "╮",
+                    "Table box top-right corner should be at the right edge"
+                );
+                break;
+            }
+        }
+        assert!(found_table_title, "Tables title should be rendered");
+
+        // 3. In contrast, Catalog screen still renders Help side panel
+        app.screen = Screen::Catalog(CatalogState {
+            items: vec!["iceberg".into()],
+            selected: 0,
+        });
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let buf2 = terminal.backend().buffer().clone();
+        let mut catalog_has_help = false;
+        for y in 0..height {
+            let row_str: String = (0..width)
+                .map(|x| buf2.cell((x, y)).unwrap().symbol())
+                .collect();
+            if row_str.contains("Help & Keybindings") {
+                catalog_has_help = true;
+                break;
+            }
+        }
+        assert!(
+            catalog_has_help,
+            "Catalog screen should continue to display Help & Keybindings side panel"
         );
     }
 }

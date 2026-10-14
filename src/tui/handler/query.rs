@@ -24,7 +24,13 @@ pub fn extract_from_tables(sql: &str) -> Vec<String> {
     let mut i = 0;
     while i < tokens.len() {
         let upper = tokens[i].to_uppercase();
-        if (upper == "FROM" || upper == "JOIN") && i + 1 < tokens.len() {
+        let is_table_intro = upper == "FROM"
+            || upper == "JOIN"
+            || upper == "TABLE"
+            || upper == "FOR"
+            || upper == "DESCRIBE"
+            || upper == "DESC";
+        if is_table_intro && i + 1 < tokens.len() {
             let next_token = tokens[i + 1];
             if !next_token.starts_with('(') {
                 let clean_table =
@@ -32,7 +38,8 @@ pub fn extract_from_tables(sql: &str) -> Vec<String> {
                 let clean_upper = clean_table.to_uppercase();
                 let sql_keywords = [
                     "SELECT", "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "JOIN", "LEFT",
-                    "RIGHT", "INNER", "OUTER", "CROSS", "FULL", "ON", "USING", "AS",
+                    "RIGHT", "INNER", "OUTER", "CROSS", "FULL", "ON", "USING", "AS", "TABLE",
+                    "FROM", "FOR", "VIEW",
                 ];
                 if !clean_table.is_empty() && !sql_keywords.contains(&clean_upper.as_str()) {
                     tables.push(clean_table.to_string());
@@ -64,6 +71,15 @@ pub fn validate_and_build_query(
     let extracted_tables = extract_from_tables(trimmed);
 
     if extracted_tables.is_empty() {
+        let lower = trimmed.to_lowercase();
+        let stripped_lower = lower.replace(['"', '`', '\''], "");
+        if stripped_lower.contains(&full_target)
+            || stripped_lower.contains(&schema_target)
+            || stripped_lower.contains(&table_target)
+        {
+            return Ok(trimmed.to_string());
+        }
+
         return Err(format!(
             "Invalid query: Please enter a full SQL query targeting table '{table}' (e.g. SELECT * FROM {table} WHERE ...)."
         ));
@@ -241,7 +257,27 @@ pub(super) fn query_text_index_from_mouse(
 
 pub(super) fn active_query_state_mut(app: &mut App) -> Option<&mut ResultsState> {
     match &mut app.screen {
-        Screen::Actions(action_state) => action_state.results.as_mut(),
+        Screen::Actions(action_state) => {
+            if action_state.results.is_none() {
+                let is_paginated = action_state.selected == 0;
+                action_state.results = Some(ResultsState {
+                    query_buffer: action_state.query_buffer.clone(),
+                    query_cursor: action_state.query_cursor,
+                    catalog: action_state.catalog.clone(),
+                    schema: action_state.schema.clone(),
+                    table: action_state.table.clone(),
+                    is_paginated,
+                    ..Default::default()
+                });
+            } else if let Some(ref mut res) = action_state.results
+                && res.query_buffer.is_empty()
+                && !action_state.query_buffer.is_empty()
+            {
+                res.query_buffer = action_state.query_buffer.clone();
+                res.query_cursor = action_state.query_cursor;
+            }
+            action_state.results.as_mut()
+        }
         _ => None,
     }
 }
@@ -445,6 +481,13 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
         copy_to_clipboard(&text);
         app.copied_toast = Some((text.chars().take(30).collect(), std::time::Instant::now()));
         return None;
+    }
+
+    if let Screen::Actions(ref mut a) = app.screen
+        && let Some(ref r) = a.results
+    {
+        a.query_buffer = r.query_buffer.clone();
+        a.query_cursor = r.query_cursor;
     }
 
     if exit_mode {
@@ -657,5 +700,67 @@ mod tests {
         for line in &wrapped {
             assert!(line.len() <= 10);
         }
+    }
+
+    #[test]
+    fn test_edit_query_in_sample_view() {
+        let sample_query = "SELECT * FROM \"iceberg\".\"sales\".\"orders\" LIMIT 20";
+        let mut app = App::new(
+            crate::config::ConnectionConfig {
+                url: "http://localhost:8080".to_string(),
+                user: "test".to_string(),
+                password: "".to_string(),
+                query_cache_limit: 10,
+            },
+            false,
+        );
+        // Action index 4 is Sample Mode
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 4,
+            query_buffer: sample_query.to_string(),
+            query_cursor: sample_query.len(),
+            results: None,
+            ..Default::default()
+        });
+
+        // Triggering 'q' enters QueryInput even in Sample view
+        crate::tui::handler::navigation::actions_keys(
+            &mut app,
+            crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Char('q')),
+        );
+        assert_eq!(app.mode, Mode::QueryInput);
+
+        // active_query_state_mut initializes ResultsState from ActionState query_buffer
+        let state = active_query_state_mut(&mut app).expect("state should be active");
+        assert_eq!(state.query_buffer, sample_query);
+
+        // Type additional text (e.g. backspace 20 and type 50)
+        let backspaces = 2;
+        for _ in 0..backspaces {
+            let _ = handle_query_input_mode(
+                &mut app,
+                crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Backspace),
+            );
+        }
+        let _ = handle_query_input_mode(
+            &mut app,
+            crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Char('5')),
+        );
+        let _ = handle_query_input_mode(
+            &mut app,
+            crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Char('0')),
+        );
+
+        let cmd = handle_query_input_mode(
+            &mut app,
+            crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Enter),
+        );
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(
+            matches!(cmd, Some(Command::ExecuteQuery { query, .. }) if query.ends_with("LIMIT 50"))
+        );
     }
 }

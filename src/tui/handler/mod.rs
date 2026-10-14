@@ -19,6 +19,7 @@ use crate::app::*;
 use crate::trino::client::TrinoClient;
 use crate::trino::error::TrinoClientError;
 
+pub mod applied_filters_modal;
 pub mod column_modal;
 mod commands;
 mod export;
@@ -254,6 +255,12 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         }
         return saved_views_modal::handle_save_view_prompt_key(app, key);
     }
+    if app.applied_filters_modal.is_some() {
+        if app.mode != Mode::AppliedFiltersModal {
+            app.mode = Mode::AppliedFiltersModal;
+        }
+        return applied_filters_modal::handle_applied_filters_modal_key(app, key);
+    }
 
     match app.mode {
         Mode::HelpModal => return help_modal::handle_help_modal_key(app, key),
@@ -261,6 +268,9 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         Mode::ColumnModal => return column_modal::handle_column_modal_key(app, key),
         Mode::SavedViewsModal => return saved_views_modal::handle_saved_views_modal_key(app, key),
         Mode::SaveViewPrompt => return saved_views_modal::handle_save_view_prompt_key(app, key),
+        Mode::AppliedFiltersModal => {
+            return applied_filters_modal::handle_applied_filters_modal_key(app, key);
+        }
         Mode::QueryInput => return query::handle_query_input_mode(app, key),
         Mode::Search => return query::handle_search_mode(app, key),
         Mode::Normal => {}

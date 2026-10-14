@@ -856,7 +856,12 @@ pub fn render(
                 _ => "",
             };
             let filter_indicator = if has_filter { " [F]" } else { "" };
-            let display_name = format!("{c}{filter_indicator}{sort_indicator}");
+            let cursor_indicator = if is_selected_col && is_active {
+                "▼ "
+            } else {
+                ""
+            };
+            let display_name = format!("{cursor_indicator}{c}{filter_indicator}{sort_indicator}");
             let style = if is_selected_col && is_active {
                 theme::warning_bold_style().add_modifier(Modifier::UNDERLINED)
             } else if is_selected_col {
@@ -939,7 +944,10 @@ pub fn render(
 
                 let col_w = col_width_sizes.get(v_idx).copied().unwrap_or(15);
                 let col_x = col_x_offsets.get(v_idx).copied().unwrap_or(inner.x);
-                let wrapped_lines = wrap_text(display_val, col_w);
+                let mut wrapped_lines = wrap_text(display_val, col_w);
+                if wrapped_lines.is_empty() {
+                    wrapped_lines.push(String::new());
+                }
                 let cell_h = wrapped_lines.len() as u16;
                 max_row_height = max_row_height.max(cell_h);
 
@@ -948,7 +956,8 @@ pub fn render(
                 let is_cursor_cell =
                     row_idx == state.selected_row && *col_idx == state.selected_col;
                 let is_vim_sel = state.is_cell_selected(row_idx, *col_idx);
-                let style = if is_mouse_sel || is_vim_sel || is_cursor_cell {
+                let is_highlighted = is_mouse_sel || is_vim_sel || is_cursor_cell;
+                let style = if is_highlighted {
                     theme::selection_style_for(is_active)
                 } else if is_summary {
                     if *col_idx == 0 {
@@ -961,7 +970,18 @@ pub fn render(
                 } else {
                     cell_style
                 };
-                Cell::from(wrapped_lines.join("\n")).style(style)
+
+                let cell_content = if is_highlighted {
+                    let padded_lines: Vec<String> = wrapped_lines
+                        .iter()
+                        .map(|l| format!("{:width$}", l, width = col_w))
+                        .collect();
+                    padded_lines.join("\n")
+                } else {
+                    wrapped_lines.join("\n")
+                };
+
+                Cell::from(cell_content).style(style)
             })
             .collect();
         current_row_y += max_row_height;
@@ -2003,6 +2023,51 @@ mod tests {
         assert!(
             content.contains("iceberg › sales › orders"),
             "Title should show table breadcrumb: {content}"
+        );
+    }
+
+    #[test]
+    fn test_render_empty_cell_has_solid_highlight_background() {
+        let state = ResultsState {
+            columns: vec!["id".to_string(), "note".to_string()],
+            rows: vec![vec!["1".to_string(), "".to_string()]],
+            selected_row: 0,
+            selected_col: 1,
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            ..Default::default()
+        };
+
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+
+        terminal
+            .draw(|f| {
+                render(
+                    f,
+                    Rect::new(0, 0, 80, 10),
+                    &state,
+                    "".to_string(),
+                    true,
+                    &app,
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut highlighted_cells_count = 0;
+        let expected_bg = theme::selection_style_for(true).bg;
+        for x in 0..buffer.area.width {
+            let cell = buffer.cell((x, 3)).unwrap();
+            if cell.style().bg == expected_bg {
+                highlighted_cells_count += 1;
+            }
+        }
+        assert!(
+            highlighted_cells_count > 0,
+            "Empty cell must still have highlighted background block"
         );
     }
 }

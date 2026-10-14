@@ -572,8 +572,16 @@ pub fn apply_filter_modal(app: &mut App) -> Option<Command> {
                 res.column_filters.remove(&modal.column_name);
             }
         }
+    }
 
-        // 2. Filter in-memory rows from unfiltered_rows
+    reapply_in_memory_filters(app)
+}
+
+pub fn reapply_in_memory_filters(app: &mut App) -> Option<Command> {
+    if let Screen::Actions(ref mut action_state) = app.screen
+        && let Some(ref mut res) = action_state.results
+    {
+        // 1. Filter in-memory rows from unfiltered_rows
         if res.unfiltered_rows.is_none() {
             res.unfiltered_rows = Some(res.rows.clone());
         }
@@ -605,7 +613,7 @@ pub fn apply_filter_modal(app: &mut App) -> Option<Command> {
         res.selected_row = 0;
         res.scroll_v.set(0);
 
-        // 3. Update query in query cell
+        // 2. Update query in query cell
         if res.base_query.is_none() {
             res.base_query = Some(res.query_buffer.clone());
         }
@@ -626,7 +634,7 @@ pub fn apply_filter_modal(app: &mut App) -> Option<Command> {
         action_state.query_buffer = updated_query.clone();
         action_state.query_cursor = updated_query.len();
 
-        // 4. Return ExecuteQuery if Trino client is present
+        // 3. Return ExecuteQuery if Trino client is present
         if app.trino_client.is_some() {
             return Some(Command::ExecuteQuery {
                 query: updated_query,
@@ -651,6 +659,7 @@ mod tests {
             url: "https://trino.example".to_string(),
             user: "analyst".to_string(),
             password: "secret".to_string(),
+            query_cache_limit: crate::config::DEFAULT_QUERY_CACHE_LIMIT,
         };
         let mut app = App::new(config, false);
         app.screen = Screen::Actions(ActionState {

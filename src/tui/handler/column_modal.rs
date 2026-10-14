@@ -324,6 +324,7 @@ mod tests {
             url: "https://trino.example".to_string(),
             user: "analyst".to_string(),
             password: "secret".to_string(),
+            query_cache_limit: crate::config::DEFAULT_QUERY_CACHE_LIMIT,
         };
         let mut app = App::new(config, false);
         app.screen = Screen::Actions(ActionState {

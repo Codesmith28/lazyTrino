@@ -14,6 +14,9 @@
 
 use reqwest::header::{HeaderMap, HeaderValue};
 
+use std::sync::{Arc, Mutex};
+
+use super::cache::{DEFAULT_QUERY_CACHE_LIMIT, QueryCache};
 use super::error::TrinoClientError;
 use super::queries;
 use super::types::{QueryResults, TrinoResponse, format_value};
@@ -23,10 +26,19 @@ pub struct TrinoClient {
     http: reqwest::Client,
     server_url: String,
     user: String,
+    cache: Arc<Mutex<QueryCache>>,
 }
 
 impl TrinoClient {
     pub fn new(server_url: &str, user: &str) -> Result<Self, TrinoClientError> {
+        Self::with_cache_limit(server_url, user, DEFAULT_QUERY_CACHE_LIMIT)
+    }
+
+    pub fn with_cache_limit(
+        server_url: &str,
+        user: &str,
+        cache_limit: usize,
+    ) -> Result<Self, TrinoClientError> {
         let http = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .build()
@@ -36,6 +48,7 @@ impl TrinoClient {
             http,
             server_url: server_url.trim_end_matches('/').to_string(),
             user: user.to_string(),
+            cache: Arc::new(Mutex::new(QueryCache::new(cache_limit))),
         })
     }
 
@@ -93,6 +106,12 @@ impl TrinoClient {
     }
 
     pub async fn execute(&self, sql: &str) -> Result<QueryResults, TrinoClientError> {
+        if let Ok(mut cache) = self.cache.lock()
+            && let Some(cached) = cache.get(sql)
+        {
+            return Ok(cached);
+        }
+
         let start = std::time::Instant::now();
         let headers = self.headers()?;
 
@@ -152,11 +171,17 @@ impl TrinoClient {
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        Ok(QueryResults {
+        let results = QueryResults {
             columns,
             data: all_data,
             duration_ms,
-        })
+        };
+
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(sql.to_string(), results.clone());
+        }
+
+        Ok(results)
     }
 
     pub async fn fetch_catalogs(&self) -> Result<Vec<String>, TrinoClientError> {

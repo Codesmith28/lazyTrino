@@ -151,20 +151,44 @@ pub fn jump_to_number(app: &mut App) {
     app.number_buffer.clear();
 }
 
+pub fn sync_list_selected_to_app(app: &mut App) {
+    match &app.screen {
+        Screen::Catalog(st) => app.last_selected_catalog = st.selected,
+        Screen::Schema(st) => {
+            app.last_selected_schema
+                .insert(st.catalog.clone(), st.selected);
+        }
+        Screen::Table(st) => {
+            app.last_selected_table
+                .insert((st.catalog.clone(), st.schema.clone()), st.selected);
+        }
+        Screen::Actions(st) => {
+            app.last_selected_action.insert(
+                (st.catalog.clone(), st.schema.clone(), st.table.clone()),
+                st.selected,
+            );
+        }
+        _ => {}
+    }
+}
+
 pub fn select_current_item(app: &mut App) -> Option<Command> {
     match &app.screen {
-        Screen::Catalog(_) => {
+        Screen::Catalog(s) => {
+            app.last_selected_catalog = s.selected;
             let catalog = get_selected_item_label(app)?;
             if app.schemas.contains_key(&catalog) {
-                let items = app.schemas[&catalog]
+                let items: Vec<String> = app.schemas[&catalog]
                     .iter()
                     .map(|x| x.trim().to_string())
                     .collect();
+                let saved_sel = app.last_selected_schema.get(&catalog).copied().unwrap_or(0);
+                let selected = saved_sel.min(items.len().saturating_sub(1));
                 app.clear_mouse_selection();
                 app.screen = Screen::Schema(SchemaState {
                     catalog,
                     items,
-                    selected: 0,
+                    selected,
                 });
                 None
             } else {
@@ -172,19 +196,27 @@ pub fn select_current_item(app: &mut App) -> Option<Command> {
             }
         }
         Screen::Schema(s) => {
+            app.last_selected_schema
+                .insert(s.catalog.clone(), s.selected);
             let schema = get_selected_item_label(app)?;
             let catalog = s.catalog.trim().to_string();
             if app.tables.contains_key(&(catalog.clone(), schema.clone())) {
-                let items = app.tables[&(catalog.clone(), schema.clone())]
+                let items: Vec<String> = app.tables[&(catalog.clone(), schema.clone())]
                     .iter()
                     .map(|x| x.trim().to_string())
                     .collect();
+                let saved_sel = app
+                    .last_selected_table
+                    .get(&(catalog.clone(), schema.clone()))
+                    .copied()
+                    .unwrap_or(0);
+                let selected = saved_sel.min(items.len().saturating_sub(1));
                 app.clear_mouse_selection();
                 app.screen = Screen::Table(TableState {
                     catalog,
                     schema,
                     items,
-                    selected: 0,
+                    selected,
                 });
                 None
             } else {
@@ -192,34 +224,47 @@ pub fn select_current_item(app: &mut App) -> Option<Command> {
             }
         }
         Screen::Table(s) => {
+            app.last_selected_table
+                .insert((s.catalog.clone(), s.schema.clone()), s.selected);
             let table = get_selected_item_label(app)?;
             let catalog = s.catalog.clone();
             let schema = s.schema.clone();
             app.main_panel_pct = 15;
             app.set_active_panel(ActivePanel::MenuPane);
-            app.partition_tree_lines.clear();
-            app.vertical_schema_cols.clear();
-            let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
-            let query_len = default_query.len();
             app.clear_mouse_selection();
-            app.screen = Screen::Actions(crate::app::ActionState {
-                catalog: catalog.clone(),
-                schema: schema.clone(),
-                table: table.clone(),
-                selected: 0,
-                pending_action: Some(0),
-                query_buffer: default_query,
-                query_cursor: query_len,
-                results: None,
-                ddl_loading: true,
-                metadata_loading: true,
-                ..Default::default()
-            });
-            Some(Command::FetchTableMetadata {
-                catalog,
-                schema,
-                table,
-            })
+
+            let key = (catalog.clone(), schema.clone(), table.clone());
+            if let Some(cached_state) = app.cached_action_states.get(&key).cloned() {
+                app.screen = Screen::Actions(cached_state);
+                None
+            } else {
+                app.partition_tree_lines.clear();
+                app.vertical_schema_cols.clear();
+                let selected_action = app.last_selected_action.get(&key).copied().unwrap_or(0);
+                let default_query = ACTIONS
+                    .get(selected_action)
+                    .map(|(_, _, a)| a.build_query(&catalog, &schema, &table))
+                    .unwrap_or_else(|| ACTIONS[0].2.build_query(&catalog, &schema, &table));
+                let query_len = default_query.len();
+                app.screen = Screen::Actions(crate::app::ActionState {
+                    catalog: catalog.clone(),
+                    schema: schema.clone(),
+                    table: table.clone(),
+                    selected: selected_action,
+                    pending_action: Some(selected_action),
+                    query_buffer: default_query,
+                    query_cursor: query_len,
+                    results: None,
+                    ddl_loading: true,
+                    metadata_loading: true,
+                    ..Default::default()
+                });
+                Some(Command::FetchTableMetadata {
+                    catalog,
+                    schema,
+                    table,
+                })
+            }
         }
         Screen::Actions(s) => {
             let idx = s.selected;
@@ -238,12 +283,14 @@ pub fn handle_list_navigation_keys(app: &mut App, key: KeyEvent) -> Option<Comma
                 && let Some(s) = super::get_selected(&app.screen)
             {
                 mod_list_selected(&mut app.screen, (s + 1).min(items.len() - 1));
+                sync_list_selected_to_app(app);
             }
             None
         }
         KeyCode::Char('k') | KeyCode::Up => {
             if let Some(s) = super::get_selected(&app.screen) {
                 mod_list_selected(&mut app.screen, s.saturating_sub(1));
+                sync_list_selected_to_app(app);
             }
             None
         }
@@ -255,6 +302,7 @@ pub fn handle_list_navigation_keys(app: &mut App, key: KeyEvent) -> Option<Comma
         }
         KeyCode::Char('g') => {
             mod_list_selected(&mut app.screen, 0);
+            sync_list_selected_to_app(app);
             None
         }
         KeyCode::Char('G') => {
@@ -262,6 +310,7 @@ pub fn handle_list_navigation_keys(app: &mut App, key: KeyEvent) -> Option<Comma
                 && !items.is_empty()
             {
                 mod_list_selected(&mut app.screen, items.len() - 1);
+                sync_list_selected_to_app(app);
             }
             None
         }

@@ -29,6 +29,7 @@ use crate::app::App;
 
 mod screens {
     pub mod actions;
+    pub mod applied_filters_modal;
     pub mod catalog;
     pub mod column_modal;
     pub mod connect;

@@ -54,22 +54,29 @@ pub fn go_back(app: &mut App) {
             }
         }
         Screen::Schema(s) => {
+            app.last_selected_schema
+                .insert(s.catalog.clone(), s.selected);
             let cat = s.catalog.clone();
             let catalogs = app.catalogs.clone();
-            let idx = catalogs.iter().position(|c| *c == cat).unwrap_or(0);
+            let idx = catalogs
+                .iter()
+                .position(|c| *c == cat)
+                .unwrap_or(app.last_selected_catalog);
             Some(Screen::Catalog(CatalogState {
                 items: catalogs,
                 selected: idx,
             }))
         }
         Screen::Table(s) => {
+            app.last_selected_table
+                .insert((s.catalog.clone(), s.schema.clone()), s.selected);
             let cat = s.catalog.clone();
             let schema_name = s.schema.clone();
             let schemas = app.schemas.get(&cat).cloned().unwrap_or_default();
             let idx = schemas
                 .iter()
                 .position(|c| c.trim() == schema_name.trim())
-                .unwrap_or(0);
+                .unwrap_or_else(|| app.last_selected_schema.get(&cat).copied().unwrap_or(0));
             Some(Screen::Schema(SchemaState {
                 catalog: cat,
                 items: schemas,
@@ -79,6 +86,14 @@ pub fn go_back(app: &mut App) {
         Screen::Actions(s) => {
             let cat = s.catalog.clone();
             let schema_name = s.schema.clone();
+            app.cached_action_states.insert(
+                (cat.clone(), schema_name.clone(), s.table.clone()),
+                s.clone(),
+            );
+            app.last_selected_action.insert(
+                (cat.clone(), schema_name.clone(), s.table.clone()),
+                s.selected,
+            );
             let tables = app
                 .tables
                 .get(&(cat.clone(), schema_name.clone()))
@@ -87,7 +102,14 @@ pub fn go_back(app: &mut App) {
             let idx = tables
                 .iter()
                 .position(|t| t.trim() == s.table.trim())
-                .unwrap_or(0);
+                .unwrap_or_else(|| {
+                    app.last_selected_table
+                        .get(&(cat.clone(), schema_name.clone()))
+                        .copied()
+                        .unwrap_or(0)
+                });
+            app.last_selected_table
+                .insert((cat.clone(), schema_name.clone()), idx);
             Some(Screen::Table(TableState {
                 catalog: cat,
                 schema: schema_name,
@@ -231,6 +253,7 @@ pub mod tests {
             url: "https://trino.example".to_string(),
             user: "analyst".to_string(),
             password: "secret".to_string(),
+            query_cache_limit: crate::config::DEFAULT_QUERY_CACHE_LIMIT,
         }
     }
 
@@ -1845,5 +1868,194 @@ pub mod tests {
         // 5. When no selection is active, Esc switches to MenuPane
         actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
         assert_eq!(app.active_panel, ActivePanel::MenuPane);
+    }
+
+    #[test]
+    fn drilldown_remembers_cursor_at_each_partition_level() {
+        let mut s = ActionState {
+            catalog: "lake".to_string(),
+            schema: "default".to_string(),
+            table: "logs".to_string(),
+            selected: 0,
+            drilldown: Some(DrillDownState {
+                partition_cols: vec!["dt".to_string(), "region".to_string()],
+                path: Vec::new(),
+                levels_cache: vec![
+                    vec![
+                        "2026-08-01".to_string(),
+                        "2026-08-02".to_string(),
+                        "2026-08-03".to_string(),
+                    ],
+                    vec![
+                        "us-east".to_string(),
+                        "us-west".to_string(),
+                        "eu-central".to_string(),
+                    ],
+                ],
+                selected: 1, // selected 2026-08-02
+                loading: false,
+                error: None,
+                truncated: false,
+                table_count: None,
+                table_count_loading: false,
+                counts_cache: std::collections::HashMap::new(),
+                current_count_loading: false,
+                path_cursors: std::collections::HashMap::new(),
+            }),
+            ..Default::default()
+        };
+
+        // Drill into level 1
+        let cmd = drilldown_drill_into_selected(&mut s, &[]);
+        assert!(matches!(cmd, Some(Command::FetchPartitionLevel { .. })));
+        let dd = s.drilldown.as_mut().unwrap();
+        assert_eq!(dd.depth(), 1);
+        assert_eq!(dd.selected, 0); // initial default for new depth
+
+        // Move cursor at level 1 to index 2 ("eu-central")
+        dd.selected = 2;
+        dd.path_cursors.insert(dd.path.clone(), dd.selected);
+        dd.loading = false;
+
+        // Drill into leaf (executes query)
+        let leaf_cmd = drilldown_drill_into_selected(&mut s, &[]);
+        assert!(matches!(leaf_cmd, Some(Command::ExecuteQuery { .. })));
+        let dd = s.drilldown.as_mut().unwrap();
+        assert!(dd.is_leaf());
+
+        // Now pop up from leaf to level 1
+        drilldown_go_up(&mut s);
+        let dd = s.drilldown.as_mut().unwrap();
+        assert_eq!(dd.depth(), 1);
+        assert_eq!(
+            dd.selected, 2,
+            "should restore cursor at depth 1 (eu-central)"
+        );
+
+        // Pop up from level 1 to level 0 (root)
+        drilldown_go_up(&mut s);
+        let dd = s.drilldown.as_mut().unwrap();
+        assert_eq!(dd.depth(), 0);
+        assert_eq!(
+            dd.selected, 1,
+            "should restore cursor at depth 0 (2026-08-02)"
+        );
+
+        // Drill back down into level 1: cursor should still be restored to 2 ("eu-central")
+        dd.loading = false;
+        drilldown_drill_into_selected(&mut s, &[]);
+        let dd = s.drilldown.as_mut().unwrap();
+        assert_eq!(dd.depth(), 1);
+        assert_eq!(
+            dd.selected, 2,
+            "should remember cursor when re-entering depth 1"
+        );
+    }
+
+    #[test]
+    fn table_and_schema_navigation_remembers_cursors() {
+        let mut app = sample_app(Screen::Catalog(CatalogState {
+            items: vec!["c1".to_string(), "c2".to_string(), "c3".to_string()],
+            selected: 1, // selected "c2"
+        }));
+        app.catalogs = vec!["c1".to_string(), "c2".to_string(), "c3".to_string()];
+        app.schemas.insert(
+            "c2".to_string(),
+            vec!["s1".to_string(), "s2".to_string(), "s3".to_string()],
+        );
+        app.tables.insert(
+            ("c2".to_string(), "s2".to_string()),
+            vec!["t1".to_string(), "t2".to_string(), "t3".to_string()],
+        );
+
+        // 1. Enter Schema screen from Catalog
+        let cmd = select_current_item(&mut app);
+        assert!(cmd.is_none());
+        let Screen::Schema(ref mut schema_st) = app.screen else {
+            panic!("expected Schema screen");
+        };
+        assert_eq!(schema_st.catalog, "c2");
+        assert_eq!(schema_st.selected, 0);
+
+        // Move to index 1 ("s2")
+        schema_st.selected = 1;
+
+        // 2. Enter Table screen from Schema
+        let cmd = select_current_item(&mut app);
+        assert!(cmd.is_none());
+        let Screen::Table(ref mut table_st) = app.screen else {
+            panic!("expected Table screen");
+        };
+        assert_eq!(table_st.catalog, "c2");
+        assert_eq!(table_st.schema, "s2");
+        assert_eq!(table_st.selected, 0);
+
+        // Move to index 2 ("t3")
+        table_st.selected = 2;
+
+        // 3. Enter Actions screen from Table
+        let _ = select_current_item(&mut app);
+        let Screen::Actions(ref mut act_st) = app.screen else {
+            panic!("expected Actions screen");
+        };
+        assert_eq!(act_st.table, "t3");
+        assert_eq!(act_st.selected, 0);
+
+        // Move action to index 1 (Sample) and customize query
+        act_st.selected = 1;
+        act_st.query_buffer = "SELECT * FROM t3 LIMIT 50".to_string();
+
+        // 4. Go back to Table screen: cursor on "t3" (index 2) must be preserved!
+        go_back(&mut app);
+        let Screen::Table(ref table_st) = app.screen else {
+            panic!("expected Table screen");
+        };
+        assert_eq!(table_st.selected, 2, "table selection should be remembered");
+
+        // 5. Go back to Schema screen: cursor on "s2" (index 1) must be preserved!
+        go_back(&mut app);
+        let Screen::Schema(ref schema_st) = app.screen else {
+            panic!("expected Schema screen");
+        };
+        assert_eq!(
+            schema_st.selected, 1,
+            "schema selection should be remembered"
+        );
+
+        // 6. Go back to Catalog screen: cursor on "c2" (index 1) must be preserved!
+        go_back(&mut app);
+        let Screen::Catalog(ref cat_st) = app.screen else {
+            panic!("expected Catalog screen");
+        };
+        assert_eq!(cat_st.selected, 1, "catalog selection should be remembered");
+
+        // 7. Forward navigation again restores selections and cached action state!
+        select_current_item(&mut app); // Catalog -> Schema
+        let Screen::Schema(ref schema_st) = app.screen else {
+            panic!("expected Schema screen");
+        };
+        assert_eq!(
+            schema_st.selected, 1,
+            "schema selection restored going forward"
+        );
+
+        select_current_item(&mut app); // Schema -> Table
+        let Screen::Table(ref table_st) = app.screen else {
+            panic!("expected Table screen");
+        };
+        assert_eq!(
+            table_st.selected, 2,
+            "table selection restored going forward"
+        );
+
+        select_current_item(&mut app); // Table -> Actions
+        let Screen::Actions(ref act_st) = app.screen else {
+            panic!("expected Actions screen");
+        };
+        assert_eq!(act_st.selected, 1, "action selection restored from cache");
+        assert_eq!(
+            act_st.query_buffer, "SELECT * FROM t3 LIMIT 50",
+            "cached query preserved"
+        );
     }
 }

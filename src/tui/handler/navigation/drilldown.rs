@@ -31,8 +31,9 @@ pub fn drilldown_drill_into_selected(
     let value = dd.levels_cache.get(depth)?.get(dd.selected)?.clone();
     let column = dd.partition_cols.get(depth)?.clone();
 
+    dd.path_cursors.insert(dd.path.clone(), dd.selected);
     dd.path.push((column, value));
-    dd.selected = 0;
+    dd.selected = dd.path_cursors.get(&dd.path).copied().unwrap_or(0);
     dd.error = None;
 
     if dd.is_leaf() {
@@ -88,7 +89,7 @@ pub fn drilldown_go_up(s: &mut ActionState) -> Option<Command> {
 
     let popped = dd.path.pop();
     if popped.is_some() {
-        dd.selected = 0;
+        dd.selected = dd.path_cursors.get(&dd.path).copied().unwrap_or(0);
         dd.error = None;
         dd.truncated = false;
         s.results = None;

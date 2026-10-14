@@ -287,6 +287,7 @@ mod tests {
             table_count_loading: false,
             counts_cache: counts,
             current_count_loading: false,
+            path_cursors: HashMap::new(),
         };
 
         let app = App::new(crate::config::ConnectionConfig::default(), false);

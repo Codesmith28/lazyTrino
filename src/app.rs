@@ -204,6 +204,7 @@ pub struct DrillDownState {
     pub table_count_loading: bool,
     pub counts_cache: HashMap<Vec<(String, String)>, usize>,
     pub current_count_loading: bool,
+    pub path_cursors: HashMap<Vec<(String, String)>, usize>,
 }
 
 impl DrillDownState {
@@ -796,6 +797,28 @@ pub enum Mode {
     HelpModal,
     SavedViewsModal,
     SaveViewPrompt,
+    AppliedFiltersModal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppliedFilterKind {
+    Partition,
+    Column,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppliedFilterItem {
+    pub kind: AppliedFilterKind,
+    pub name: String,
+    pub display_value: String,
+    pub column_filter: Option<ColumnFilter>,
+    pub partition_index: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AppliedFiltersModalState {
+    pub items: Vec<AppliedFilterItem>,
+    pub selected: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1140,6 +1163,7 @@ pub struct App {
     pub schema_scroll: usize,
     pub auto_connect: bool,
     pub main_panel_pct: u16,
+    pub actions_panel_pct: u16,
     pub control_panel_split_pct: u16,
     pub is_dragging_resizer: bool,
     pub is_dragging_query_select: bool,
@@ -1155,6 +1179,12 @@ pub struct App {
     pub help_scroll: usize,
     pub saved_views_modal: Option<SavedViewsModalState>,
     pub save_view_prompt: Option<SaveViewPromptState>,
+    pub applied_filters_modal: Option<AppliedFiltersModalState>,
+    pub last_selected_catalog: usize,
+    pub last_selected_schema: HashMap<String, usize>,
+    pub last_selected_table: HashMap<(String, String), usize>,
+    pub last_selected_action: HashMap<(String, String, String), usize>,
+    pub cached_action_states: HashMap<(String, String, String), ActionState>,
 }
 
 impl App {
@@ -1188,6 +1218,7 @@ impl App {
             schema_scroll: 0,
             auto_connect,
             main_panel_pct: 60,
+            actions_panel_pct: 18,
             control_panel_split_pct: 40,
             is_dragging_resizer: false,
             is_dragging_query_select: false,
@@ -1203,6 +1234,12 @@ impl App {
             help_scroll: 0,
             saved_views_modal: None,
             save_view_prompt: None,
+            applied_filters_modal: None,
+            last_selected_catalog: 0,
+            last_selected_schema: HashMap::new(),
+            last_selected_table: HashMap::new(),
+            last_selected_action: HashMap::new(),
+            cached_action_states: HashMap::new(),
         }
     }
 
@@ -1312,6 +1349,7 @@ mod tests {
             url: "https://trino.example".to_string(),
             user: "analyst".to_string(),
             password: "secret".to_string(),
+            query_cache_limit: crate::config::DEFAULT_QUERY_CACHE_LIMIT,
         }
     }
 
