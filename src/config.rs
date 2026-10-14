@@ -62,6 +62,10 @@ pub struct CliArgs {
     /// Disable file logging.
     #[arg(long)]
     pub no_log: bool,
+
+    /// Update lazyTrino to the latest release.
+    #[arg(long, short = 'u')]
+    pub update: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

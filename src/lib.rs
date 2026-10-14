@@ -15,5 +15,7 @@
 pub mod app;
 pub mod config;
 pub mod config_file;
+pub mod saved_views;
 pub mod trino;
 pub mod tui;
+pub mod updater;

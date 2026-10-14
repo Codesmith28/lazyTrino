@@ -23,7 +23,7 @@ use super::{AsyncResult, Command};
 
 /// Cap on the number of distinct values fetched per drill-down level, to
 /// protect against extremely high-cardinality partition columns.
-const DRILLDOWN_LEVEL_LIMIT: usize = 200;
+pub const DRILLDOWN_LEVEL_LIMIT: usize = 200;
 
 pub fn dispatch_command(
     app: &mut App,
@@ -172,6 +172,7 @@ pub fn dispatch_command(
                                         index: idx + 1,
                                         name,
                                         data_type: dtype,
+                                        is_nullable,
                                         key_meta,
                                         description: comment,
                                     }
@@ -218,13 +219,26 @@ pub fn dispatch_command(
             let query_buffer = query.clone();
             let query_cursor = query_buffer.len();
 
+            let cached_table_count = if let Screen::Actions(ref a) = app.screen {
+                a.drilldown.as_ref().and_then(|d| d.table_count)
+            } else {
+                None
+            };
+            let cached_total = if let Screen::Actions(ref a) = app.screen {
+                a.drilldown
+                    .as_ref()
+                    .and_then(|d| d.counts_cache.get(&filters).copied())
+            } else {
+                None
+            };
+
             let res_state = ResultsState {
                 query_buffer: query_buffer.clone(),
                 query_cursor,
                 columns: Vec::new(),
                 rows: vec![vec!["Loading...".to_string()]],
-                scroll_v: 0,
-                scroll_h: 0,
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
                 loading: true,
                 error: None,
                 is_paginated,
@@ -238,9 +252,15 @@ pub fn dispatch_command(
                 invalid_query_error: None,
                 selection_anchor: None,
                 filters: filters.clone(),
+                total_count: cached_total,
+                total_count_loading: is_paginated && cached_total.is_none(),
+                table_count: cached_table_count,
+                ..Default::default()
             };
 
             if let Screen::Actions(ref mut a) = app.screen {
+                a.query_buffer = query_buffer.clone();
+                a.query_cursor = query_cursor;
                 a.results = Some(res_state);
             } else {
                 app.prev_screen = Some(Box::new(app.screen.clone()));
@@ -258,21 +278,49 @@ pub fn dispatch_command(
             }
 
             if let Some(client) = app.trino_client.clone() {
-                let tx = tx.clone();
+                let tx_page = tx.clone();
+                let client_page = client.clone();
+                let query_buf = query_buffer;
+                let cat = catalog.clone();
+                let sch = schema.clone();
+                let tbl = table.clone();
+                let filts = filters.clone();
                 tokio::spawn(async move {
-                    let res = client.execute(&query).await;
-                    let _ = tx.send(AsyncResult::ExecuteQuery {
+                    let res = client_page.execute(&query).await;
+                    let _ = tx_page.send(AsyncResult::ExecuteQuery {
                         log_id,
-                        query_buffer,
+                        query_buffer: query_buf,
                         query_cursor,
-                        catalog,
-                        schema,
-                        table,
+                        catalog: cat,
+                        schema: sch,
+                        table: tbl,
                         is_paginated,
-                        filters,
+                        filters: filts,
                         result: res,
                     });
                 });
+
+                if is_paginated && cached_total.is_none() {
+                    let count_query = queries::filtered_count(&catalog, &schema, &table, &filters);
+                    let count_log_id = app.add_query_log(count_query.clone());
+                    let tx_cnt = tx.clone();
+                    let client_cnt = client;
+                    let cat_cnt = catalog;
+                    let sch_cnt = schema;
+                    let tbl_cnt = table;
+                    let filts_cnt = filters;
+                    tokio::spawn(async move {
+                        let res = client_cnt.execute(&count_query).await;
+                        let _ = tx_cnt.send(AsyncResult::FetchPartitionCount {
+                            log_id: count_log_id,
+                            catalog: cat_cnt,
+                            schema: sch_cnt,
+                            table: tbl_cnt,
+                            filters: filts_cnt,
+                            result: res,
+                        });
+                    });
+                }
             }
         }
         Command::FetchNextPage {
@@ -298,6 +346,20 @@ pub fn dispatch_command(
                 && let Some(state) = action_state.results.as_mut()
             {
                 state.is_fetching_next_page = true;
+                let new_limit = offset + limit;
+                let updated = queries::update_query_limit(&state.query_buffer, new_limit);
+                let prev_len = state.query_buffer.len();
+                if state.query_cursor == prev_len {
+                    state.query_cursor = updated.len();
+                } else {
+                    state.query_cursor = state.query_cursor.min(updated.len());
+                }
+                state.query_buffer = updated.clone();
+                action_state.query_buffer = updated;
+                action_state.query_cursor = state.query_cursor;
+                if let Some(ref base) = state.base_query {
+                    state.base_query = Some(queries::update_query_limit(base, new_limit));
+                }
             }
 
             if let Some(client) = app.trino_client.clone() {
@@ -335,27 +397,102 @@ pub fn dispatch_command(
                 DRILLDOWN_LEVEL_LIMIT,
             );
             let log_id = app.add_query_log(query.clone());
+
+            let need_count = if let Screen::Actions(ref action_state) = app.screen {
+                action_state
+                    .drilldown
+                    .as_ref()
+                    .map(|d| !d.counts_cache.contains_key(&filters))
+                    .unwrap_or(true)
+            } else {
+                true
+            };
+
             if let Screen::Actions(ref mut action_state) = app.screen
-                && let Some(drilldown) = action_state.drilldown.as_mut()
+                && action_state.catalog == catalog
+                && action_state.schema == schema
+                && action_state.table == table
             {
-                drilldown.loading = true;
-                drilldown.error = None;
+                let query_len = query.len();
+                action_state.query_buffer = query.clone();
+                action_state.query_cursor = query_len;
+                action_state.results = None;
+                if let Some(drilldown) = action_state.drilldown.as_mut() {
+                    drilldown.loading = true;
+                    drilldown.error = None;
+                    if need_count {
+                        drilldown.current_count_loading = true;
+                        if filters.is_empty() {
+                            drilldown.table_count_loading = true;
+                        }
+                    }
+                }
             }
 
             if let Some(client) = app.trino_client.clone() {
-                let tx = tx.clone();
-                let catalog = catalog.clone();
-                let schema = schema.clone();
-                let table = table.clone();
+                // Task 1: Fetch distinct partition values for next level
+                let tx1 = tx.clone();
+                let client1 = client.clone();
+                let cat1 = catalog.clone();
+                let sch1 = schema.clone();
+                let tbl1 = table.clone();
+                let filts1 = filters.clone();
+                let col1 = column.clone();
                 tokio::spawn(async move {
-                    let res = client.execute(&query).await;
-                    let _ = tx.send(AsyncResult::FetchPartitionLevel {
+                    let res = client1.execute(&query).await;
+                    let _ = tx1.send(AsyncResult::FetchPartitionLevel {
                         log_id,
+                        catalog: cat1,
+                        schema: sch1,
+                        table: tbl1,
+                        filters: filts1,
+                        column: col1,
+                        result: res,
+                    });
+                });
+
+                // Task 2: Fetch count for current level in parallel
+                if need_count {
+                    let count_query = queries::filtered_count(&catalog, &schema, &table, &filters);
+                    let count_log_id = app.add_query_log(count_query.clone());
+                    let tx2 = tx.clone();
+                    let client2 = client;
+                    let cat2 = catalog;
+                    let sch2 = schema;
+                    let tbl2 = table;
+                    let filts2 = filters;
+                    tokio::spawn(async move {
+                        let res = client2.execute(&count_query).await;
+                        let _ = tx2.send(AsyncResult::FetchPartitionCount {
+                            log_id: count_log_id,
+                            catalog: cat2,
+                            schema: sch2,
+                            table: tbl2,
+                            filters: filts2,
+                            result: res,
+                        });
+                    });
+                }
+            }
+        }
+        Command::FetchPartitionCount {
+            catalog,
+            schema,
+            table,
+            filters,
+        } => {
+            let count_query = queries::filtered_count(&catalog, &schema, &table, &filters);
+            let count_log_id = app.add_query_log(count_query.clone());
+            if let Some(client) = app.trino_client.clone() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let res = client.execute(&count_query).await;
+                    let _ = tx.send(AsyncResult::FetchPartitionCount {
+                        log_id: count_log_id,
                         catalog,
                         schema,
                         table,
                         filters,
-                        column,
                         result: res,
                     });
                 });
@@ -550,13 +687,62 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     } else {
                         false
                     };
+                    let existing_results = if let Screen::Actions(ref a) = app.screen {
+                        a.results.as_ref()
+                    } else {
+                        None
+                    };
+                    let cached_total = existing_results.and_then(|r| r.total_count).or_else(|| {
+                        if let Screen::Actions(ref a) = app.screen {
+                            a.drilldown
+                                .as_ref()
+                                .and_then(|d| d.counts_cache.get(&filters).copied())
+                        } else {
+                            None
+                        }
+                    });
+                    let cached_table = existing_results.and_then(|r| r.table_count).or_else(|| {
+                        if let Screen::Actions(ref a) = app.screen {
+                            a.drilldown.as_ref().and_then(|d| d.table_count)
+                        } else {
+                            None
+                        }
+                    });
+                    let total_loading = existing_results
+                        .map(|r| r.total_count_loading)
+                        .unwrap_or(is_paginated && cached_total.is_none());
+
+                    let prev_col = existing_results.map(|r| r.selected_col).unwrap_or(0);
+                    let sel_col = prev_col.min(cols.len().saturating_sub(1));
+                    let base_q = existing_results.and_then(|r| r.base_query.clone());
+                    let col_filts = existing_results
+                        .map(|r| r.column_filters.clone())
+                        .unwrap_or_default();
+                    let distinct_vals = existing_results
+                        .map(|r| r.col_distinct_values.clone())
+                        .unwrap_or_default();
+                    let hidden_cols = existing_results
+                        .map(|r| r.hidden_columns.clone())
+                        .unwrap_or_default();
+                    let unfilt = existing_results
+                        .and_then(|r| r.unfiltered_rows.clone())
+                        .or_else(|| {
+                            if col_filts.is_empty() {
+                                Some(rows.clone())
+                            } else {
+                                None
+                            }
+                        });
+
                     let res_state = ResultsState {
                         query_buffer,
                         query_cursor,
                         columns: cols,
                         rows,
-                        scroll_v: 0,
-                        scroll_h: 0,
+                        scroll_v: std::cell::Cell::new(0),
+                        scroll_h: std::cell::Cell::new(0),
+                        selected_row: 0,
+                        selected_col: sel_col,
                         loading: false,
                         error: None,
                         is_paginated,
@@ -570,6 +756,15 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         invalid_query_error: None,
                         selection_anchor: None,
                         filters: filters.clone(),
+                        total_count: cached_total,
+                        total_count_loading: total_loading,
+                        table_count: cached_table,
+                        base_query: base_q,
+                        unfiltered_rows: unfilt,
+                        column_filters: col_filts,
+                        col_distinct_values: distinct_vals,
+                        hidden_columns: hidden_cols,
+                        ..Default::default()
                     };
 
                     let cur_selected = if let Screen::Actions(ref a) = app.screen {
@@ -579,12 +774,63 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     };
                     if let Screen::Actions(ref mut a) = app.screen {
                         if a.catalog == catalog && a.schema == schema && a.table == table {
-                            a.results = Some(res_state);
+                            let mut res = res_state;
+                            res.auto_flatten(&app.vertical_schema_cols);
+                            if let Some(view) = a.pending_view_restore.take() {
+                                for (col, filter) in view.column_filters {
+                                    res.column_filters.insert(col, filter.to_column_filter());
+                                }
+                                for col in view.hidden_columns {
+                                    res.hidden_columns.insert(col);
+                                }
+                                if let Some((col, dir)) = view.sort {
+                                    res.sort = Some((col, dir.into()));
+                                    res.apply_sort(&app.vertical_schema_cols);
+                                }
+                                if !res.column_filters.is_empty() {
+                                    if res.unfiltered_rows.is_none() {
+                                        res.unfiltered_rows = Some(res.rows.clone());
+                                    }
+                                    if let Some(ref unfilt) = res.unfiltered_rows {
+                                        res.rows = unfilt
+                                            .iter()
+                                            .filter(|row| {
+                                                for (filter_col, filter) in &res.column_filters {
+                                                    if let Some(idx) = res
+                                                        .columns
+                                                        .iter()
+                                                        .position(|c| c == filter_col)
+                                                    {
+                                                        let val = row
+                                                            .get(idx)
+                                                            .map(|s| s.as_str())
+                                                            .unwrap_or("");
+                                                        if !filter.matches(val) {
+                                                            return false;
+                                                        }
+                                                    }
+                                                }
+                                                true
+                                            })
+                                            .cloned()
+                                            .collect();
+                                    }
+                                }
+                                app.copied_toast = Some((
+                                    format!("Restored view: {}", view.name),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                            a.query_buffer = res.query_buffer.clone();
+                            a.query_cursor = res.query_cursor;
+                            a.results = Some(res);
                         }
                     } else {
                         let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
                         let query_len = default_query.len();
                         app.clear_mouse_selection();
+                        let mut res_state = res_state;
+                        res_state.auto_flatten(&app.vertical_schema_cols);
                         app.screen = Screen::Actions(ActionState {
                             catalog,
                             schema,
@@ -606,8 +852,8 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         query_cursor,
                         columns: Vec::new(),
                         rows: vec![vec![format!("Error: {err}")]],
-                        scroll_v: 0,
-                        scroll_h: 0,
+                        scroll_v: std::cell::Cell::new(0),
+                        scroll_h: std::cell::Cell::new(0),
                         loading: false,
                         error: Some(err),
                         is_paginated: false,
@@ -621,6 +867,10 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         invalid_query_error: None,
                         selection_anchor: None,
                         filters,
+                        total_count: None,
+                        total_count_loading: false,
+                        table_count: None,
+                        ..Default::default()
                     };
 
                     let cur_selected = if let Screen::Actions(ref a) = app.screen {
@@ -630,6 +880,8 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     };
                     if let Screen::Actions(ref mut a) = app.screen {
                         if a.catalog == catalog && a.schema == schema && a.table == table {
+                            a.query_buffer = res_state.query_buffer.clone();
+                            a.query_cursor = res_state.query_cursor;
                             a.results = Some(res_state);
                         }
                     } else {
@@ -669,11 +921,28 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     && action_state.table == table
                     && let Some(state) = action_state.results.as_mut()
                 {
-                    state.rows.extend(new_rows);
+                    state.extend_rows_with_flattening(new_rows);
+                    if state.sort.is_some() {
+                        state.apply_sort(&app.vertical_schema_cols);
+                    }
                     state.offset = offset;
                     state.is_fetching_next_page = false;
                     if fetched_count < limit {
                         state.has_more_rows = false;
+                    }
+                    let actual_limit = state.rows.len();
+                    let updated = queries::update_query_limit(&state.query_buffer, actual_limit);
+                    let prev_len = state.query_buffer.len();
+                    if state.query_cursor == prev_len {
+                        state.query_cursor = updated.len();
+                    } else {
+                        state.query_cursor = state.query_cursor.min(updated.len());
+                    }
+                    state.query_buffer = updated.clone();
+                    action_state.query_buffer = updated;
+                    action_state.query_cursor = state.query_cursor;
+                    if let Some(ref base) = state.base_query {
+                        state.base_query = Some(queries::update_query_limit(base, actual_limit));
                     }
                 }
             }
@@ -688,6 +957,20 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 {
                     state.is_fetching_next_page = false;
                     state.has_more_rows = false;
+                    let actual_limit = state.rows.len();
+                    let updated = queries::update_query_limit(&state.query_buffer, actual_limit);
+                    let prev_len = state.query_buffer.len();
+                    if state.query_cursor == prev_len {
+                        state.query_cursor = updated.len();
+                    } else {
+                        state.query_cursor = state.query_cursor.min(updated.len());
+                    }
+                    state.query_buffer = updated.clone();
+                    action_state.query_buffer = updated;
+                    action_state.query_cursor = state.query_cursor;
+                    if let Some(ref base) = state.base_query {
+                        state.base_query = Some(queries::update_query_limit(base, actual_limit));
+                    }
                 }
             }
         },
@@ -751,6 +1034,74 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 {
                     drilldown.loading = false;
                     drilldown.error = Some(err);
+                }
+            }
+        },
+        AsyncResult::FetchPartitionCount {
+            log_id,
+            catalog,
+            schema,
+            table,
+            filters,
+            result,
+        } => match result {
+            Ok(results) => {
+                app.complete_query_log_success(log_id, results.duration_ms, 1);
+                let count_opt = results
+                    .data
+                    .first()
+                    .and_then(|r| r.first())
+                    .and_then(|s| s.trim().parse::<usize>().ok());
+
+                if let Screen::Actions(ref mut action_state) = app.screen
+                    && action_state.catalog == catalog
+                    && action_state.schema == schema
+                    && action_state.table == table
+                {
+                    if let Some(drilldown) = action_state.drilldown.as_mut() {
+                        if let Some(count) = count_opt {
+                            drilldown.counts_cache.insert(filters.clone(), count);
+                            if filters.is_empty() {
+                                drilldown.table_count = Some(count);
+                                drilldown.table_count_loading = false;
+                            }
+                        }
+                        if drilldown.path == filters {
+                            drilldown.current_count_loading = false;
+                        }
+                    }
+                    if let Some(res) = action_state.results.as_mut() {
+                        if res.filters == filters {
+                            res.total_count = count_opt;
+                            res.total_count_loading = false;
+                        }
+                        if filters.is_empty() && count_opt.is_some() {
+                            res.table_count = count_opt;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "Fetch partition count failed");
+                app.complete_query_log_error(log_id, e.to_string());
+                if let Screen::Actions(ref mut action_state) = app.screen
+                    && action_state.catalog == catalog
+                    && action_state.schema == schema
+                    && action_state.table == table
+                {
+                    if let Some(drilldown) = action_state.drilldown.as_mut() {
+                        if filters.is_empty() {
+                            drilldown.table_count_loading = false;
+                        }
+                        if drilldown.path == filters {
+                            drilldown.current_count_loading = false;
+                        }
+                    }
+                    if let Some(res) = action_state.results.as_mut()
+                        && res.filters == filters
+                    {
+                        res.total_count_loading = false;
+                    }
                 }
             }
         },
@@ -856,5 +1207,293 @@ mod tests {
         let results = state.results.as_ref().expect("results should be set");
         assert_eq!(results.query_buffer, programmatic_query);
         assert_eq!(results.query_cursor, programmatic_query.len());
+    }
+
+    #[test]
+    fn fetch_partition_count_updates_drilldown_and_results_state() {
+        let mut app = App::new(sample_config(), false);
+        app.clear_mouse_selection();
+        let mut dd = DrillDownState {
+            partition_cols: vec!["date".to_string(), "service".to_string()],
+            path: vec![("date".to_string(), "2026-08-06".to_string())],
+            table_count: None,
+            table_count_loading: true,
+            current_count_loading: true,
+            ..Default::default()
+        };
+        dd.counts_cache = std::collections::HashMap::new();
+
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            drilldown: Some(dd),
+            results: Some(ResultsState {
+                query_buffer: "".to_string(),
+                query_cursor: 0,
+                columns: Vec::new(),
+                rows: Vec::new(),
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
+                loading: false,
+                error: None,
+                is_paginated: true,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                offset: 0,
+                page_size: 100,
+                is_fetching_next_page: false,
+                has_more_rows: false,
+                invalid_query_error: None,
+                selection_anchor: None,
+                filters: vec![("date".to_string(), "2026-08-06".to_string())],
+                total_count: None,
+                total_count_loading: true,
+                table_count: None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let log_id = app.add_query_log("SELECT COUNT(*)".to_string());
+        let count_results = crate::trino::types::QueryResults {
+            columns: vec![crate::trino::types::Column {
+                name: "total_records".to_string(),
+            }],
+            data: vec![vec!["45120".to_string()]],
+            duration_ms: 35,
+        };
+
+        handle_async_result(
+            &mut app,
+            AsyncResult::FetchPartitionCount {
+                log_id,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                filters: vec![("date".to_string(), "2026-08-06".to_string())],
+                result: Ok(count_results),
+            },
+        );
+
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let dd = state.drilldown.as_ref().unwrap();
+        assert_eq!(
+            dd.counts_cache
+                .get(&vec![("date".to_string(), "2026-08-06".to_string())]),
+            Some(&45120)
+        );
+        assert!(!dd.current_count_loading);
+
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.total_count, Some(45120));
+        assert!(!res.total_count_loading);
+
+        // Also test root/table count (filters: empty)
+        let log_id2 = app.add_query_log("SELECT COUNT(*)".to_string());
+        let table_count_results = crate::trino::types::QueryResults {
+            columns: vec![crate::trino::types::Column {
+                name: "total_records".to_string(),
+            }],
+            data: vec![vec!["1234567".to_string()]],
+            duration_ms: 50,
+        };
+
+        handle_async_result(
+            &mut app,
+            AsyncResult::FetchPartitionCount {
+                log_id: log_id2,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                filters: Vec::new(),
+                result: Ok(table_count_results),
+            },
+        );
+
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let dd = state.drilldown.as_ref().unwrap();
+        assert_eq!(dd.table_count, Some(1234567));
+        assert!(!dd.table_count_loading);
+    }
+
+    #[test]
+    fn fetch_next_page_incrementally_updates_query_bar_limit() {
+        let mut app = App::new(sample_config(), false);
+        app.clear_mouse_selection();
+
+        let initial_rows: Vec<Vec<String>> = (0..100)
+            .map(|i| vec![i.to_string(), format!("item_{i}")])
+            .collect();
+
+        let initial_query = "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 100".to_string();
+
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            query_buffer: initial_query.clone(),
+            query_cursor: initial_query.len(),
+            results: Some(ResultsState {
+                query_buffer: initial_query.clone(),
+                query_cursor: initial_query.len(),
+                columns: vec!["id".to_string(), "name".to_string()],
+                rows: initial_rows,
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
+                loading: false,
+                error: None,
+                is_paginated: true,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                offset: 0,
+                page_size: 100,
+                is_fetching_next_page: false,
+                has_more_rows: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // 1. Dispatching next page increases the limit incrementally in query bar
+        dispatch_command(
+            &mut app,
+            Command::FetchNextPage {
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                offset: 100,
+                limit: 100,
+                filters: Vec::new(),
+            },
+            &tx,
+        );
+
+        let Screen::Actions(action_state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let res = action_state.results.as_ref().unwrap();
+        assert_eq!(
+            res.query_buffer,
+            "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 200"
+        );
+        assert_eq!(
+            action_state.query_buffer,
+            "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 200"
+        );
+
+        // 2. Full page arrives -> limit stays 200, rows extend to 200
+        let next_100_rows: Vec<Vec<String>> = (100..200)
+            .map(|i| vec![i.to_string(), format!("item_{i}")])
+            .collect();
+        let log_id = app.add_query_log("page 2".to_string());
+        handle_async_result(
+            &mut app,
+            AsyncResult::FetchNextPage {
+                log_id,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                offset: 100,
+                limit: 100,
+                result: Ok(crate::trino::types::QueryResults {
+                    columns: vec![
+                        crate::trino::types::Column {
+                            name: "id".to_string(),
+                        },
+                        crate::trino::types::Column {
+                            name: "name".to_string(),
+                        },
+                    ],
+                    data: next_100_rows,
+                    duration_ms: 40,
+                }),
+            },
+        );
+
+        let Screen::Actions(action_state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let res = action_state.results.as_ref().unwrap();
+        assert_eq!(res.rows.len(), 200);
+        assert_eq!(
+            res.query_buffer,
+            "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 200"
+        );
+
+        // 3. Dispatching page 3 updates limit to 300
+        dispatch_command(
+            &mut app,
+            Command::FetchNextPage {
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                offset: 200,
+                limit: 100,
+                filters: Vec::new(),
+            },
+            &tx,
+        );
+
+        let Screen::Actions(action_state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let res = action_state.results.as_ref().unwrap();
+        assert_eq!(
+            res.query_buffer,
+            "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 300"
+        );
+
+        // 4. End of table (only 35 rows returned) -> refines limit to 235
+        let last_35_rows: Vec<Vec<String>> = (200..235)
+            .map(|i| vec![i.to_string(), format!("item_{i}")])
+            .collect();
+        let log_id2 = app.add_query_log("page 3".to_string());
+        handle_async_result(
+            &mut app,
+            AsyncResult::FetchNextPage {
+                log_id: log_id2,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                offset: 200,
+                limit: 100,
+                result: Ok(crate::trino::types::QueryResults {
+                    columns: vec![
+                        crate::trino::types::Column {
+                            name: "id".to_string(),
+                        },
+                        crate::trino::types::Column {
+                            name: "name".to_string(),
+                        },
+                    ],
+                    data: last_35_rows,
+                    duration_ms: 25,
+                }),
+            },
+        );
+
+        let Screen::Actions(action_state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let res = action_state.results.as_ref().unwrap();
+        assert_eq!(res.rows.len(), 235);
+        assert!(!res.has_more_rows);
+        assert_eq!(
+            res.query_buffer,
+            "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 235"
+        );
+        assert_eq!(
+            action_state.query_buffer,
+            "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 235"
+        );
     }
 }

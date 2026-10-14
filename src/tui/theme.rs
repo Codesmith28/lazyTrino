@@ -27,8 +27,9 @@ pub const MUTED_FG: Color = Color::DarkGray;
 pub const SECONDARY_FG: Color = Color::Gray;
 pub const DETAIL_FG: Color = Color::Magenta;
 
-pub const SELECTION_FG: Color = Color::Black;
+pub const SELECTION_FG: Color = Color::White;
 pub const SELECTION_BG: Color = Color::Cyan;
+pub const QUERY_SELECTION_FG: Color = Color::Black;
 pub const QUERY_SELECTION_BG: Color = Color::LightYellow;
 
 pub fn style(color: Color) -> Style {
@@ -91,7 +92,7 @@ pub fn selection_style_for(is_active: bool) -> Style {
 
 pub fn query_selection_style() -> Style {
     Style::default()
-        .fg(SELECTION_FG)
+        .fg(QUERY_SELECTION_FG)
         .bg(QUERY_SELECTION_BG)
         .add_modifier(Modifier::BOLD)
 }
@@ -172,5 +173,38 @@ pub fn input_field_style(is_focused: bool) -> Style {
         text_style().bg(MUTED_FG)
     } else {
         secondary_style()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_selection_foreground_is_white_by_default() {
+        assert_eq!(SELECTION_FG, Color::White);
+
+        let style = selection_style();
+        assert_eq!(style.fg, Some(Color::White));
+        assert_eq!(style.bg, Some(SELECTION_BG));
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn test_selection_style_for_active_and_inactive() {
+        let active_style = selection_style_for(true);
+        assert_eq!(active_style.fg, Some(Color::White));
+        assert_eq!(active_style.bg, Some(SELECTION_BG));
+
+        let inactive_style = selection_style_for(false);
+        assert_eq!(inactive_style.fg, Some(Color::White));
+        assert_eq!(inactive_style.bg, Some(MUTED_FG));
+    }
+
+    #[test]
+    fn test_query_selection_style_readable() {
+        let query_style = query_selection_style();
+        assert_eq!(query_style.fg, Some(Color::Black));
+        assert_eq!(query_style.bg, Some(QUERY_SELECTION_BG));
     }
 }

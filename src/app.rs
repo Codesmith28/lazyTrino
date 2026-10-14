@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 
 use crate::config::ConnectionConfig;
 use crate::trino::client::TrinoClient;
@@ -34,11 +35,12 @@ pub struct QueryLogEntry {
     pub error_msg: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct VerticalColumn {
     pub index: usize,
     pub name: String,
     pub data_type: String,
+    pub is_nullable: String,
     pub key_meta: String,
     pub description: String,
 }
@@ -198,6 +200,10 @@ pub struct DrillDownState {
     pub loading: bool,
     pub error: Option<String>,
     pub truncated: bool,
+    pub table_count: Option<usize>,
+    pub table_count_loading: bool,
+    pub counts_cache: HashMap<Vec<(String, String)>, usize>,
+    pub current_count_loading: bool,
 }
 
 impl DrillDownState {
@@ -219,6 +225,29 @@ impl DrillDownState {
     pub fn next_column(&self) -> Option<&str> {
         self.partition_cols.get(self.path.len()).map(|s| s.as_str())
     }
+
+    /// Gets the cached count for the current partition path (or table count if path is empty).
+    pub fn current_count(&self) -> Option<usize> {
+        self.counts_cache
+            .get(&self.path)
+            .copied()
+            .or(if self.path.is_empty() {
+                self.table_count
+            } else {
+                None
+            })
+    }
+
+    /// Gets the cached count for a specific prefix of the path up to `depth`.
+    pub fn count_at_depth(&self, depth: usize) -> Option<usize> {
+        if depth == 0 {
+            self.table_count
+                .or_else(|| self.counts_cache.get(&vec![]).copied())
+        } else {
+            let prefix: Vec<(String, String)> = self.path[..depth.min(self.path.len())].to_vec();
+            self.counts_cache.get(&prefix).copied()
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -239,16 +268,21 @@ pub struct ActionState {
     /// queries resolve. Gates `Partitions` and `Schema`.
     pub metadata_loading: bool,
     pub drilldown: Option<DrillDownState>,
+    pub pending_view_restore: Option<crate::saved_views::SavedView>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct ResultsState {
     pub query_buffer: String,
     pub query_cursor: usize,
     pub columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
-    pub scroll_v: usize,
-    pub scroll_h: usize,
+    pub scroll_v: Cell<usize>,
+    pub scroll_h: Cell<usize>,
+    pub selected_row: usize,
+    pub selected_col: usize,
+    pub last_selected_row: Cell<usize>,
+    pub last_selected_col: Cell<usize>,
     pub loading: bool,
     pub error: Option<String>,
     pub is_paginated: bool,
@@ -267,9 +301,116 @@ pub struct ResultsState {
     /// through to `FetchNextPage` so infinite scroll keeps the same
     /// predicate on subsequent pages.
     pub filters: Vec<(String, String)>,
+    pub total_count: Option<usize>,
+    pub total_count_loading: bool,
+    pub table_count: Option<usize>,
+    pub base_query: Option<String>,
+    pub unfiltered_rows: Option<Vec<Vec<String>>>,
+    pub column_filters: HashMap<String, ColumnFilter>,
+    pub col_distinct_values: HashMap<String, Vec<String>>,
+    pub hidden_columns: HashSet<String>,
+    pub sort: Option<(String, SortDirection)>,
+    pub unsorted_rows: Option<Vec<Vec<String>>>,
+    pub visual_mode: VisualMode,
+    pub flattened_fields: Vec<crate::trino::flatten::FlattenedField>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum VisualMode {
+    #[default]
+    None,
+    Line {
+        anchor_row: usize,
+    },
+    Block {
+        anchor_row: usize,
+        anchor_col: usize,
+    },
+}
+
+pub fn format_count(n: usize) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    for (i, c) in chars.iter().enumerate() {
+        if i > 0 && (len - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(*c);
+    }
+    result
 }
 
 impl ResultsState {
+    pub fn is_column_visible(&self, col_name: &str) -> bool {
+        !self.hidden_columns.contains(col_name)
+    }
+
+    pub fn visible_columns(&self) -> Vec<(usize, &String)> {
+        if self.hidden_columns.is_empty() {
+            self.columns.iter().enumerate().collect()
+        } else {
+            let vis: Vec<_> = self
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| !self.hidden_columns.contains(*c))
+                .collect();
+            if vis.is_empty() {
+                self.columns.iter().enumerate().collect()
+            } else {
+                vis
+            }
+        }
+    }
+
+    pub fn next_visible_col(&self) -> usize {
+        let vis = self.visible_columns();
+        if vis.is_empty() {
+            return self.selected_col;
+        }
+        if let Some(pos) = vis.iter().position(|(idx, _)| *idx == self.selected_col) {
+            let next_pos = (pos + 1).min(vis.len() - 1);
+            vis[next_pos].0
+        } else {
+            vis.iter()
+                .find(|(idx, _)| *idx > self.selected_col)
+                .map(|(idx, _)| *idx)
+                .unwrap_or_else(|| vis.last().map(|(idx, _)| *idx).unwrap_or(0))
+        }
+    }
+
+    pub fn prev_visible_col(&self) -> usize {
+        let vis = self.visible_columns();
+        if vis.is_empty() {
+            return self.selected_col;
+        }
+        if let Some(pos) = vis.iter().position(|(idx, _)| *idx == self.selected_col) {
+            let prev_pos = pos.saturating_sub(1);
+            vis[prev_pos].0
+        } else {
+            vis.iter()
+                .rfind(|(idx, _)| *idx < self.selected_col)
+                .map(|(idx, _)| *idx)
+                .unwrap_or_else(|| vis.first().map(|(idx, _)| *idx).unwrap_or(0))
+        }
+    }
+
+    pub fn first_visible_col(&self) -> usize {
+        self.visible_columns()
+            .first()
+            .map(|(idx, _)| *idx)
+            .unwrap_or(0)
+    }
+
+    pub fn last_visible_col(&self) -> usize {
+        self.visible_columns()
+            .last()
+            .map(|(idx, _)| *idx)
+            .unwrap_or(0)
+    }
+
     pub fn selection_range(&self) -> Option<(usize, usize)> {
         if let Some(anchor) = self.selection_anchor
             && anchor != self.query_cursor
@@ -303,6 +444,267 @@ impl ResultsState {
         self.selection_anchor = Some(0);
         self.query_cursor = self.query_buffer.len();
     }
+
+    pub fn is_in_visual_mode(&self) -> bool {
+        self.visual_mode != VisualMode::None
+    }
+
+    pub fn enter_visual_line(&mut self) {
+        self.visual_mode = VisualMode::Line {
+            anchor_row: self.selected_row,
+        };
+    }
+
+    pub fn enter_visual_block(&mut self) {
+        self.visual_mode = VisualMode::Block {
+            anchor_row: self.selected_row,
+            anchor_col: self.selected_col,
+        };
+    }
+
+    pub fn exit_visual_mode(&mut self) {
+        self.visual_mode = VisualMode::None;
+    }
+
+    pub fn toggle_visual_ends(&mut self) {
+        match self.visual_mode {
+            VisualMode::Line { ref mut anchor_row } => {
+                std::mem::swap(anchor_row, &mut self.selected_row);
+            }
+            VisualMode::Block {
+                ref mut anchor_row,
+                ref mut anchor_col,
+            } => {
+                std::mem::swap(anchor_row, &mut self.selected_row);
+                std::mem::swap(anchor_col, &mut self.selected_col);
+            }
+            VisualMode::None => {}
+        }
+    }
+
+    pub fn is_cell_selected(&self, row: usize, col: usize) -> bool {
+        match self.visual_mode {
+            VisualMode::None => false,
+            VisualMode::Line { anchor_row } => {
+                let min_r = anchor_row.min(self.selected_row);
+                let max_r = anchor_row.max(self.selected_row);
+                row >= min_r && row <= max_r
+            }
+            VisualMode::Block {
+                anchor_row,
+                anchor_col,
+            } => {
+                let min_r = anchor_row.min(self.selected_row);
+                let max_r = anchor_row.max(self.selected_row);
+                let min_c = anchor_col.min(self.selected_col);
+                let max_c = anchor_col.max(self.selected_col);
+                row >= min_r && row <= max_r && col >= min_c && col <= max_c
+            }
+        }
+    }
+
+    pub fn is_row_selected(&self, row: usize) -> bool {
+        match self.visual_mode {
+            VisualMode::None => false,
+            VisualMode::Line { anchor_row } | VisualMode::Block { anchor_row, .. } => {
+                let min_r = anchor_row.min(self.selected_row);
+                let max_r = anchor_row.max(self.selected_row);
+                row >= min_r && row <= max_r
+            }
+        }
+    }
+
+    pub fn toggle_sort(&mut self, vertical_schema_cols: &[VerticalColumn]) {
+        if self.columns.is_empty() || self.rows.is_empty() {
+            return;
+        }
+        let col_idx = self.selected_col.min(self.columns.len().saturating_sub(1));
+        let col_name = self.columns[col_idx].clone();
+
+        if self.unsorted_rows.is_none() {
+            self.unsorted_rows = Some(self.rows.clone());
+        }
+
+        let next_sort = match &self.sort {
+            Some((cur_col, SortDirection::Desc)) if cur_col == &col_name => {
+                Some((col_name.clone(), SortDirection::Asc))
+            }
+            Some((cur_col, SortDirection::Asc)) if cur_col == &col_name => None,
+            _ => Some((col_name.clone(), SortDirection::Desc)),
+        };
+
+        self.sort = next_sort;
+        self.apply_sort(vertical_schema_cols);
+    }
+
+    pub fn apply_sort(&mut self, vertical_schema_cols: &[VerticalColumn]) {
+        if let Some((ref col_name, direction)) = self.sort {
+            if let Some(col_idx) = self.columns.iter().position(|c| c == col_name) {
+                let data_type = vertical_schema_cols
+                    .iter()
+                    .find(|c| c.name.eq_ignore_ascii_case(col_name))
+                    .map(|c| c.data_type.as_str());
+
+                self.rows.sort_by(|row_a, row_b| {
+                    let val_a = row_a.get(col_idx).map(|s| s.as_str()).unwrap_or("");
+                    let val_b = row_b.get(col_idx).map(|s| s.as_str()).unwrap_or("");
+                    let is_null_a =
+                        val_a.trim().is_empty() || val_a.trim().eq_ignore_ascii_case("null");
+                    let is_null_b =
+                        val_b.trim().is_empty() || val_b.trim().eq_ignore_ascii_case("null");
+
+                    if is_null_a && is_null_b {
+                        return std::cmp::Ordering::Equal;
+                    }
+                    if is_null_a {
+                        return std::cmp::Ordering::Greater;
+                    }
+                    if is_null_b {
+                        return std::cmp::Ordering::Less;
+                    }
+
+                    let ord = compare_non_null_cell_values(val_a.trim(), val_b.trim(), data_type);
+                    match direction {
+                        SortDirection::Asc => ord,
+                        SortDirection::Desc => ord.reverse(),
+                    }
+                });
+            }
+        } else if let Some(ref unsorted) = self.unsorted_rows {
+            if self.column_filters.is_empty() {
+                self.rows = unsorted.clone();
+            } else {
+                self.rows = unsorted
+                    .iter()
+                    .filter(|row| {
+                        for (filter_col, filter) in &self.column_filters {
+                            if let Some(idx) = self.columns.iter().position(|c| c == filter_col) {
+                                let val = row.get(idx).map(|s| s.as_str()).unwrap_or("");
+                                if !filter.matches(val) {
+                                    return false;
+                                }
+                            }
+                        }
+                        true
+                    })
+                    .cloned()
+                    .collect();
+            }
+            self.unsorted_rows = None;
+        }
+        self.selected_row = 0;
+        self.scroll_v.set(0);
+    }
+
+    pub fn auto_flatten(&mut self, schema_cols: &[VerticalColumn]) {
+        if self.columns.is_empty() || self.rows.is_empty() {
+            return;
+        }
+
+        let orig_columns = self.columns.clone();
+        let mut new_fields = Vec::new();
+
+        for (col_idx, col_name) in orig_columns.iter().enumerate() {
+            if col_name.contains('.') {
+                continue;
+            }
+
+            let data_type = schema_cols
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(col_name))
+                .map(|c| c.data_type.as_str())
+                .unwrap_or("");
+
+            let sample_values: Vec<String> = self
+                .rows
+                .iter()
+                .filter_map(|r| r.get(col_idx).cloned())
+                .take(50)
+                .collect();
+
+            if let Some(nested_type) =
+                crate::trino::flatten::detect_nested_type(col_name, data_type, &sample_values)
+            {
+                let paths =
+                    crate::trino::flatten::discover_nested_paths(&sample_values, nested_type);
+                for path in paths {
+                    let field =
+                        crate::trino::flatten::FlattenedField::new(col_name, &path, nested_type);
+                    if !self.columns.contains(&field.full_name) {
+                        new_fields.push(field);
+                    }
+                }
+            }
+        }
+
+        if new_fields.is_empty() {
+            return;
+        }
+
+        for field in &new_fields {
+            let parent_idx = self.columns.iter().position(|c| c == &field.parent_col);
+            let Some(p_idx) = parent_idx else { continue };
+
+            self.columns.push(field.full_name.clone());
+            for row in &mut self.rows {
+                let parent_raw = row.get(p_idx).map(|s| s.as_str()).unwrap_or("");
+                let extracted = crate::trino::flatten::extract_nested_value(
+                    parent_raw,
+                    &field.path,
+                    field.nested_type,
+                );
+                row.push(extracted);
+            }
+            if let Some(ref mut unfilt) = self.unfiltered_rows {
+                for row in unfilt {
+                    let parent_raw = row.get(p_idx).map(|s| s.as_str()).unwrap_or("");
+                    let extracted = crate::trino::flatten::extract_nested_value(
+                        parent_raw,
+                        &field.path,
+                        field.nested_type,
+                    );
+                    row.push(extracted);
+                }
+            }
+        }
+
+        self.flattened_fields.extend(new_fields);
+    }
+
+    pub fn column_expr_map(&self) -> std::collections::HashMap<String, String> {
+        self.flattened_fields
+            .iter()
+            .map(|f| (f.full_name.clone(), f.expr_sql.clone()))
+            .collect()
+    }
+
+    pub fn extend_rows_with_flattening(&mut self, mut new_rows: Vec<Vec<String>>) {
+        if !self.flattened_fields.is_empty() {
+            for row in &mut new_rows {
+                for field in &self.flattened_fields {
+                    let p_idx = self.columns.iter().position(|c| c == &field.parent_col);
+                    let val = if let Some(idx) = p_idx {
+                        let parent_raw = row.get(idx).map(|s| s.as_str()).unwrap_or("");
+                        crate::trino::flatten::extract_nested_value(
+                            parent_raw,
+                            &field.path,
+                            field.nested_type,
+                        )
+                    } else {
+                        String::new()
+                    };
+                    row.push(val);
+                }
+            }
+        }
+        self.rows.extend(new_rows.clone());
+        if let Some(ref mut unfilt) = self.unfiltered_rows {
+            unfilt.extend(new_rows.clone());
+        }
+        if let Some(ref mut unsorted) = self.unsorted_rows {
+            unsorted.extend(new_rows);
+        }
+    }
 }
 
 // `ActionState` (which embeds the optional `ResultsState` with query text/rows) is
@@ -321,33 +723,385 @@ pub enum Screen {
     Help,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortDirection {
+    Desc,
+    Asc,
+}
+
+pub fn is_numeric_type(t: &str) -> bool {
+    let t = t.to_lowercase();
+    t.starts_with("tinyint")
+        || t.starts_with("smallint")
+        || t.starts_with("integer")
+        || t.starts_with("int")
+        || t.starts_with("bigint")
+        || t.starts_with("real")
+        || t.starts_with("float")
+        || t.starts_with("double")
+        || t.starts_with("decimal")
+        || t.starts_with("numeric")
+}
+
+pub fn compare_cell_values(a: &str, b: &str, data_type: Option<&str>) -> std::cmp::Ordering {
+    let a_trim = a.trim();
+    let b_trim = b.trim();
+    let is_null_a = a_trim.is_empty() || a_trim.eq_ignore_ascii_case("null");
+    let is_null_b = b_trim.is_empty() || b_trim.eq_ignore_ascii_case("null");
+
+    if is_null_a && is_null_b {
+        return std::cmp::Ordering::Equal;
+    }
+    if is_null_a {
+        return std::cmp::Ordering::Greater;
+    }
+    if is_null_b {
+        return std::cmp::Ordering::Less;
+    }
+
+    compare_non_null_cell_values(a_trim, b_trim, data_type)
+}
+
+pub fn compare_non_null_cell_values(
+    a: &str,
+    b: &str,
+    data_type: Option<&str>,
+) -> std::cmp::Ordering {
+    let is_numeric = data_type.map(is_numeric_type).unwrap_or(false)
+        || (a.parse::<f64>().is_ok() && b.parse::<f64>().is_ok());
+
+    if is_numeric && let (Ok(num_a), Ok(num_b)) = (a.parse::<f64>(), b.parse::<f64>()) {
+        return num_a
+            .partial_cmp(&num_b)
+            .unwrap_or(std::cmp::Ordering::Equal);
+    }
+
+    if let (Ok(bool_a), Ok(bool_b)) = (a.parse::<bool>(), b.parse::<bool>()) {
+        return bool_a.cmp(&bool_b);
+    }
+
+    a.to_lowercase()
+        .cmp(&b.to_lowercase())
+        .then_with(|| a.cmp(b))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mode {
     Normal,
     Search,
     QueryInput,
+    FilterModal,
+    ColumnModal,
+    HelpModal,
+    SavedViewsModal,
+    SaveViewPrompt,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumericOp {
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    Eq,
+}
+
+impl NumericOp {
+    pub const ALL: [NumericOp; 5] = [
+        NumericOp::Lt,
+        NumericOp::Lte,
+        NumericOp::Gt,
+        NumericOp::Gte,
+        NumericOp::Eq,
+    ];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NumericOp::Lt => "<",
+            NumericOp::Lte => "<=",
+            NumericOp::Gt => ">",
+            NumericOp::Gte => ">=",
+            NumericOp::Eq => "=",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            NumericOp::Lt => "Less than (<)",
+            NumericOp::Lte => "Less than or equal (<=)",
+            NumericOp::Gt => "Greater than (>)",
+            NumericOp::Gte => "Greater than or equal (>=)",
+            NumericOp::Eq => "Equal (=)",
+        }
+    }
+
+    pub fn matches(&self, val: f64, target: f64) -> bool {
+        match self {
+            NumericOp::Lt => val < target,
+            NumericOp::Lte => val <= target,
+            NumericOp::Gt => val > target,
+            NumericOp::Gte => val >= target,
+            NumericOp::Eq => (val - target).abs() < 1e-9 || val == target,
+        }
+    }
+
+    pub fn from_str_prefix(s: &str) -> Option<(NumericOp, &str)> {
+        let s = s.trim_start();
+        if let Some(rest) = s.strip_prefix("<=") {
+            Some((NumericOp::Lte, rest.trim()))
+        } else if let Some(rest) = s.strip_prefix(">=") {
+            Some((NumericOp::Gte, rest.trim()))
+        } else if let Some(rest) = s.strip_prefix("<") {
+            Some((NumericOp::Lt, rest.trim()))
+        } else if let Some(rest) = s.strip_prefix(">") {
+            Some((NumericOp::Gt, rest.trim()))
+        } else if let Some(rest) = s.strip_prefix("==") {
+            Some((NumericOp::Eq, rest.trim()))
+        } else if let Some(rest) = s.strip_prefix("=") {
+            Some((NumericOp::Eq, rest.trim()))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumericFilter {
+    pub op: NumericOp,
+    pub value: f64,
+    pub raw_value: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ColumnFilter {
+    Values(HashSet<String>),
+    Numeric(NumericFilter),
+}
+
+impl From<HashSet<String>> for ColumnFilter {
+    fn from(s: HashSet<String>) -> Self {
+        ColumnFilter::Values(s)
+    }
+}
+
+impl ColumnFilter {
+    pub fn matches(&self, cell_value: &str) -> bool {
+        match self {
+            ColumnFilter::Values(selected) => selected.contains(cell_value),
+            ColumnFilter::Numeric(num) => {
+                let s = cell_value.trim();
+                if s.is_empty() || s.eq_ignore_ascii_case("null") {
+                    return false;
+                }
+                if let Ok(v) = s.parse::<f64>() {
+                    num.op.matches(v, num.value)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilterMode {
+    Values,
+    Numeric,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumericFocus {
+    Operator,
+    Value,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FilterModalState {
+    pub column_index: usize,
+    pub column_name: String,
+    pub is_numeric_col: bool,
+    pub mode: FilterMode,
+    pub values: Vec<String>,
+    pub selected_values: HashSet<String>,
+    pub cursor: usize,
+    pub scroll: usize,
+    pub search_query: String,
+    pub is_searching: bool,
+    pub numeric_op: NumericOp,
+    pub numeric_input: String,
+    pub numeric_focus: NumericFocus,
+    pub numeric_error: Option<String>,
+    pub last_op_char: Option<char>,
+}
+
+impl FilterModalState {
+    pub fn filtered_indices(&self) -> Vec<usize> {
+        if self.search_query.is_empty() {
+            (0..self.values.len()).collect()
+        } else if self.is_numeric_col
+            && let Some((op, target_str)) = NumericOp::from_str_prefix(&self.search_query)
+            && let Ok(target) = target_str.parse::<f64>()
+        {
+            self.values
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| {
+                    v.trim()
+                        .parse::<f64>()
+                        .map(|num| op.matches(num, target))
+                        .unwrap_or(false)
+                })
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            let q = self.search_query.to_lowercase();
+            self.values
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| v.to_lowercase().contains(&q))
+                .map(|(i, _)| i)
+                .collect()
+        }
+    }
+
+    pub fn parse_numeric_filter(&self) -> Result<Option<(NumericOp, f64, String)>, String> {
+        let trimmed = self.numeric_input.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        if let Some((op, rest)) = NumericOp::from_str_prefix(trimmed) {
+            let rest_trimmed = rest.trim();
+            if rest_trimmed.is_empty() {
+                return Err("Enter a number after operator (e.g. >= 50)".to_string());
+            }
+            match rest_trimmed.parse::<f64>() {
+                Ok(val) => Ok(Some((op, val, rest_trimmed.to_string()))),
+                Err(_) => Err(format!("Invalid number: '{rest_trimmed}'")),
+            }
+        } else {
+            match trimmed.parse::<f64>() {
+                Ok(val) => Ok(Some((self.numeric_op, val, trimmed.to_string()))),
+                Err(_) => Err(format!("Invalid number: '{trimmed}'")),
+            }
+        }
+    }
+
+    pub fn numeric_matching_count(&self) -> Option<(usize, usize)> {
+        if let Ok(Some((op, target, _))) = self.parse_numeric_filter() {
+            let mut matching = 0;
+            let mut total = 0;
+            for v in &self.values {
+                let s = v.trim();
+                if !s.is_empty()
+                    && !s.eq_ignore_ascii_case("null")
+                    && let Ok(num) = s.parse::<f64>()
+                {
+                    total += 1;
+                    if op.matches(num, target) {
+                        matching += 1;
+                    }
+                }
+            }
+            Some((matching, total))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnModalState {
+    pub columns: Vec<String>,
+    pub selected_columns: HashSet<String>,
+    pub cursor: usize,
+    pub scroll: usize,
+    pub search_query: String,
+    pub is_searching: bool,
+    pub tree_nodes: Vec<crate::trino::flatten::ColumnTreeNode>,
+}
+
+impl ColumnModalState {
+    pub fn filtered_indices(&self) -> Vec<usize> {
+        if self.tree_nodes.is_empty() {
+            if self.search_query.is_empty() {
+                (0..self.columns.len()).collect()
+            } else {
+                let q = self.search_query.to_lowercase();
+                self.columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.to_lowercase().contains(&q))
+                    .map(|(i, _)| i)
+                    .collect()
+            }
+        } else if self.search_query.is_empty() {
+            (0..self.tree_nodes.len()).collect()
+        } else {
+            let q = self.search_query.to_lowercase();
+            self.tree_nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| {
+                    node.name.to_lowercase().contains(&q) || node.label.to_lowercase().contains(&q)
+                })
+                .map(|(i, _)| i)
+                .collect()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HelpModalState {
+    pub search_query: String,
+    pub is_searching: bool,
+    pub scroll: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SaveViewPromptState {
+    pub name_input: String,
+    pub view: crate::saved_views::SavedView,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SavedViewsModalState {
+    pub views: Vec<crate::saved_views::SavedView>,
+    pub selected: usize,
+    pub scroll: usize,
+    pub selected_ids: std::collections::HashSet<String>,
+    pub pending_delete_ids: Vec<String>,
+}
+
+impl SavedViewsModalState {
+    pub fn new() -> Self {
+        let views = crate::saved_views::load_saved_views();
+        Self {
+            views,
+            selected: 0,
+            scroll: 0,
+            selected_ids: std::collections::HashSet::new(),
+            pending_delete_ids: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
     TableView,
     TableDDL,
-    InfoSchema,
+    Schema,
     ShowStats,
-    Count,
     Sample,
     Partitions,
-    Schema,
 }
 
 pub const ACTIONS: &[(char, &str, Action)] = &[
     ('v', "Table View Mode", Action::TableView),
     ('c', "Table DDL", Action::TableDDL),
-    ('i', "Info Schema", Action::InfoSchema),
-    ('s', "Show Stats", Action::ShowStats),
-    ('n', "Count", Action::Count),
-    ('p', "Sample Mode (20 rows)", Action::Sample),
-    ('P', "Partitions", Action::Partitions),
-    ('S', "Schema", Action::Schema),
+    ('e', "Schema", Action::Schema),
+    ('t', "Show Stats", Action::ShowStats),
+    ('m', "Sample Mode (20 rows)", Action::Sample),
+    ('p', "Partitions", Action::Partitions),
 ];
 
 impl Action {
@@ -355,14 +1109,10 @@ impl Action {
         match self {
             Action::TableView => crate::trino::queries::page_query(catalog, schema, table, 0, 100),
             Action::TableDDL => crate::trino::queries::show_create(catalog, schema, table),
-            Action::InfoSchema => {
-                crate::trino::queries::info_schema_columns(catalog, schema, table)
-            }
+            Action::Schema => crate::trino::queries::describe(catalog, schema, table),
             Action::ShowStats => crate::trino::queries::show_stats(catalog, schema, table),
-            Action::Count => crate::trino::queries::count(catalog, schema, table),
             Action::Sample => crate::trino::queries::sample(catalog, schema, table),
             Action::Partitions => crate::trino::queries::show_create(catalog, schema, table),
-            Action::Schema => crate::trino::queries::describe(catalog, schema, table),
         }
     }
 }
@@ -392,11 +1142,18 @@ pub struct App {
     pub control_panel_split_pct: u16,
     pub is_dragging_resizer: bool,
     pub is_dragging_query_select: bool,
+    pub is_dragging_h_scrollbar: bool,
     pub query_inspector_scroll: usize,
     pub mouse_selection_anchor: Option<(u16, u16)>,
     pub mouse_selection_current: Option<(u16, u16)>,
     pub is_selecting_text: bool,
     pub copied_toast: Option<(String, std::time::Instant)>,
+    pub filter_modal: Option<FilterModalState>,
+    pub column_modal: Option<ColumnModalState>,
+    pub help_modal: Option<HelpModalState>,
+    pub help_scroll: usize,
+    pub saved_views_modal: Option<SavedViewsModalState>,
+    pub save_view_prompt: Option<SaveViewPromptState>,
 }
 
 impl App {
@@ -433,11 +1190,18 @@ impl App {
             control_panel_split_pct: 40,
             is_dragging_resizer: false,
             is_dragging_query_select: false,
+            is_dragging_h_scrollbar: false,
             query_inspector_scroll: 0,
             mouse_selection_anchor: None,
             mouse_selection_current: None,
             is_selecting_text: false,
             copied_toast: None,
+            filter_modal: None,
+            column_modal: None,
+            help_modal: None,
+            help_scroll: 0,
+            saved_views_modal: None,
+            save_view_prompt: None,
         }
     }
 
@@ -497,16 +1261,32 @@ impl App {
     }
 
     pub fn is_area_mouse_selected(&self, area_x: u16, area_w: u16, row_y: u16) -> bool {
+        self.is_area_mouse_selected_rect(area_x, area_w, row_y, 1)
+    }
+
+    pub fn is_area_mouse_selected_rect(
+        &self,
+        area_x: u16,
+        area_w: u16,
+        area_y: u16,
+        area_h: u16,
+    ) -> bool {
+        if !self.is_selecting_text {
+            return false;
+        }
         if let (Some((a_x, a_y)), Some((c_x, c_y))) =
             (self.mouse_selection_anchor, self.mouse_selection_current)
         {
+            if a_x == c_x && a_y == c_y {
+                return false;
+            }
             let start_y = a_y.min(c_y);
             let end_y = a_y.max(c_y);
             let start_x = a_x.min(c_x);
             let end_x = a_x.max(c_x);
 
-            let y_match = row_y >= start_y && row_y <= end_y;
-            let x_match = area_x < end_x && area_x.saturating_add(area_w) > start_x;
+            let y_match = area_y <= end_y && area_y.saturating_add(area_h) > start_y;
+            let x_match = area_x <= end_x && area_x.saturating_add(area_w) > start_x;
             y_match && x_match
         } else {
             false
@@ -619,21 +1399,16 @@ mod tests {
                 Action::TableDDL,
                 queries::show_create(catalog, schema, table),
             ),
-            (
-                Action::InfoSchema,
-                queries::info_schema_columns(catalog, schema, table),
-            ),
+            (Action::Schema, queries::describe(catalog, schema, table)),
             (
                 Action::ShowStats,
                 queries::show_stats(catalog, schema, table),
             ),
-            (Action::Count, queries::count(catalog, schema, table)),
             (Action::Sample, queries::sample(catalog, schema, table)),
             (
                 Action::Partitions,
                 queries::show_create(catalog, schema, table),
             ),
-            (Action::Schema, queries::describe(catalog, schema, table)),
         ];
 
         for (action, expected) in cases {
@@ -641,11 +1416,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn format_count_adds_comma_separators() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(1000), "1,000");
+        assert_eq!(format_count(1234567), "1,234,567");
+    }
+
     fn vcol(name: &str, data_type: &str) -> VerticalColumn {
         VerticalColumn {
             index: 0,
             name: name.to_string(),
             data_type: data_type.to_string(),
+            is_nullable: "YES".to_string(),
             key_meta: String::new(),
             description: String::new(),
         }
@@ -674,5 +1458,64 @@ mod tests {
     fn safe_select_columns_falls_back_to_select_star_when_all_columns_unsafe() {
         let cols = vec![vcol("policy_id", "map(varchar, varchar)")];
         assert!(safe_select_columns(&cols).is_empty());
+    }
+
+    #[test]
+    fn test_auto_flatten_and_extend_rows() {
+        let schema_cols = vec![
+            vcol("id", "bigint"),
+            vcol("meta", "json"),
+            vcol("tags", "map(varchar, varchar)"),
+        ];
+
+        let mut res = ResultsState {
+            columns: vec!["id".to_string(), "meta".to_string(), "tags".to_string()],
+            rows: vec![
+                vec![
+                    "1".to_string(),
+                    r#"{"user": "alice", "role": "admin"}"#.to_string(),
+                    "{env=prod, region=us}".to_string(),
+                ],
+                vec![
+                    "2".to_string(),
+                    r#"{"user": "bob", "role": "viewer"}"#.to_string(),
+                    "{env=stage, region=eu}".to_string(),
+                ],
+            ],
+            ..Default::default()
+        };
+
+        res.auto_flatten(&schema_cols);
+
+        // Columns must now include the flattened nested fields
+        assert!(res.columns.contains(&"meta.user".to_string()));
+        assert!(res.columns.contains(&"meta.role".to_string()));
+        assert!(res.columns.contains(&"tags.env".to_string()));
+        assert!(res.columns.contains(&"tags.region".to_string()));
+
+        let user_idx = res.columns.iter().position(|c| c == "meta.user").unwrap();
+        let role_idx = res.columns.iter().position(|c| c == "meta.role").unwrap();
+        let env_idx = res.columns.iter().position(|c| c == "tags.env").unwrap();
+
+        assert_eq!(res.rows[0][user_idx], "alice");
+        assert_eq!(res.rows[0][role_idx], "admin");
+        assert_eq!(res.rows[0][env_idx], "prod");
+
+        assert_eq!(res.rows[1][user_idx], "bob");
+        assert_eq!(res.rows[1][role_idx], "viewer");
+        assert_eq!(res.rows[1][env_idx], "stage");
+
+        // Now test extending with new rows (e.g. infinite scroll page)
+        let new_rows = vec![vec![
+            "3".to_string(),
+            r#"{"user": "charlie", "role": "dev"}"#.to_string(),
+            "{env=dev, region=ap}".to_string(),
+        ]];
+        res.extend_rows_with_flattening(new_rows);
+
+        assert_eq!(res.rows.len(), 3);
+        assert_eq!(res.rows[2][user_idx], "charlie");
+        assert_eq!(res.rows[2][role_idx], "dev");
+        assert_eq!(res.rows[2][env_idx], "dev");
     }
 }

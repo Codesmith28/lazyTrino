@@ -31,360 +31,405 @@ pub use header_footer::*;
 pub use search_query::*;
 
 pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
-    match app.screen {
-        Screen::Help => {
-            screens::help::render(frame, frame.area());
-        }
-        _ => {
-            let is_in_table = matches!(app.screen, Screen::Actions(_));
+    let effective_screen = if let Screen::Help = &app.screen {
+        app.prev_screen.as_deref().unwrap_or(&app.screen)
+    } else {
+        &app.screen
+    };
 
-            let outer_chunks =
-                Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).split(frame.area());
-            let bottom_chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(1)])
-                .split(outer_chunks[1]);
+    let is_in_table = matches!(effective_screen, Screen::Actions(_));
 
-            if !is_in_table {
-                // Phase 1: Default All Tables View (Connect, Catalog, Schema, Table) -> Default 60% list ratio
-                let list_pct = if app.main_panel_pct <= 30 {
-                    60
-                } else {
-                    app.main_panel_pct
-                };
-                let main_chunks = Layout::horizontal([
-                    Constraint::Percentage(list_pct),
-                    Constraint::Percentage(100 - list_pct),
-                ])
-                .split(outer_chunks[0]);
+    let outer_chunks =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).split(frame.area());
+    let bottom_chunks =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(outer_chunks[1]);
 
-                let search_active = matches!(app.mode, Mode::Search);
-                let inner_w = main_chunks[0].width.saturating_sub(2).max(1) as usize;
-                let search_height = if search_active {
-                    let total_chars = 3 + app.search_query.len();
-                    let lines = total_chars.div_ceil(inner_w);
-                    (lines as u16 + 2).clamp(3, 8)
-                } else {
-                    3
-                };
+    if !is_in_table {
+        // Phase 1: Default All Tables View (Connect, Catalog, Schema, Table) -> Default 60% list ratio
+        let list_pct = if app.main_panel_pct <= 30 {
+            60
+        } else {
+            app.main_panel_pct
+        };
+        let main_chunks = Layout::horizontal([
+            Constraint::Percentage(list_pct),
+            Constraint::Percentage(100 - list_pct),
+        ])
+        .split(outer_chunks[0]);
 
-                let left_chunks =
-                    Layout::vertical([Constraint::Length(search_height), Constraint::Min(0)])
-                        .split(main_chunks[0]);
+        screens::help::render_side_panel(frame, main_chunks[1]);
 
-                render_search_bar(frame, left_chunks[0], app);
-                screens::help::render(frame, main_chunks[1]);
-
-                let main = left_chunks[1];
-                let main_is_active = true;
-
-                match &app.screen {
-                    Screen::Connect(state) => {
-                        screens::connect::render(frame, main, state, spinner(app));
-                    }
-                    Screen::Catalog(state) => {
-                        screens::catalog::render(
-                            frame,
-                            main,
-                            state,
-                            &app.search_query,
-                            main_is_active,
-                            app,
-                        );
-                    }
-                    Screen::Schema(state) => {
-                        screens::schema::render(
-                            frame,
-                            main,
-                            state,
-                            &app.search_query,
-                            main_is_active,
-                            app,
-                        );
-                    }
-                    Screen::Table(state) => {
-                        screens::table::render(
-                            frame,
-                            main,
-                            state,
-                            &app.search_query,
-                            main_is_active,
-                            app,
-                        );
-                    }
-                    _ => unreachable!(),
-                }
+        let is_connect = matches!(effective_screen, Screen::Connect(_));
+        let main = if is_connect {
+            main_chunks[0]
+        } else {
+            let search_active =
+                matches!(app.mode, Mode::Search) && !matches!(app.screen, Screen::Help);
+            let inner_w = main_chunks[0].width.saturating_sub(2).max(1) as usize;
+            let search_height = if search_active {
+                let total_chars = 3 + app.search_query.len();
+                let lines = total_chars.div_ceil(inner_w);
+                (lines as u16 + 2).clamp(3, 8)
             } else {
-                // Phase 2: Inside Table View -> Default 15% Menu : 85% Preview (Resizable)
-                let menu_pct = if app.main_panel_pct > 30 {
-                    15
-                } else {
-                    app.main_panel_pct.clamp(8, 30)
-                };
-                let main_chunks = Layout::horizontal([
-                    Constraint::Percentage(menu_pct),
-                    Constraint::Percentage(100 - menu_pct),
-                ])
-                .split(outer_chunks[0]);
+                3
+            };
 
-                let menu_area = main_chunks[0];
-                let preview_column = main_chunks[1];
+            let left_chunks = Layout::vertical([
+                Constraint::Length(search_height),
+                Constraint::Length(3),
+                Constraint::Min(0),
+            ])
+            .split(main_chunks[0]);
 
-                let search_active = matches!(app.mode, Mode::Search);
-                let query_active = matches!(app.mode, Mode::QueryInput);
-                let inner_w = preview_column.width.saturating_sub(2).max(1) as usize;
+            render_search_bar(frame, left_chunks[0], app);
+            render_phase1_count_box(frame, left_chunks[1], effective_screen, &app.search_query);
+            left_chunks[2]
+        };
 
-                let search_height = if search_active {
-                    let total_chars = 3 + app.search_query.len();
-                    let lines = total_chars.div_ceil(inner_w);
-                    (lines as u16 + 2).clamp(3, 8)
-                } else {
-                    3
-                };
+        let main_is_active = true;
 
-                let selected_idx = match &app.screen {
-                    Screen::Actions(a) => a.selected,
-                    _ => 0,
-                };
+        match effective_screen {
+            Screen::Connect(state) => {
+                screens::connect::render(frame, main, state, spinner(app));
+            }
+            Screen::Catalog(state) => {
+                screens::catalog::render(
+                    frame,
+                    main,
+                    state,
+                    if matches!(app.screen, Screen::Help) {
+                        ""
+                    } else {
+                        &app.search_query
+                    },
+                    main_is_active,
+                    app,
+                );
+            }
+            Screen::Schema(state) => {
+                screens::schema::render(
+                    frame,
+                    main,
+                    state,
+                    if matches!(app.screen, Screen::Help) {
+                        ""
+                    } else {
+                        &app.search_query
+                    },
+                    main_is_active,
+                    app,
+                );
+            }
+            Screen::Table(state) => {
+                screens::table::render(
+                    frame,
+                    main,
+                    state,
+                    if matches!(app.screen, Screen::Help) {
+                        ""
+                    } else {
+                        &app.search_query
+                    },
+                    main_is_active,
+                    app,
+                );
+            }
+            _ => {}
+        }
+    } else {
+        // Phase 2: Inside Table View -> Default 15% Menu : 85% Preview (Resizable)
+        let menu_pct = if app.main_panel_pct > 30 {
+            15
+        } else {
+            app.main_panel_pct.clamp(8, 30)
+        };
+        let main_chunks = Layout::horizontal([
+            Constraint::Percentage(menu_pct),
+            Constraint::Percentage(100 - menu_pct),
+        ])
+        .split(outer_chunks[0]);
 
-                let query_height = if query_active {
-                    let total_chars = 7 + match &app.screen {
-                        Screen::Actions(a) => a
-                            .results
-                            .as_ref()
-                            .map(|r| r.query_buffer.len())
-                            .unwrap_or_else(|| a.query_buffer.len()),
-                        _ => 0,
+        let menu_area = main_chunks[0];
+        let preview_column = main_chunks[1];
+
+        let query_active = matches!(app.mode, Mode::QueryInput);
+        let inner_w = preview_column.width.saturating_sub(2).max(1) as usize;
+
+        let selected_idx = match effective_screen {
+            Screen::Actions(a) => a.selected,
+            _ => 0,
+        };
+
+        let query_height = if query_active {
+            let total_chars = 7 + match effective_screen {
+                Screen::Actions(a) => {
+                    let is_partitions_or_schema = matches!(
+                        crate::app::ACTIONS.get(a.selected).map(|(_, _, act)| act),
+                        Some(crate::app::Action::Partitions | crate::app::Action::Schema)
+                    );
+                    if !is_partitions_or_schema && let Some(ref r) = a.results {
+                        r.query_buffer.len()
+                    } else {
+                        a.query_buffer.len()
+                    }
+                }
+                _ => 0,
+            };
+            let lines = total_chars.div_ceil(inner_w);
+            (lines as u16 + 2).clamp(3, 7)
+        } else {
+            3
+        };
+
+        let preview_chunks = Layout::vertical([
+            Constraint::Length(query_height),
+            Constraint::Length(3),
+            Constraint::Min(0),
+        ])
+        .split(preview_column);
+
+        render_query_bar(frame, preview_chunks[0], app);
+        if let Screen::Actions(state) = effective_screen {
+            render_actions_count_box(frame, preview_chunks[1], app, state);
+        }
+        let preview_pane_area = preview_chunks[2];
+
+        let menu_is_active = app.active_panel == ActivePanel::MenuPane;
+        let preview_is_active = app.active_panel == ActivePanel::MainViewer;
+
+        if let Screen::Actions(state) = effective_screen {
+            screens::actions::render(
+                frame,
+                menu_area,
+                &state.catalog,
+                &state.schema,
+                &state.table,
+                state.selected,
+                menu_is_active,
+                app,
+            );
+        }
+
+        if selected_idx < crate::app::ACTIONS.len() {
+            let action = &crate::app::ACTIONS[selected_idx].2;
+            let table_name = match effective_screen {
+                Screen::Actions(a) => a.table.as_str(),
+                _ => "",
+            };
+
+            match action {
+                crate::app::Action::Partitions => {
+                    if app.loading {
+                        let title = format!(" Preview — {table_name} (Partitions) ");
+                        let block = Block::default()
+                            .title(title)
+                            .borders(Borders::ALL)
+                            .border_type(BorderType::Rounded)
+                            .border_style(theme::border_style(preview_is_active));
+                        let inner = block.inner(preview_pane_area);
+                        frame.render_widget(block, preview_pane_area);
+                        let spin = spinner(app);
+                        let spin_text = Paragraph::new(Line::from(vec![
+                            Span::styled(format!(" [{spin}] "), theme::warning_bold_style()),
+                            Span::styled(
+                                "FETCHING PARTITION METADATA...",
+                                theme::info_bold_style(),
+                            ),
+                        ]))
+                        .alignment(Alignment::Center);
+                        frame.render_widget(spin_text, inner);
+                    } else if !app.partition_tree_lines.is_empty() {
+                        screens::partition_tree::render(
+                            frame,
+                            preview_pane_area,
+                            &app.partition_tree_lines,
+                            table_name,
+                            app.partition_scroll,
+                            preview_is_active,
+                            app,
+                        );
+                    } else {
+                        render_placeholder_preview(
+                            frame,
+                            preview_pane_area,
+                            table_name,
+                            selected_idx,
+                            preview_is_active,
+                        );
+                    }
+                }
+                crate::app::Action::Schema => {
+                    if app.loading {
+                        let title = format!(" Preview — {table_name} (Schema) ");
+                        let block = Block::default()
+                            .title(title)
+                            .borders(Borders::ALL)
+                            .border_type(BorderType::Rounded)
+                            .border_style(theme::border_style(preview_is_active));
+                        let inner = block.inner(preview_pane_area);
+                        frame.render_widget(block, preview_pane_area);
+                        let spin = spinner(app);
+                        let spin_text = Paragraph::new(Line::from(vec![
+                            Span::styled(format!(" [{spin}] "), theme::warning_bold_style()),
+                            Span::styled("FETCHING SCHEMA METADATA...", theme::info_bold_style()),
+                        ]))
+                        .alignment(Alignment::Center);
+                        frame.render_widget(spin_text, inner);
+                    } else if !app.vertical_schema_cols.is_empty() {
+                        screens::vertical_schema::render(
+                            frame,
+                            preview_pane_area,
+                            &app.vertical_schema_cols,
+                            table_name,
+                            app.schema_scroll,
+                            preview_is_active,
+                            app,
+                        );
+                    } else {
+                        render_placeholder_preview(
+                            frame,
+                            preview_pane_area,
+                            table_name,
+                            selected_idx,
+                            preview_is_active,
+                        );
+                    }
+                }
+                crate::app::Action::TableView => {
+                    let drilldown_browsing = match effective_screen {
+                        Screen::Actions(state) => {
+                            state.drilldown.as_ref().filter(|d| !d.is_leaf()).cloned()
+                        }
+                        _ => None,
                     };
-                    let lines = total_chars.div_ceil(inner_w);
-                    (lines as u16 + 2).clamp(3, 7)
-                } else {
-                    3
-                };
-
-                let preview_chunks = Layout::vertical([
-                    Constraint::Length(search_height),
-                    Constraint::Length(query_height),
-                    Constraint::Min(0),
-                ])
-                .split(preview_column);
-
-                render_search_bar(frame, preview_chunks[0], app);
-                render_query_bar(frame, preview_chunks[1], app);
-                let preview_pane_area = preview_chunks[2];
-
-                let menu_is_active = app.active_panel == ActivePanel::MenuPane;
-                let preview_is_active = app.active_panel == ActivePanel::MainViewer;
-
-                if let Screen::Actions(state) = &app.screen {
-                    screens::actions::render(
+                    if let Some(dd) = drilldown_browsing {
+                        screens::drilldown::render(
+                            frame,
+                            preview_pane_area,
+                            table_name,
+                            &dd,
+                            preview_is_active,
+                            app,
+                        );
+                    } else {
+                        render_default_results_preview(
+                            frame,
+                            preview_pane_area,
+                            app,
+                            app.loading,
+                            spinner(app),
+                            table_name,
+                            selected_idx,
+                            preview_is_active,
+                        );
+                    }
+                }
+                crate::app::Action::TableDDL => {
+                    let ddl_text = match effective_screen {
+                        Screen::Actions(a) => a.metadata.as_ref().map(|m| m.ddl_text.clone()),
+                        _ => None,
+                    };
+                    if app.loading {
+                        let title = format!(" Preview — {table_name} (Table DDL) ");
+                        let block = Block::default()
+                            .title(title)
+                            .borders(Borders::ALL)
+                            .border_type(BorderType::Rounded)
+                            .border_style(theme::border_style(preview_is_active));
+                        let inner = block.inner(preview_pane_area);
+                        frame.render_widget(block, preview_pane_area);
+                        let spin = spinner(app);
+                        let spin_text = Paragraph::new(Line::from(vec![
+                            Span::styled(format!(" [{spin}] "), theme::warning_bold_style()),
+                            Span::styled("FETCHING TABLE DDL...", theme::info_bold_style()),
+                        ]))
+                        .alignment(Alignment::Center);
+                        frame.render_widget(spin_text, inner);
+                    } else if let Some(ddl_text) = ddl_text {
+                        let title = format!(" Preview — {table_name} (Table DDL) ");
+                        let block = Block::default()
+                            .title(title)
+                            .borders(Borders::ALL)
+                            .border_type(BorderType::Rounded)
+                            .border_style(theme::border_style(preview_is_active));
+                        let inner = block.inner(preview_pane_area);
+                        frame.render_widget(block, preview_pane_area);
+                        let paragraph = Paragraph::new(ddl_text).style(theme::detail_style());
+                        frame.render_widget(paragraph, inner);
+                    } else {
+                        render_default_results_preview(
+                            frame,
+                            preview_pane_area,
+                            app,
+                            app.loading,
+                            spinner(app),
+                            table_name,
+                            selected_idx,
+                            preview_is_active,
+                        );
+                    }
+                }
+                _ => {
+                    render_default_results_preview(
                         frame,
-                        menu_area,
-                        &state.catalog,
-                        &state.schema,
-                        &state.table,
-                        state.selected,
-                        menu_is_active,
+                        preview_pane_area,
                         app,
+                        app.loading,
+                        spinner(app),
+                        table_name,
+                        selected_idx,
+                        preview_is_active,
                     );
                 }
-
-                if selected_idx < crate::app::ACTIONS.len() {
-                    let action = &crate::app::ACTIONS[selected_idx].2;
-                    let table_name = match &app.screen {
-                        Screen::Actions(a) => a.table.as_str(),
-                        _ => "",
-                    };
-
-                    match action {
-                        crate::app::Action::Partitions => {
-                            if app.loading && selected_idx == 6 {
-                                let title = format!(" Preview — {table_name} (Partitions) ");
-                                let block = Block::default()
-                                    .title(title)
-                                    .borders(Borders::ALL)
-                                    .border_type(BorderType::Rounded)
-                                    .border_style(theme::border_style(preview_is_active));
-                                let inner = block.inner(preview_pane_area);
-                                frame.render_widget(block, preview_pane_area);
-                                let spin = spinner(app);
-                                let spin_text = Paragraph::new(Line::from(vec![
-                                    Span::styled(
-                                        format!(" [{spin}] "),
-                                        theme::warning_bold_style(),
-                                    ),
-                                    Span::styled(
-                                        "FETCHING PARTITION METADATA...",
-                                        theme::info_bold_style(),
-                                    ),
-                                ]))
-                                .alignment(Alignment::Center);
-                                frame.render_widget(spin_text, inner);
-                            } else if !app.partition_tree_lines.is_empty() {
-                                screens::partition_tree::render(
-                                    frame,
-                                    preview_pane_area,
-                                    &app.partition_tree_lines,
-                                    table_name,
-                                    app.partition_scroll,
-                                    preview_is_active,
-                                    app,
-                                );
-                            } else {
-                                render_placeholder_preview(
-                                    frame,
-                                    preview_pane_area,
-                                    table_name,
-                                    selected_idx,
-                                    preview_is_active,
-                                );
-                            }
-                        }
-                        crate::app::Action::Schema => {
-                            if app.loading && selected_idx == 7 {
-                                let title = format!(" Preview — {table_name} (Schema) ");
-                                let block = Block::default()
-                                    .title(title)
-                                    .borders(Borders::ALL)
-                                    .border_type(BorderType::Rounded)
-                                    .border_style(theme::border_style(preview_is_active));
-                                let inner = block.inner(preview_pane_area);
-                                frame.render_widget(block, preview_pane_area);
-                                let spin = spinner(app);
-                                let spin_text = Paragraph::new(Line::from(vec![
-                                    Span::styled(
-                                        format!(" [{spin}] "),
-                                        theme::warning_bold_style(),
-                                    ),
-                                    Span::styled(
-                                        "FETCHING SCHEMA METADATA...",
-                                        theme::info_bold_style(),
-                                    ),
-                                ]))
-                                .alignment(Alignment::Center);
-                                frame.render_widget(spin_text, inner);
-                            } else if !app.vertical_schema_cols.is_empty() {
-                                screens::vertical_schema::render(
-                                    frame,
-                                    preview_pane_area,
-                                    &app.vertical_schema_cols,
-                                    table_name,
-                                    app.schema_scroll,
-                                    preview_is_active,
-                                    app,
-                                );
-                            } else {
-                                render_placeholder_preview(
-                                    frame,
-                                    preview_pane_area,
-                                    table_name,
-                                    selected_idx,
-                                    preview_is_active,
-                                );
-                            }
-                        }
-                        crate::app::Action::TableView => {
-                            let drilldown_browsing = match &app.screen {
-                                Screen::Actions(state) => {
-                                    state.drilldown.as_ref().filter(|d| !d.is_leaf()).cloned()
-                                }
-                                _ => None,
-                            };
-                            if let Some(dd) = drilldown_browsing {
-                                screens::drilldown::render(
-                                    frame,
-                                    preview_pane_area,
-                                    table_name,
-                                    &dd,
-                                    preview_is_active,
-                                    app,
-                                );
-                            } else {
-                                render_default_results_preview(
-                                    frame,
-                                    preview_pane_area,
-                                    app,
-                                    app.loading,
-                                    spinner(app),
-                                    table_name,
-                                    selected_idx,
-                                    preview_is_active,
-                                );
-                            }
-                        }
-                        crate::app::Action::TableDDL => {
-                            let ddl_text = match &app.screen {
-                                Screen::Actions(a) => {
-                                    a.metadata.as_ref().map(|m| m.ddl_text.clone())
-                                }
-                                _ => None,
-                            };
-                            if app.loading && selected_idx == 1 {
-                                let title = format!(" Preview — {table_name} (Table DDL) ");
-                                let block = Block::default()
-                                    .title(title)
-                                    .borders(Borders::ALL)
-                                    .border_type(BorderType::Rounded)
-                                    .border_style(theme::border_style(preview_is_active));
-                                let inner = block.inner(preview_pane_area);
-                                frame.render_widget(block, preview_pane_area);
-                                let spin = spinner(app);
-                                let spin_text = Paragraph::new(Line::from(vec![
-                                    Span::styled(
-                                        format!(" [{spin}] "),
-                                        theme::warning_bold_style(),
-                                    ),
-                                    Span::styled("FETCHING TABLE DDL...", theme::info_bold_style()),
-                                ]))
-                                .alignment(Alignment::Center);
-                                frame.render_widget(spin_text, inner);
-                            } else if let Some(ddl_text) = ddl_text {
-                                let title = format!(" Preview — {table_name} (Table DDL) ");
-                                let block = Block::default()
-                                    .title(title)
-                                    .borders(Borders::ALL)
-                                    .border_type(BorderType::Rounded)
-                                    .border_style(theme::border_style(preview_is_active));
-                                let inner = block.inner(preview_pane_area);
-                                frame.render_widget(block, preview_pane_area);
-                                let paragraph =
-                                    Paragraph::new(ddl_text).style(theme::detail_style());
-                                frame.render_widget(paragraph, inner);
-                            } else {
-                                render_default_results_preview(
-                                    frame,
-                                    preview_pane_area,
-                                    app,
-                                    app.loading,
-                                    spinner(app),
-                                    table_name,
-                                    selected_idx,
-                                    preview_is_active,
-                                );
-                            }
-                        }
-                        _ => {
-                            render_default_results_preview(
-                                frame,
-                                preview_pane_area,
-                                app,
-                                app.loading,
-                                spinner(app),
-                                table_name,
-                                selected_idx,
-                                preview_is_active,
-                            );
-                        }
-                    }
-                }
             }
-
-            if bottom_chunks[0].height > 0 {
-                screens::query_inspector::render(frame, bottom_chunks[0], app);
-            }
-            render_footer(frame, bottom_chunks[1], app);
         }
     }
 
+    if bottom_chunks[0].height > 0 {
+        screens::query_inspector::render(frame, bottom_chunks[0], app);
+    }
+    render_footer(frame, bottom_chunks[1], app);
+
     render_copied_toast(frame, frame.area(), app);
+    if let Some(ref modal) = app.filter_modal {
+        screens::filter_modal::render(frame, frame.area(), modal);
+    }
+    if let Some(ref modal) = app.column_modal {
+        let has_filter = |col: &str| {
+            if let Screen::Actions(a) = effective_screen
+                && let Some(ref res) = a.results
+            {
+                res.column_filters.contains_key(col)
+            } else {
+                false
+            }
+        };
+        screens::column_modal::render(frame, frame.area(), modal, has_filter);
+    }
+    if let Some(ref modal) = app.help_modal {
+        screens::help::render_modal(
+            frame,
+            frame.area(),
+            &modal.search_query,
+            modal.is_searching,
+            modal.scroll,
+        );
+    } else if matches!(app.screen, Screen::Help) {
+        let is_searching = matches!(app.mode, Mode::Search);
+        screens::help::render_modal(
+            frame,
+            frame.area(),
+            &app.search_query,
+            is_searching,
+            app.help_scroll,
+        );
+    }
+    if let Some(ref modal) = app.saved_views_modal {
+        screens::saved_views_modal::render(frame, frame.area(), modal);
+    }
+    if let Some(ref prompt) = app.save_view_prompt {
+        screens::saved_views_modal::render_save_prompt(frame, frame.area(), prompt);
+    }
 }
 
 #[cfg(test)]
@@ -414,7 +459,7 @@ pub mod toast_border_regression {
         terminal.draw(|f| ui(f, &app)).unwrap();
         let buf = terminal.backend().buffer().clone();
 
-        for y in [0u16, 3u16] {
+        for y in [0u16] {
             let mut corner_x = None;
             for x in (0..200u16).rev() {
                 let sym = buf.cell((x, y)).unwrap().symbol().to_string();
@@ -530,7 +575,7 @@ pub mod query_bar_height_regression {
         terminal.draw(|f| ui(f, &app)).unwrap();
         let buf = terminal.backend().buffer().clone();
 
-        let query_bar_top = 3u16;
+        let query_bar_top = 0u16;
         let mut bottom_y = query_bar_top;
         for y in query_bar_top..40u16 {
             let has_corner = (0..120u16).any(|x| buf.cell((x, y)).unwrap().symbol() == "╰");
@@ -568,7 +613,7 @@ pub mod query_bar_height_regression {
         terminal.draw(|f| ui(f, &app)).unwrap();
         let buf = terminal.backend().buffer().clone();
 
-        let query_bar_top = 3u16;
+        let query_bar_top = 0u16;
         let mut bottom_y = query_bar_top;
         for y in query_bar_top..40u16 {
             let has_corner = (0..120u16).any(|x| buf.cell((x, y)).unwrap().symbol() == "╰");
@@ -581,6 +626,154 @@ pub mod query_bar_height_regression {
         assert_eq!(
             height, 3,
             "short query should keep 3-row height, got {height}"
+        );
+    }
+}
+
+#[cfg(test)]
+pub mod help_modal_overlay_regression {
+    use super::*;
+    use crate::app::{ActionState, App, HelpModalState, Mode, ResultsState};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn help_modal_renders_on_top_without_hiding_table_view_or_query_bar() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".into(),
+            schema: "analytics".into(),
+            table: "customers".into(),
+            selected: 0,
+            query_buffer: "SELECT id, name FROM customers".into(),
+            query_cursor: 30,
+            results: Some(ResultsState {
+                query_buffer: "SELECT id, name FROM customers".into(),
+                query_cursor: 30,
+                columns: vec!["id".into(), "name".into()],
+                rows: vec![vec!["1".into(), "Alice".into()]],
+                is_paginated: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        app.main_panel_pct = 15;
+        app.mode = Mode::HelpModal;
+        app.help_modal = Some(HelpModalState::default());
+
+        let backend = TestBackend::new(140, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let mut found_query = false;
+        let mut found_table_content = false;
+        let mut found_help_modal = false;
+
+        for y in 0..40 {
+            let row_str: String = (0..140)
+                .map(|x| buf.cell((x, y)).unwrap().symbol())
+                .collect();
+            if row_str.contains("SELECT id, name FROM customers") {
+                found_query = true;
+            }
+            if row_str.contains("Table Query Bar") {
+                assert!(!row_str.contains("Disabled"));
+            }
+            if row_str.contains("Alice") || row_str.contains("customers") {
+                found_table_content = true;
+            }
+            if row_str.contains("Help & Keybindings") {
+                found_help_modal = true;
+            }
+        }
+
+        assert!(
+            found_query,
+            "query buffer should remain visible in query bar behind help modal"
+        );
+        assert!(
+            found_table_content,
+            "table content should remain visible behind help modal"
+        );
+        assert!(found_help_modal, "help modal should render floating on top");
+    }
+}
+
+#[cfg(test)]
+pub mod count_box_layout_regression {
+    use super::*;
+    use crate::app::{ActionState, App, ResultsState};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn count_box_renders_between_query_bar_and_table_results() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".into(),
+            schema: "analytics".into(),
+            table: "customers".into(),
+            selected: 0,
+            query_buffer: "SELECT id, name FROM customers".into(),
+            query_cursor: 30,
+            results: Some(ResultsState {
+                query_buffer: "SELECT id, name FROM customers".into(),
+                query_cursor: 30,
+                columns: vec!["id".into(), "name".into()],
+                rows: vec![vec!["1".into(), "Alice".into()]],
+                is_paginated: true,
+                total_count: Some(25000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        app.main_panel_pct = 15;
+
+        let backend = TestBackend::new(140, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let mut query_bar_row = None;
+        let mut count_box_row = None;
+        let mut table_results_row = None;
+
+        for y in 0..40 {
+            let row_str: String = (22..140)
+                .map(|x| buf.cell((x, y)).unwrap().symbol())
+                .collect();
+            if row_str.contains("Table Query Bar") && query_bar_row.is_none() {
+                query_bar_row = Some(y);
+            }
+            if row_str.contains("Dataset Records") && count_box_row.is_none() {
+                count_box_row = Some(y);
+            }
+            if (row_str.contains("Query Results") || row_str.contains("Infinite Scroll"))
+                && table_results_row.is_none()
+            {
+                table_results_row = Some(y);
+            }
+        }
+
+        let qy = query_bar_row.expect("query bar should be rendered");
+        let cy = count_box_row.expect("count box should be rendered");
+        let ty = table_results_row.expect("table results should be rendered");
+
+        assert!(
+            qy < cy,
+            "query bar (y={qy}) should be above count box (y={cy})"
+        );
+        assert!(
+            cy < ty,
+            "count box (y={cy}) should be above table results (y={ty})"
+        );
+
+        // Verify content inside count box line (cy + 1)
+        let count_line: String = (0..140)
+            .map(|x| buf.cell((x, cy + 1)).unwrap().symbol())
+            .collect();
+        assert!(
+            count_line.contains("1 rows loaded of 25,000 total"),
+            "count line must contain formatted numbers: {count_line}"
         );
     }
 }

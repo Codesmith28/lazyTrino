@@ -23,10 +23,10 @@ Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[C
 |   [c] Table DDL                  +----------------------------------------------------------------+
 |   [i] Info Schema                |  Preview — <table_name> (Table View Mode)                      |
 |   [s] Show Stats                 |                                                                |
-|   [n] Count                      |  +----+-------------+--------------+                           |
-|   [p] Sample Mode (20 rows)      |  | id | name        | status       |                           |
-|   [P] Partitions                 |  +----+-------------+--------------+                           |
-|   [S] Schema                     |  | 1  | Alice       | ACTIVE       |                           |
+|   [p] Sample Mode (20 rows)      |  +----+-------------+--------------+                           |
+|   [P] Partitions                 |  | id | name        | status       |                           |
+|   [S] Schema                     |  +----+-------------+--------------+                           |
+|                                  |  | 1  | Alice       | ACTIVE       |                           |
 |                                  |  | 2  | Bob         | INACTIVE     |                           |
 |                                  |  +----+-------------+--------------+                           |
 +----------------------------------+----------------------------------------------------------------+
@@ -43,11 +43,10 @@ Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[C
 - 🗂️ **Hierarchical Catalog Navigation**: Seamlessly drill down from Catalogs $\rightarrow$ Schemas $\rightarrow$ Tables $\rightarrow$ Table Actions.
 - 🔍 **Centralized Real-Time Search (`/`)**: Filter catalogs, schemas, tables, and columns instantly across the active hierarchy.
 - ⚡ **Quick Table Actions**:
-  - `v` **Table View Mode**: Full interactive table browser with infinite scroll.
+  - `v` **Table View Mode**: Full interactive table browser with infinite scroll, hierarchical partition drilldown, and parallelized live record counts for full tables, partitions, and sub-partitions.
   - `c` **Table DDL**: `SHOW CREATE TABLE` statement.
   - `i` **Information Schema**: Column metadata from `information_schema.columns`.
   - `s` **Show Statistics**: Trino table statistics (`SHOW STATS FOR table`).
-  - `n` **Row Count**: `COUNT(*)` execution.
   - `p` **Sample Mode**: Preview sample of 20 rows.
   - `P` **Partition Tree**: Interactive partition hierarchy and file paths.
   - `S` **Vertical Schema**: Column-by-column vertical schema inspector.
@@ -164,11 +163,10 @@ When a table is selected, press the corresponding action hotkey:
 
 | Key | Action | Description |
 | --- | --- | --- |
-| `v` | Table View | Open interactive dataset viewer with infinite scroll |
+| `v` | Table View | Open interactive dataset viewer with partition drilldown & live counts |
 | `c` | DDL | Execute `SHOW CREATE TABLE` |
 | `i` | Info Schema | Query `information_schema.columns` metadata |
 | `s` | Show Stats | Execute `SHOW STATS FOR table` |
-| `n` | Row Count | Execute `SELECT COUNT(*)` |
 | `p` | Sample | Preview 20 sample rows |
 | `P` | Partition Tree | Render interactive partition tree |
 | `S` | Vertical Schema | View vertical column metadata inspector |
@@ -180,7 +178,7 @@ When a table is selected, press the corresponding action hotkey:
 | `j` / `k` or `↓` / `↑` | Scroll result table vertically |
 | `<` / `>` | Scroll result table horizontally |
 | `g` / `G` | Jump to top / bottom of loaded results |
-| `y` | Copy current results to clipboard as TSV |
+| `y` | Copy current results to clipboard as CSV |
 | `Y` | Export current results to a CSV file |
 | `q` or `:` | Focus Interactive SQL Query Bar |
 | `Enter` *(Query Bar)* | Execute SQL query |

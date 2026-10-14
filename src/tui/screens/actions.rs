@@ -47,31 +47,30 @@ pub fn render(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let avail_w = (inner.width.saturating_sub(1) as usize).max(10);
     let items: Vec<ListItem> = ACTIONS
         .iter()
         .enumerate()
         .map(|(i, (key, label, _))| {
             let item_y = inner.y + i as u16;
-            // Gate stale mouse hover/click highlighting by pane focus: once
-            // the user moves focus to another pane (via keyboard), a row
-            // clicked earlier in this pane must stop appearing selected —
-            // otherwise it stays highlighted forever since the underlying
-            // anchor/current coordinates are only cleared by the *next*
-            // mouse click, not by any keyboard-driven focus change.
             let is_mouse_sel =
                 is_active && app.is_area_mouse_selected(inner.x, inner.width, item_y);
 
             let is_selected = i == selected;
-            let prefix = if is_selected { "▸ " } else { "  " };
-            let text = format!("{prefix}[{key}] {label}");
-            let line = if is_mouse_sel {
-                Line::styled(text, theme::selection_style())
-            } else if is_selected {
-                Line::styled(text, theme::selection_style_for(is_active))
-            } else {
-                Line::styled(text, theme::text_style())
-            };
-            ListItem::new(line)
+            let raw_lines = wrap_action_item(*key, label, is_selected, avail_w);
+            let styled_lines: Vec<Line> = raw_lines
+                .into_iter()
+                .map(|t| {
+                    if is_mouse_sel {
+                        Line::styled(t, theme::selection_style())
+                    } else if is_selected {
+                        Line::styled(t, theme::selection_style_for(is_active))
+                    } else {
+                        Line::styled(t, theme::text_style())
+                    }
+                })
+                .collect();
+            ListItem::new(styled_lines)
         })
         .collect();
 
@@ -92,5 +91,60 @@ pub fn render(
             inner,
             &mut scrollbar_state,
         );
+    }
+}
+
+pub fn wrap_action_item(
+    key: char,
+    label: &str,
+    is_selected: bool,
+    max_width: usize,
+) -> Vec<String> {
+    let prefix = if is_selected { "▸ " } else { "  " };
+    let lead = format!("{prefix}[{key}] ");
+    if max_width <= lead.len() + 3 {
+        return vec![format!("{lead}{label}")];
+    }
+    let content_w = max_width.saturating_sub(lead.len());
+    let words = crate::tui::screens::results::wrap_text(label, content_w);
+    let mut lines = Vec::new();
+    for (i, part) in words.into_iter().enumerate() {
+        if i == 0 {
+            lines.push(format!("{lead}{part}"));
+        } else {
+            lines.push(format!("{:indent$}{part}", "", indent = lead.len()));
+        }
+    }
+    if lines.is_empty() {
+        vec![format!("{lead}{label}")]
+    } else {
+        lines
+    }
+}
+
+pub fn item_line_counts(width: u16) -> Vec<usize> {
+    let avail_w = (width.saturating_sub(1) as usize).max(10);
+    ACTIONS
+        .iter()
+        .map(|(key, label, _)| wrap_action_item(*key, label, false, avail_w).len())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wrap_action_item_fits_on_one_line() {
+        let lines = wrap_action_item('v', "Table View Mode", false, 40);
+        assert_eq!(lines, vec!["  [v] Table View Mode"]);
+    }
+
+    #[test]
+    fn test_wrap_action_item_wraps_when_narrow() {
+        let lines = wrap_action_item('m', "Sample Mode (20 rows)", true, 16);
+        assert!(lines.len() >= 2);
+        assert!(lines[0].starts_with("▸ [m] "));
+        assert!(lines[1].starts_with("      "));
     }
 }

@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::{HashMap, HashSet};
+
+use crate::app::ColumnFilter;
+
 fn q(id: &str) -> String {
     format!("\"{}\"", id.trim().replace('"', "\"\""))
 }
@@ -57,13 +61,25 @@ pub fn show_stats(catalog: &str, schema: &str, table: &str) -> String {
     format!("SHOW STATS FOR {}.{}.{}", q(catalog), q(schema), q(table))
 }
 
-pub fn count(catalog: &str, schema: &str, table: &str) -> String {
+pub fn filtered_count(
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    filters: &[(String, String)],
+) -> String {
+    let where_clause = build_where_clause(filters)
+        .map(|c| format!(" WHERE {c}"))
+        .unwrap_or_default();
     format!(
-        "SELECT COUNT(*) AS total_records FROM {}.{}.{}",
+        "SELECT COUNT(*) AS total_records FROM {}.{}.{}{where_clause}",
         q(catalog),
         q(schema),
         q(table)
     )
+}
+
+pub fn count(catalog: &str, schema: &str, table: &str) -> String {
+    filtered_count(catalog, schema, table, &[])
 }
 
 pub fn sample(catalog: &str, schema: &str, table: &str) -> String {
@@ -228,6 +244,500 @@ pub fn partitions(catalog: &str, schema: &str, table: &str) -> String {
     )
 }
 
+pub fn resolve_column_sql_ref(col: &str) -> String {
+    let col = col.trim();
+    if col.starts_with('"') || col.contains('(') || col.contains('[') {
+        col.to_string()
+    } else if let Some((parent, child)) = col.split_once('.') {
+        let path = child.split('.').collect::<Vec<_>>().join(".");
+        format!("json_extract_scalar({}, '$.{}')", q(parent), path)
+    } else {
+        q(col)
+    }
+}
+
+pub fn format_column_filter_predicate(col: &str, filter: &ColumnFilter) -> String {
+    format_column_filter_predicate_with_overrides(col, filter, None)
+}
+
+pub fn format_column_filter_predicate_with_overrides(
+    col: &str,
+    filter: &ColumnFilter,
+    expr_overrides: Option<&HashMap<String, String>>,
+) -> String {
+    let col_ref = if let Some(map) = expr_overrides
+        && let Some(expr) = map.get(col)
+    {
+        expr.clone()
+    } else {
+        resolve_column_sql_ref(col)
+    };
+
+    match filter {
+        ColumnFilter::Numeric(num) => {
+            format!("{col_ref} {} {}", num.op.as_str(), num.raw_value)
+        }
+        ColumnFilter::Values(selected_values) => {
+            format_column_filter_values_predicate_with_ref(&col_ref, selected_values)
+        }
+    }
+}
+
+pub fn format_column_filter_values_predicate(
+    col: &str,
+    selected_values: &HashSet<String>,
+) -> String {
+    let col_ref = resolve_column_sql_ref(col);
+    format_column_filter_values_predicate_with_ref(&col_ref, selected_values)
+}
+
+pub fn format_column_filter_values_predicate_with_ref(
+    col_ref: &str,
+    selected_values: &HashSet<String>,
+) -> String {
+    if selected_values.is_empty() {
+        return "1 = 0".to_string();
+    }
+
+    let mut vals: Vec<&String> = selected_values.iter().collect();
+    vals.sort();
+
+    let has_null = vals
+        .iter()
+        .any(|v| v.eq_ignore_ascii_case("null") || v.is_empty());
+    let non_nulls: Vec<&&String> = vals
+        .iter()
+        .filter(|v| !v.eq_ignore_ascii_case("null") && !v.is_empty())
+        .collect();
+
+    let non_null_predicate = if non_nulls.is_empty() {
+        None
+    } else if non_nulls.len() == 1 {
+        let v = non_nulls[0];
+        if v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false") {
+            Some(format!("{col_ref} = {}", v.to_lowercase()))
+        } else if is_numeric_literal(v) {
+            Some(format!("{col_ref} = {v}"))
+        } else {
+            Some(format!("{col_ref} = '{}'", v.replace('\'', "''")))
+        }
+    } else {
+        let all_numeric = non_nulls.iter().all(|v| is_numeric_literal(v));
+        if all_numeric {
+            let joined = non_nulls
+                .iter()
+                .map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!("{col_ref} IN ({joined})"))
+        } else {
+            let joined = non_nulls
+                .iter()
+                .map(|v| format!("'{}'", v.replace('\'', "''")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!("{col_ref} IN ({joined})"))
+        }
+    };
+
+    match (non_null_predicate, has_null) {
+        (Some(pred), false) => pred,
+        (Some(pred), true) => format!("({pred} OR {col_ref} IS NULL)"),
+        (None, true) => format!("{col_ref} IS NULL"),
+        (None, false) => "1 = 0".to_string(),
+    }
+}
+
+pub fn split_sql_clauses(sql: &str) -> (&str, Option<&str>, &str) {
+    let bytes = sql.as_bytes();
+    let len = bytes.len();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut paren_depth: usize = 0;
+
+    let mut where_pos: Option<usize> = None;
+    let mut trailing_pos: Option<usize> = None;
+
+    let trailing_keywords = ["GROUP BY", "HAVING", "ORDER BY", "OFFSET", "LIMIT"];
+
+    let mut i = 0;
+    while i < len {
+        let b = bytes[i];
+        if b == b'\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            i += 1;
+            continue;
+        }
+        if b == b'"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            i += 1;
+            continue;
+        }
+        if in_single_quote || in_double_quote {
+            i += 1;
+            continue;
+        }
+        if b == b'(' {
+            paren_depth += 1;
+            i += 1;
+            continue;
+        }
+        if b == b')' {
+            paren_depth = paren_depth.saturating_sub(1);
+            i += 1;
+            continue;
+        }
+
+        if paren_depth == 0 {
+            let at_word_start =
+                i == 0 || bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b')';
+            if at_word_start {
+                let rest = &sql[i..];
+                if where_pos.is_none() && rest.len() >= 5 && rest[..5].eq_ignore_ascii_case("WHERE")
+                {
+                    let after = &rest[5..];
+                    if after.is_empty()
+                        || after.as_bytes()[0].is_ascii_whitespace()
+                        || after.as_bytes()[0] == b'('
+                    {
+                        where_pos = Some(i);
+                        i += 5;
+                        continue;
+                    }
+                }
+
+                let mut found_trailing = false;
+                for kw in &trailing_keywords {
+                    if rest.len() >= kw.len() && rest[..kw.len()].eq_ignore_ascii_case(kw) {
+                        let after = &rest[kw.len()..];
+                        if after.is_empty()
+                            || after.as_bytes()[0].is_ascii_whitespace()
+                            || after.as_bytes()[0] == b'('
+                        {
+                            trailing_pos = Some(i);
+                            found_trailing = true;
+                            break;
+                        }
+                    }
+                }
+                if found_trailing {
+                    break;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    match (where_pos, trailing_pos) {
+        (Some(w_start), Some(t_start)) => {
+            let head = sql[..w_start].trim();
+            let where_clause = sql[w_start + 5..t_start].trim();
+            let tail = sql[t_start..].trim();
+            (head, Some(where_clause), tail)
+        }
+        (Some(w_start), None) => {
+            let head = sql[..w_start].trim();
+            let where_clause = sql[w_start + 5..].trim();
+            (head, Some(where_clause), "")
+        }
+        (None, Some(t_start)) => {
+            let head = sql[..t_start].trim();
+            let tail = sql[t_start..].trim();
+            (head, None, tail)
+        }
+        (None, None) => (sql.trim(), None, ""),
+    }
+}
+
+pub fn replace_select_columns(
+    head: &str,
+    visible_columns: &[String],
+    all_columns_count: usize,
+) -> String {
+    replace_select_columns_with_overrides(head, visible_columns, all_columns_count, None)
+}
+
+pub fn replace_select_columns_with_overrides(
+    head: &str,
+    visible_columns: &[String],
+    all_columns_count: usize,
+    expr_overrides: Option<&HashMap<String, String>>,
+) -> String {
+    if visible_columns.len() == all_columns_count || visible_columns.is_empty() {
+        return head.to_string();
+    }
+
+    let upper = head.to_ascii_uppercase();
+    if !upper.starts_with("SELECT ") {
+        return head.to_string();
+    }
+
+    let mut depth: usize = 0;
+    let mut from_pos = None;
+    let bytes = head.as_bytes();
+    let len = bytes.len();
+
+    for i in 6..len {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            _ if depth == 0 && i + 6 <= len && head[i..i + 6].eq_ignore_ascii_case(" FROM ") => {
+                from_pos = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    let Some(f_pos) = from_pos else {
+        return head.to_string();
+    };
+
+    let from_and_rest = &head[f_pos..];
+    let formatted_cols = visible_columns
+        .iter()
+        .map(|c| {
+            if let Some(map) = expr_overrides
+                && let Some(expr) = map.get(c)
+            {
+                format!("{expr} AS {}", q(c))
+            } else if c.starts_with('"') || c.contains('(') || c.contains('[') {
+                c.to_string()
+            } else if let Some((parent, child)) = c.split_once('.') {
+                let path = child.split('.').collect::<Vec<_>>().join(".");
+                format!(
+                    "json_extract_scalar({}, '$.{}') AS {}",
+                    q(parent),
+                    path,
+                    q(c)
+                )
+            } else {
+                q(c)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!("SELECT {formatted_cols}{from_and_rest}")
+}
+
+pub fn build_query_with_all_filters(
+    base_query: &str,
+    all_columns: &[String],
+    hidden_columns: &HashSet<String>,
+    column_filters: &HashMap<String, ColumnFilter>,
+    col_distinct_values: &HashMap<String, Vec<String>>,
+) -> String {
+    build_query_with_all_filters_and_overrides(
+        base_query,
+        all_columns,
+        hidden_columns,
+        column_filters,
+        col_distinct_values,
+        None,
+    )
+}
+
+pub fn build_query_with_all_filters_and_overrides(
+    base_query: &str,
+    all_columns: &[String],
+    hidden_columns: &HashSet<String>,
+    column_filters: &HashMap<String, ColumnFilter>,
+    col_distinct_values: &HashMap<String, Vec<String>>,
+    expr_overrides: Option<&HashMap<String, String>>,
+) -> String {
+    let mut predicates = Vec::new();
+    let mut cols: Vec<&String> = column_filters.keys().collect();
+    cols.sort();
+
+    for col in cols {
+        let filter = &column_filters[col];
+        match filter {
+            ColumnFilter::Values(selected) => {
+                if let Some(distinct) = col_distinct_values.get(col)
+                    && selected.len() == distinct.len()
+                {
+                    continue;
+                }
+                predicates.push(format_column_filter_predicate_with_overrides(
+                    col,
+                    filter,
+                    expr_overrides,
+                ));
+            }
+            ColumnFilter::Numeric(_) => {
+                predicates.push(format_column_filter_predicate_with_overrides(
+                    col,
+                    filter,
+                    expr_overrides,
+                ));
+            }
+        }
+    }
+
+    let (head, existing_where, tail) = split_sql_clauses(base_query);
+
+    let visible_cols: Vec<String> = all_columns
+        .iter()
+        .filter(|c| !hidden_columns.contains(*c))
+        .cloned()
+        .collect();
+    let updated_head = replace_select_columns_with_overrides(
+        head,
+        &visible_cols,
+        all_columns.len(),
+        expr_overrides,
+    );
+
+    let where_clause = match (existing_where, predicates.is_empty()) {
+        (Some(orig), false) if !orig.trim().is_empty() => {
+            let preds = predicates.join(" AND ");
+            format!("WHERE ({}) AND ({})", orig.trim(), preds)
+        }
+        (Some(orig), true) if !orig.trim().is_empty() => {
+            format!("WHERE {}", orig.trim())
+        }
+        (_, false) => {
+            let preds = predicates.join(" AND ");
+            format!("WHERE {preds}")
+        }
+        (_, true) => String::new(),
+    };
+
+    let mut parts = Vec::new();
+    if !updated_head.is_empty() {
+        parts.push(updated_head.as_str());
+    }
+    if !where_clause.is_empty() {
+        parts.push(&where_clause);
+    }
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+    parts.join(" ")
+}
+
+pub fn build_query_with_column_filters(
+    base_query: &str,
+    column_filters: &HashMap<String, ColumnFilter>,
+    col_distinct_values: &HashMap<String, Vec<String>>,
+) -> String {
+    build_query_with_all_filters(
+        base_query,
+        &[],
+        &HashSet::new(),
+        column_filters,
+        col_distinct_values,
+    )
+}
+
+/// Incrementally updates the `LIMIT` clause in a SQL query to `new_limit`.
+///
+/// Accurately parses top-level SQL, ignoring `LIMIT` inside single-quoted strings,
+/// double-quoted identifiers, parentheses (subqueries), and line comments.
+/// If a top-level `LIMIT <n>` clause is present, it replaces `<n>` with `new_limit`
+/// (preserving case, surrounding spacing, and trailing punctuation like `;`).
+/// If no `LIMIT` clause is present, it appends `LIMIT {new_limit}`.
+pub fn update_query_limit(sql: &str, new_limit: usize) -> String {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let bytes = sql.as_bytes();
+    let len = bytes.len();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut paren_depth: usize = 0;
+
+    let mut last_limit_num_range: Option<(usize, usize)> = None;
+
+    let mut i = 0;
+    while i < len {
+        let b = bytes[i];
+
+        // Line comment: -- until end of line
+        if !in_single_quote && !in_double_quote && b == b'-' && i + 1 < len && bytes[i + 1] == b'-'
+        {
+            i += 2;
+            while i < len && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+
+        if b == b'\'' && !in_double_quote {
+            if in_single_quote && i + 1 < len && bytes[i + 1] == b'\'' {
+                i += 2;
+                continue;
+            }
+            in_single_quote = !in_single_quote;
+            i += 1;
+            continue;
+        }
+        if b == b'"' && !in_single_quote {
+            if in_double_quote && i + 1 < len && bytes[i + 1] == b'"' {
+                i += 2;
+                continue;
+            }
+            in_double_quote = !in_double_quote;
+            i += 1;
+            continue;
+        }
+        if in_single_quote || in_double_quote {
+            i += 1;
+            continue;
+        }
+
+        if b == b'(' {
+            paren_depth += 1;
+            i += 1;
+            continue;
+        }
+        if b == b')' {
+            paren_depth = paren_depth.saturating_sub(1);
+            i += 1;
+            continue;
+        }
+
+        if paren_depth == 0 {
+            let at_word_start =
+                i == 0 || bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b')';
+            if at_word_start && i + 5 <= len && sql[i..i + 5].eq_ignore_ascii_case("LIMIT") {
+                let after_kw = i + 5;
+                if after_kw == len || bytes[after_kw].is_ascii_whitespace() {
+                    let mut j = after_kw;
+                    while j < len && bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    let num_start = j;
+                    while j < len && bytes[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    let num_end = j;
+                    if num_end > num_start {
+                        last_limit_num_range = Some((num_start, num_end));
+                        i = num_end;
+                        continue;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    if let Some((num_start, num_end)) = last_limit_num_range {
+        format!("{}{new_limit}{}", &sql[..num_start], &sql[num_end..])
+    } else {
+        let trimmed_end = sql.trim_end();
+        if let Some(stripped) = trimmed_end.strip_suffix(';') {
+            format!("{} LIMIT {new_limit};", stripped.trim_end())
+        } else {
+            format!("{trimmed_end} LIMIT {new_limit}")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +773,11 @@ mod tests {
         assert_eq!(
             count(catalog, schema, table),
             "SELECT COUNT(*) AS total_records FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\""
+        );
+        let filters = vec![("date".to_string(), "2026-08-06".to_string())];
+        assert_eq!(
+            filtered_count(catalog, schema, table, &filters),
+            "SELECT COUNT(*) AS total_records FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\" WHERE date = '2026-08-06'"
         );
         assert_eq!(
             sample(catalog, schema, table),
@@ -395,5 +910,281 @@ mod tests {
         assert!(is_partition_column(&partitioned_by, "account_id"));
         assert!(!is_partition_column(&partitioned_by, "orderkey"));
         assert!(!is_partition_column(&partitioned_by, "extendedprice"));
+    }
+
+    #[test]
+    fn test_format_column_filter_predicate() {
+        let mut set = HashSet::new();
+        set.insert("ACTIVE".to_string());
+        assert_eq!(
+            format_column_filter_predicate("status", &ColumnFilter::Values(set.clone())),
+            "\"status\" = 'ACTIVE'"
+        );
+
+        set.insert("PENDING".to_string());
+        assert_eq!(
+            format_column_filter_predicate("status", &ColumnFilter::Values(set)),
+            "\"status\" IN ('ACTIVE', 'PENDING')"
+        );
+
+        let mut num_set = HashSet::new();
+        num_set.insert("10".to_string());
+        num_set.insert("20".to_string());
+        assert_eq!(
+            format_column_filter_predicate("amount", &ColumnFilter::Values(num_set)),
+            "\"amount\" IN (10, 20)"
+        );
+
+        let mut null_set = HashSet::new();
+        null_set.insert("null".to_string());
+        assert_eq!(
+            format_column_filter_predicate("status", &ColumnFilter::Values(null_set.clone())),
+            "\"status\" IS NULL"
+        );
+
+        null_set.insert("ACTIVE".to_string());
+        assert_eq!(
+            format_column_filter_predicate("status", &ColumnFilter::Values(null_set)),
+            "(\"status\" = 'ACTIVE' OR \"status\" IS NULL)"
+        );
+
+        let empty_set: HashSet<String> = HashSet::new();
+        assert_eq!(
+            format_column_filter_predicate("status", &ColumnFilter::Values(empty_set)),
+            "1 = 0"
+        );
+
+        // Numeric operators: <, <=, >, >=, =
+        use crate::app::{NumericFilter, NumericOp};
+        let lt = ColumnFilter::Numeric(NumericFilter {
+            op: NumericOp::Lt,
+            value: 100.0,
+            raw_value: "100".to_string(),
+        });
+        assert_eq!(
+            format_column_filter_predicate("amount", &lt),
+            "\"amount\" < 100"
+        );
+
+        let lte = ColumnFilter::Numeric(NumericFilter {
+            op: NumericOp::Lte,
+            value: 50.5,
+            raw_value: "50.5".to_string(),
+        });
+        assert_eq!(
+            format_column_filter_predicate("amount", &lte),
+            "\"amount\" <= 50.5"
+        );
+
+        let gt = ColumnFilter::Numeric(NumericFilter {
+            op: NumericOp::Gt,
+            value: 0.0,
+            raw_value: "0".to_string(),
+        });
+        assert_eq!(
+            format_column_filter_predicate("amount", &gt),
+            "\"amount\" > 0"
+        );
+
+        let gte = ColumnFilter::Numeric(NumericFilter {
+            op: NumericOp::Gte,
+            value: 10.0,
+            raw_value: "10".to_string(),
+        });
+        assert_eq!(
+            format_column_filter_predicate("amount", &gte),
+            "\"amount\" >= 10"
+        );
+
+        let eq = ColumnFilter::Numeric(NumericFilter {
+            op: NumericOp::Eq,
+            value: 42.0,
+            raw_value: "42".to_string(),
+        });
+        assert_eq!(
+            format_column_filter_predicate("amount", &eq),
+            "\"amount\" = 42"
+        );
+    }
+
+    #[test]
+    fn test_build_query_with_column_filters() {
+        use crate::app::{NumericFilter, NumericOp};
+        let base_query = "SELECT * FROM \"iceberg\".\"sales\".\"orders\" OFFSET 0 LIMIT 100";
+        let mut filters = HashMap::new();
+        let mut distinct = HashMap::new();
+
+        let mut sel = HashSet::new();
+        sel.insert("ACTIVE".to_string());
+        filters.insert("status".to_string(), ColumnFilter::Values(sel));
+        distinct.insert(
+            "status".to_string(),
+            vec!["ACTIVE".to_string(), "PENDING".to_string()],
+        );
+
+        let sql = build_query_with_column_filters(base_query, &filters, &distinct);
+        assert_eq!(
+            sql,
+            "SELECT * FROM \"iceberg\".\"sales\".\"orders\" WHERE \"status\" = 'ACTIVE' OFFSET 0 LIMIT 100"
+        );
+
+        // When all values selected, no WHERE added
+        let mut all_sel = HashSet::new();
+        all_sel.insert("ACTIVE".to_string());
+        all_sel.insert("PENDING".to_string());
+        filters.insert("status".to_string(), ColumnFilter::Values(all_sel));
+        let sql_all = build_query_with_column_filters(base_query, &filters, &distinct);
+        assert_eq!(sql_all, base_query);
+
+        // Query with existing WHERE and numeric filter
+        let base_with_where = "SELECT * FROM tbl WHERE date = '2026-08-06' OFFSET 0 LIMIT 100";
+        let mut filters2 = HashMap::new();
+        filters2.insert(
+            "amount".to_string(),
+            ColumnFilter::Numeric(NumericFilter {
+                op: NumericOp::Gte,
+                value: 50.0,
+                raw_value: "50".to_string(),
+            }),
+        );
+        let sql_where = build_query_with_column_filters(base_with_where, &filters2, &distinct);
+        assert_eq!(
+            sql_where,
+            "SELECT * FROM tbl WHERE (date = '2026-08-06') AND (\"amount\" >= 50) OFFSET 0 LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn test_replace_select_columns() {
+        let head = "SELECT * FROM \"iceberg\".\"sales\".\"orders\"";
+        let cols = vec!["id".to_string(), "status".to_string()];
+        let replaced = replace_select_columns(head, &cols, 3);
+        assert_eq!(
+            replaced,
+            "SELECT \"id\", \"status\" FROM \"iceberg\".\"sales\".\"orders\""
+        );
+
+        // All columns visible preserves original head
+        let all_cols = vec!["id".to_string(), "status".to_string(), "amount".to_string()];
+        let preserved = replace_select_columns(head, &all_cols, 3);
+        assert_eq!(preserved, head);
+    }
+
+    #[test]
+    fn test_build_query_with_all_filters() {
+        let base_query = "SELECT * FROM orders OFFSET 0 LIMIT 100";
+        let all_cols = vec!["id".to_string(), "status".to_string(), "amount".to_string()];
+        let mut hidden = HashSet::new();
+        hidden.insert("amount".to_string());
+
+        let mut filters = HashMap::new();
+        let mut distinct = HashMap::new();
+        let mut sel = HashSet::new();
+        sel.insert("ACTIVE".to_string());
+        filters.insert("status".to_string(), ColumnFilter::Values(sel));
+        distinct.insert(
+            "status".to_string(),
+            vec!["ACTIVE".to_string(), "PENDING".to_string()],
+        );
+
+        let sql = build_query_with_all_filters(base_query, &all_cols, &hidden, &filters, &distinct);
+        assert_eq!(
+            sql,
+            "SELECT \"id\", \"status\" FROM orders WHERE \"status\" = 'ACTIVE' OFFSET 0 LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn test_update_query_limit_replaces_top_level_limit() {
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders OFFSET 0 LIMIT 100", 200),
+            "SELECT * FROM orders OFFSET 0 LIMIT 200"
+        );
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders LIMIT 100", 250),
+            "SELECT * FROM orders LIMIT 250"
+        );
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders limit 100", 300),
+            "SELECT * FROM orders limit 300"
+        );
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders LIMIT 100;", 200),
+            "SELECT * FROM orders LIMIT 200;"
+        );
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders LIMIT   100", 200),
+            "SELECT * FROM orders LIMIT   200"
+        );
+    }
+
+    #[test]
+    fn test_update_query_limit_ignores_quoted_and_subquery_limit() {
+        // Ignores 'LIMIT 50' in string literal
+        let query_with_str = "SELECT * FROM t WHERE comment = 'LIMIT 50' LIMIT 100";
+        assert_eq!(
+            update_query_limit(query_with_str, 200),
+            "SELECT * FROM t WHERE comment = 'LIMIT 50' LIMIT 200"
+        );
+
+        // Ignores inner subquery LIMIT
+        let query_with_sub = "SELECT * FROM (SELECT id FROM t LIMIT 10) AS s LIMIT 100";
+        assert_eq!(
+            update_query_limit(query_with_sub, 200),
+            "SELECT * FROM (SELECT id FROM t LIMIT 10) AS s LIMIT 200"
+        );
+    }
+
+    #[test]
+    fn test_update_query_limit_appends_when_absent() {
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders", 200),
+            "SELECT * FROM orders LIMIT 200"
+        );
+        assert_eq!(
+            update_query_limit("SELECT * FROM orders;", 200),
+            "SELECT * FROM orders LIMIT 200;"
+        );
+    }
+
+    #[test]
+    fn test_build_query_with_flattened_nested_fields() {
+        let base_query = "SELECT * FROM orders OFFSET 0 LIMIT 100";
+        let all_cols = vec![
+            "id".to_string(),
+            "meta.user".to_string(),
+            "tags.env".to_string(),
+            "unwanted".to_string(),
+        ];
+        let mut hidden = HashSet::new();
+        hidden.insert("unwanted".to_string());
+
+        let mut expr_overrides = HashMap::new();
+        expr_overrides.insert(
+            "meta.user".to_string(),
+            "json_extract_scalar(\"meta\", '$.user')".to_string(),
+        );
+        expr_overrides.insert("tags.env".to_string(), "\"tags\"['env']".to_string());
+
+        let mut filters = HashMap::new();
+        let mut user_set = HashSet::new();
+        user_set.insert("alice".to_string());
+        filters.insert("meta.user".to_string(), ColumnFilter::Values(user_set));
+
+        let distinct = HashMap::new();
+
+        let sql = build_query_with_all_filters_and_overrides(
+            base_query,
+            &all_cols,
+            &hidden,
+            &filters,
+            &distinct,
+            Some(&expr_overrides),
+        );
+
+        assert_eq!(
+            sql,
+            "SELECT \"id\", json_extract_scalar(\"meta\", '$.user') AS \"meta.user\", \"tags\"['env'] AS \"tags.env\" FROM orders WHERE json_extract_scalar(\"meta\", '$.user') = 'alice' OFFSET 0 LIMIT 100"
+        );
     }
 }

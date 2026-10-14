@@ -29,8 +29,8 @@ This directory contains a fully self-contained **Trino + Iceberg + MinIO** stack
 |---|---|---|
 | `trino` | `trinodb/trino:latest` | Query engine — the main entry point |
 | `iceberg-rest` | `apache/iceberg-rest-fixture` | In-memory Iceberg REST catalog (full REST spec) |
-| `minio` | `minio/minio` | S3-compatible object store — holds Parquet data files |
-| `minio-init` | `minio/mc` | One-shot: creates the `warehouse` bucket on first boot |
+| `minio` | `pgsty/minio` | S3-compatible object store — holds Parquet data files |
+| `minio-init` | `pgsty/mc` | One-shot: creates the `warehouse` bucket on first boot |
 | `init-db` | `trinodb/trino:latest` | One-shot: creates schemas and seeds tables from `init.sql` |
 
 > **Note:** The Iceberg catalog is in-memory. Table metadata resets if `iceberg-rest` is restarted. Run `docker compose up init-db` again to reseed.
@@ -91,6 +91,7 @@ This runs `init.sql` against the live Trino instance and exits. It creates:
 |---|---|---|
 | `iceberg.demo.orders_by_month` | 1,500,000 | `month(orderdate)` |
 | `iceberg.demo.lineitem_partitioned` | 6,001,215 | `year(shipdate)` + `shipmode` |
+| `iceberg.demo.events` | 4 | Unpartitioned — `attributes` (`MAP`) & `payload` (nested `JSON`) for testing column flattening |
 
 You'll see output like:
 
@@ -98,6 +99,8 @@ You'll see output like:
 init-db-1  | CREATE SCHEMA
 init-db-1  | CREATE TABLE: 1500000 rows
 init-db-1  | CREATE TABLE: 6001215 rows
+init-db-1  | CREATE TABLE
+init-db-1  | INSERT: 4 rows
 init-db-1 exited with code 0
 ```
 
@@ -154,7 +157,27 @@ docker exec trino trino --execute "SHOW TABLES FROM iceberg.demo;"
 
 # Check partitions on orders table
 docker exec trino trino --execute "SELECT \$partition, count(*) FROM iceberg.demo.orders_by_month GROUP BY 1 ORDER BY 1 LIMIT 5;"
+
+# Check events table (MAP and nested JSON)
+docker exec trino trino --execute "SELECT * FROM iceberg.demo.events;"
 ```
+
+---
+
+## Testing Nested JSON / MAP Flattening
+
+The `iceberg.demo.events` table contains:
+- `attributes` (`MAP(VARCHAR, VARCHAR)`): Key-value pairs (`env`, `region`, `tier`).
+- `payload` (`VARCHAR` containing JSON): Nested JSON with sub-objects (e.g. `device.os`, `device.version`, `source`, `action`).
+
+**In lazyTrino:**
+1. Navigate to **`iceberg`** $\rightarrow$ **`demo`** $\rightarrow$ **`events`** $\rightarrow$ **`Table View`**.
+2. Nested fields are automatically flattened into virtual columns:
+   - `attributes.env`, `attributes.region`, `attributes.tier`
+   - `payload.source`, `payload.action`, `payload.device.os`, `payload.device.version`
+3. Press **`C`** (Shift+C) to open the **Column Modal Tree View** to toggle visibility of nested fields or entire parent groups.
+4. Press **`f`** / **`F`** to filter on flattened columns.
+
 
 ---
 
@@ -188,7 +211,7 @@ Check the logs: `docker logs trino`. Usually a misconfigured `catalog/iceberg.pr
 `iceberg-rest` may not be fully up. Wait a few seconds and retry: `docker compose up init-db`
 
 **MinIO healthcheck stuck**  
-The MinIO image uses `mc ready local` (not `curl`/`wget`). If you see healthcheck errors, confirm you're using the image pinned in `docker-compose.yml` (`RELEASE.2024-03-30T09-41-56Z`).
+The MinIO image uses `mc ready local` (not `curl`/`wget`). If you see healthcheck errors, confirm you're using the image configured in `docker-compose.yml` (`pgsty/minio:latest`).
 
 **Port conflicts**  
 If `8080`, `8181`, `9000`, or `9001` are in use, update the port mappings in `docker-compose.yml`.

@@ -88,15 +88,18 @@ pub(super) fn handle_search_mode(app: &mut App, key: KeyEvent) -> Option<Command
     match key.code {
         KeyCode::Char(c) if !c.is_ascii_control() => {
             app.search_query.push(c);
+            app.help_scroll = 0;
             super::navigation::reset_list_selected_for_search(app);
         }
         KeyCode::Backspace => {
             app.search_query.pop();
+            app.help_scroll = 0;
             super::navigation::reset_list_selected_for_search(app);
         }
         KeyCode::Enter | KeyCode::Esc => {
             if key.code == KeyCode::Esc {
                 app.search_query.clear();
+                app.help_scroll = 0;
                 super::navigation::reset_list_selected_for_search(app);
             }
             app.mode = Mode::Normal;
@@ -246,7 +249,13 @@ pub(super) fn active_query_state_mut(app: &mut App) -> Option<&mut ResultsState>
 pub(super) fn active_query_buffer(app: &App) -> Option<String> {
     match &app.screen {
         Screen::Actions(action_state) => {
-            if let Some(ref res) = action_state.results {
+            let is_partitions_or_schema = matches!(
+                crate::app::ACTIONS
+                    .get(action_state.selected)
+                    .map(|(_, _, a)| a),
+                Some(crate::app::Action::Partitions | crate::app::Action::Schema)
+            );
+            if !is_partitions_or_schema && let Some(ref res) = action_state.results {
                 Some(res.query_buffer.clone())
             } else {
                 Some(action_state.query_buffer.clone())
@@ -276,14 +285,6 @@ pub(super) fn query_bar_layout(
     let query_width = term_width.saturating_sub(query_x);
     let inner_w = query_width.saturating_sub(2).max(1) as usize;
 
-    let search_height = if matches!(app.mode, Mode::Search) {
-        let total_chars = 3 + app.search_query.len();
-        let lines = total_chars.div_ceil(inner_w);
-        (lines as u16 + 2).clamp(3, 8)
-    } else {
-        3
-    };
-
     let query_height = if matches!(app.mode, Mode::QueryInput) {
         let total_chars = 7 + query_buf.len();
         let lines = total_chars.div_ceil(inner_w);
@@ -292,11 +293,11 @@ pub(super) fn query_bar_layout(
         3
     };
 
-    if search_height + query_height > bottom_y {
+    if query_height > bottom_y {
         return None;
     }
 
-    Some((query_x, search_height, query_width, query_height, inner_w))
+    Some((query_x, 0, query_width, query_height, inner_w))
 }
 
 fn set_query_cursor(state: &mut ResultsState, new_cursor: usize, selecting: bool) {
@@ -463,8 +464,8 @@ mod tests {
             query_cursor: query_buffer.len(),
             columns: Vec::new(),
             rows: Vec::new(),
-            scroll_v: 0,
-            scroll_h: 0,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
             loading: false,
             error: None,
             is_paginated: true,
@@ -478,6 +479,10 @@ mod tests {
             invalid_query_error: None,
             selection_anchor: None,
             filters: Vec::new(),
+            total_count: None,
+            total_count_loading: false,
+            table_count: None,
+            ..Default::default()
         }
     }
 

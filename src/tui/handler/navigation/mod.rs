@@ -15,6 +15,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{ActivePanel, App, CatalogState, ConnectState, SchemaState, Screen, TableState};
+use crate::tui::handler::Command;
 
 pub mod actions;
 pub mod clipboard;
@@ -28,10 +29,15 @@ pub use list::*;
 
 pub fn go_back(app: &mut App) {
     let logged_in = app.trino_client.is_some();
-    app.main_panel_pct = 60;
+    if !matches!(app.screen, Screen::Help) {
+        app.main_panel_pct = 60;
+    }
 
     let next = match &app.screen {
-        Screen::Help => app.prev_screen.take().map(|p| *p),
+        Screen::Help => {
+            app.search_query.clear();
+            app.prev_screen.take().map(|p| *p)
+        }
         Screen::Catalog(_) => {
             if logged_in {
                 None
@@ -98,6 +104,49 @@ pub fn go_back(app: &mut App) {
     }
 }
 
+pub fn help_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
+    let code = normalize_key_code(key.code);
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.help_scroll = app.help_scroll.saturating_add(1);
+            if let Some(ref mut m) = app.help_modal {
+                m.scroll = app.help_scroll;
+            }
+            None
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.help_scroll = app.help_scroll.saturating_sub(1);
+            if let Some(ref mut m) = app.help_modal {
+                m.scroll = app.help_scroll;
+            }
+            None
+        }
+        KeyCode::Char('g') => {
+            app.help_scroll = 0;
+            if let Some(ref mut m) = app.help_modal {
+                m.scroll = 0;
+            }
+            None
+        }
+        KeyCode::Char('G') => {
+            app.help_scroll = 100;
+            if let Some(ref mut m) = app.help_modal {
+                m.scroll = 100;
+            }
+            None
+        }
+        KeyCode::Char('q') | KeyCode::Char('?') | KeyCode::Esc => {
+            app.help_modal = None;
+            app.mode = crate::app::Mode::Normal;
+            if matches!(app.screen, Screen::Help) {
+                go_back(app);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 pub fn normalize_key_code(code: KeyCode) -> KeyCode {
     match code {
         KeyCode::Char('∆') => KeyCode::Char('j'),
@@ -125,6 +174,9 @@ pub fn handle_pane_focus_keys(app: &mut App, key: KeyEvent) -> bool {
     let is_in_table = matches!(app.screen, Screen::Actions(_));
 
     if is_in_table {
+        if app.active_panel == ActivePanel::MainViewer && (is_h || is_l || is_left || is_right) {
+            return false;
+        }
         if is_h || is_left {
             app.set_active_panel(ActivePanel::MenuPane);
             return true;
@@ -166,9 +218,12 @@ pub fn get_selected(screen: &Screen) -> Option<usize> {
 pub mod tests {
     use super::drilldown::*;
     use super::*;
-    use crate::app::{ActionState, DrillDownState, Mode, ResultsState, TableRecon};
+    use crate::app::{
+        ACTIONS, Action, ActionState, DrillDownState, Mode, ResultsState, TableRecon,
+    };
     use crate::config::ConnectionConfig;
     use crate::trino::client::TrinoClient;
+    use crate::trino::queries;
     use crate::tui::handler::Command;
 
     fn sample_config() -> ConnectionConfig {
@@ -365,7 +420,15 @@ pub mod tests {
             ..drilldown_action_state(vec!["date"])
         }));
 
-        for idx in [7, 8] {
+        let partitions_idx = ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == Action::Partitions)
+            .unwrap();
+        let schema_idx = ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == Action::Schema)
+            .unwrap();
+        for idx in [partitions_idx, schema_idx] {
             let cmd = trigger_action(&mut app, idx);
             assert!(
                 cmd.is_none(),
@@ -408,6 +471,9 @@ pub mod tests {
             results.rows,
             vec![vec!["CREATE TABLE events (...)".to_string()]]
         );
+        let expected_ddl_query = "SHOW CREATE TABLE \"datalake\".\"tenant\".\"events\"";
+        assert_eq!(state.query_buffer, expected_ddl_query);
+        assert_eq!(results.query_buffer, expected_ddl_query);
     }
 
     #[test]
@@ -473,6 +539,7 @@ pub mod tests {
             loading: false,
             error: None,
             truncated: false,
+            ..Default::default()
         });
 
         let cmd = drilldown_drill_into_selected(&mut s, &[]);
@@ -495,6 +562,15 @@ pub mod tests {
         );
         assert!(dd.loading);
         assert_eq!(dd.selected, 0);
+        let expected_level_query = queries::distinct_partition_values(
+            "datalake",
+            "tenant",
+            "events",
+            &[("date".to_string(), "2026-08-06".to_string())],
+            "service",
+            200,
+        );
+        assert_eq!(s.query_buffer, expected_level_query);
     }
 
     #[test]
@@ -508,6 +584,7 @@ pub mod tests {
             loading: false,
             error: None,
             truncated: false,
+            ..Default::default()
         });
 
         let cmd = drilldown_drill_into_selected(&mut s, &[]);
@@ -527,6 +604,7 @@ pub mod tests {
         );
         assert!(query.contains("WHERE date = '2026-08-06'"));
         assert!(s.results.is_none());
+        assert_eq!(s.query_buffer, query);
     }
 
     #[test]
@@ -540,6 +618,7 @@ pub mod tests {
             loading: false,
             error: None,
             truncated: false,
+            ..Default::default()
         });
         s.results = Some(sample_leaf_results_state());
 
@@ -549,6 +628,9 @@ pub mod tests {
         assert!(dd.path.is_empty());
         assert_eq!(dd.selected, 0);
         assert!(s.results.is_none());
+        let expected_parent_query =
+            queries::distinct_partition_values("datalake", "tenant", "events", &[], "date", 200);
+        assert_eq!(s.query_buffer, expected_parent_query);
     }
 
     #[test]
@@ -562,6 +644,7 @@ pub mod tests {
             loading: false,
             error: None,
             truncated: false,
+            ..Default::default()
         });
 
         drilldown_go_up(&mut s);
@@ -577,8 +660,8 @@ pub mod tests {
             query_cursor: 0,
             columns: vec!["event_type".to_string()],
             rows: vec![vec!["created".to_string()]],
-            scroll_v: 0,
-            scroll_h: 0,
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
             loading: false,
             error: None,
             is_paginated: true,
@@ -592,6 +675,10 @@ pub mod tests {
             invalid_query_error: None,
             selection_anchor: None,
             filters: vec![("date".to_string(), "2026-08-06".to_string())],
+            total_count: None,
+            total_count_loading: false,
+            table_count: None,
+            ..Default::default()
         }
     }
 
@@ -617,58 +704,147 @@ pub mod tests {
             state.results.is_none(),
             "moving menu selection should reset results pane"
         );
-    }
-
-    #[test]
-    fn actions_keys_less_than_greater_than_scroll_columns_in_generic_results() {
-        let mut app = sample_app(Screen::Actions(ActionState {
-            catalog: "iceberg".to_string(),
-            schema: "sales".to_string(),
-            table: "orders".to_string(),
-            selected: 3,
-            results: Some(sample_leaf_results_state()),
-            ..Default::default()
-        }));
-        app.set_active_panel(ActivePanel::MainViewer);
-
-        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
-        let Screen::Actions(state) = &app.screen else {
-            panic!("expected actions screen");
-        };
         assert_eq!(
-            state.results.as_ref().unwrap().scroll_h,
-            0,
-            "single column can't scroll past 0"
+            state.query_buffer,
+            "SHOW CREATE TABLE \"iceberg\".\"sales\".\"orders\""
         );
-
-        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('<')));
-        let Screen::Actions(state) = &app.screen else {
-            panic!("expected actions screen");
-        };
-        assert_eq!(state.results.as_ref().unwrap().scroll_h, 0);
     }
 
     #[test]
-    fn actions_keys_h_and_l_are_no_ops_in_generic_results() {
+    fn actions_keys_menu_navigation_syncs_query_buffer_for_each_action() {
         let mut app = sample_app(Screen::Actions(ActionState {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 3,
+            selected: 0,
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MenuPane);
+
+        for (expected_idx, (_, _, action)) in ACTIONS.iter().enumerate().skip(1) {
+            actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+            let Screen::Actions(state) = &app.screen else {
+                panic!("expected actions screen");
+            };
+            assert_eq!(state.selected, expected_idx);
+            let expected_query = action.build_query("iceberg", "sales", "orders");
+            assert_eq!(state.query_buffer, expected_query);
+        }
+
+        for (expected_idx, (_, _, action)) in
+            ACTIONS.iter().enumerate().take(ACTIONS.len() - 1).rev()
+        {
+            actions_keys(&mut app, KeyEvent::from(KeyCode::Char('k')));
+            let Screen::Actions(state) = &app.screen else {
+                panic!("expected actions screen");
+            };
+            assert_eq!(state.selected, expected_idx);
+            let expected_query = action.build_query("iceberg", "sales", "orders");
+            assert_eq!(state.query_buffer, expected_query);
+        }
+    }
+
+    #[test]
+    fn trigger_action_partitions_and_schema_sync_query_buffer_and_clear_results() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
             results: Some(sample_leaf_results_state()),
             ..Default::default()
         }));
-        app.set_active_panel(ActivePanel::MainViewer);
 
-        let cmd = actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
+        let partitions_idx = ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == Action::Partitions)
+            .unwrap();
+        let schema_idx = ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == Action::Schema)
+            .unwrap();
+
+        // Trigger Partitions
+        let cmd = trigger_action(&mut app, partitions_idx);
         assert!(cmd.is_none());
         let Screen::Actions(state) = &app.screen else {
             panic!("expected actions screen");
         };
-        assert_eq!(state.results.as_ref().unwrap().scroll_h, 0);
+        assert_eq!(state.selected, partitions_idx);
+        assert!(state.results.is_none());
+        assert_eq!(
+            state.query_buffer,
+            "SHOW CREATE TABLE \"iceberg\".\"sales\".\"orders\""
+        );
+
+        // Put stale results back
+        if let Screen::Actions(ref mut state) = app.screen {
+            state.results = Some(sample_leaf_results_state());
+        }
+
+        // Trigger Schema
+        let cmd = trigger_action(&mut app, schema_idx);
+        assert!(cmd.is_none());
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.selected, schema_idx);
+        assert!(state.results.is_none());
+        assert_eq!(
+            state.query_buffer,
+            "DESCRIBE \"iceberg\".\"sales\".\"orders\""
+        );
+    }
+
+    #[test]
+    fn actions_keys_h_and_l_move_columns_in_generic_results() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["col_a".to_string(), "col_b".to_string()];
+        res.rows = vec![vec!["a".to_string(), "b".to_string()]];
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 3,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 1);
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+    }
+
+    #[test]
+    fn actions_keys_less_than_and_greater_than_are_no_ops_in_generic_results() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 3,
+            results: Some(sample_leaf_results_state()),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        let cmd = actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
+        assert!(cmd.is_none());
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().scroll_h.get(), 0);
         assert!(matches!(app.active_panel, ActivePanel::MainViewer));
 
-        let cmd = actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        let cmd = actions_keys(&mut app, KeyEvent::from(KeyCode::Char('<')));
         assert!(cmd.is_none());
         assert!(matches!(app.active_panel, ActivePanel::MainViewer));
     }
@@ -693,7 +869,10 @@ pub mod tests {
     }
 
     #[test]
-    fn actions_keys_leaf_grid_h_goes_up_partition_l_is_no_op_and_lt_gt_scroll() {
+    fn actions_keys_leaf_grid_lt_goes_up_partition_and_h_l_move_columns() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["col_a".to_string(), "col_b".to_string()];
+        res.rows = vec![vec!["a".to_string(), "b".to_string()]];
         let mut app = sample_app(Screen::Actions(ActionState {
             selected: 0,
             drilldown: Some(DrillDownState {
@@ -704,30 +883,89 @@ pub mod tests {
                 loading: false,
                 error: None,
                 truncated: false,
+                ..Default::default()
             }),
-            results: Some(sample_leaf_results_state()),
+            results: Some(res),
             ..drilldown_action_state(vec!["date"])
         }));
         app.set_active_panel(ActivePanel::MainViewer);
 
+        // 'l' moves column right in leaf grid
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 1);
+        assert!(state.drilldown.as_ref().unwrap().is_leaf());
+
+        // '>' is no-op at leaf
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
         let Screen::Actions(state) = &app.screen else {
             panic!("expected actions screen");
         };
         assert!(state.drilldown.as_ref().unwrap().is_leaf());
 
-        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
+        // 'h' moves column left in leaf grid
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
         let Screen::Actions(state) = &app.screen else {
             panic!("expected actions screen");
         };
-        let _ = state.results.as_ref().unwrap().scroll_h;
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
 
-        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        // '<' goes up one partition level
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('<')));
         let Screen::Actions(state) = &app.screen else {
             panic!("expected actions screen");
         };
         assert!(state.drilldown.as_ref().unwrap().path.is_empty());
         assert!(state.results.is_none());
+    }
+
+    #[test]
+    fn actions_keys_drilldown_non_leaf_gt_drills_down_and_lt_goes_up() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            selected: 0,
+            drilldown: Some(DrillDownState {
+                partition_cols: vec!["date".to_string(), "service".to_string()],
+                path: vec![("date".to_string(), "2026-08-06".to_string())],
+                levels_cache: vec![
+                    vec!["2026-08-06".to_string()],
+                    vec!["api".to_string(), "worker".to_string()],
+                ],
+                selected: 1,
+                loading: false,
+                error: None,
+                truncated: false,
+                ..Default::default()
+            }),
+            results: None,
+            ..drilldown_action_state(vec!["date", "service"])
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // '>' drills into the selected partition ("worker")
+        let cmd = actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
+        assert!(cmd.is_some());
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(
+            state.drilldown.as_ref().unwrap().path,
+            vec![
+                ("date".to_string(), "2026-08-06".to_string()),
+                ("service".to_string(), "worker".to_string()),
+            ]
+        );
+
+        // '<' pops the path and goes up
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('<')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(
+            state.drilldown.as_ref().unwrap().path,
+            vec![("date".to_string(), "2026-08-06".to_string())]
+        );
     }
 
     #[test]
@@ -818,8 +1056,8 @@ pub mod tests {
                 query_cursor: 0,
                 columns: vec!["Create Table".to_string()],
                 rows: vec![vec!["CREATE TABLE orders (id bigint)".to_string()]],
-                scroll_v: 0,
-                scroll_h: 0,
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
                 loading: false,
                 error: None,
                 is_paginated: false,
@@ -833,6 +1071,10 @@ pub mod tests {
                 invalid_query_error: None,
                 selection_anchor: None,
                 filters: Vec::new(),
+                total_count: None,
+                total_count_loading: false,
+                table_count: None,
+                ..Default::default()
             }),
             ..Default::default()
         }));
@@ -861,6 +1103,680 @@ pub mod tests {
         assert!(
             state.results.is_none(),
             "stale DDL results must be cleared on transition to Table View"
+        );
+    }
+
+    #[test]
+    fn actions_keys_cell_navigation_and_filter_modal_trigger() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(ResultsState {
+                query_buffer: "SELECT id, status, amount FROM orders".to_string(),
+                query_cursor: 37,
+                columns: vec!["id".to_string(), "status".to_string(), "amount".to_string()],
+                rows: vec![
+                    vec!["1".to_string(), "active".to_string(), "100".to_string()],
+                    vec!["2".to_string(), "pending".to_string(), "200".to_string()],
+                    vec!["3".to_string(), "inactive".to_string(), "300".to_string()],
+                ],
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
+                selected_row: 0,
+                selected_col: 0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // Move cursor down (row 0 -> 1)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 1);
+
+        // Move cursor right (l: col 0 -> 1)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 1);
+
+        // Move cursor right again (l: col 1 -> 2)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 2);
+
+        // Move cursor left (h: col 2 -> 1)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 1);
+
+        // Move cursor up (k: row 1 -> 0)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('k')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 0);
+
+        // Press 'F' while selected_col is 1 ("status")
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('F')));
+        assert!(matches!(app.mode, Mode::FilterModal));
+        let modal = app
+            .filter_modal
+            .as_ref()
+            .expect("filter modal should be opened");
+        assert_eq!(modal.column_index, 1);
+        assert_eq!(modal.column_name, "status");
+    }
+
+    #[test]
+    fn actions_keys_column_visibility_modal_and_visible_column_navigation() {
+        let mut hidden = std::collections::HashSet::new();
+        hidden.insert("status".to_string()); // hide middle column
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(ResultsState {
+                query_buffer: "SELECT id, status, amount FROM orders".to_string(),
+                query_cursor: 37,
+                columns: vec!["id".to_string(), "status".to_string(), "amount".to_string()],
+                rows: vec![vec![
+                    "1".to_string(),
+                    "active".to_string(),
+                    "100".to_string(),
+                ]],
+                scroll_v: std::cell::Cell::new(0),
+                scroll_h: std::cell::Cell::new(0),
+                selected_row: 0,
+                selected_col: 0, // starts at 'id' (col 0)
+                hidden_columns: hidden,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // Move cursor right (l): should skip hidden 'status' (col 1) and jump to 'amount' (col 2)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 2);
+
+        // Move cursor left (h): should skip hidden 'status' (col 1) and jump back to 'id' (col 0)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+
+        // Press 'C' -> opens column visibility modal
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('C')));
+        assert!(matches!(app.mode, Mode::ColumnModal));
+        let modal = app
+            .column_modal
+            .as_ref()
+            .expect("column modal should be opened");
+        assert_eq!(modal.columns, vec!["id", "status", "amount"]);
+        assert!(modal.selected_columns.contains("id"));
+        assert!(!modal.selected_columns.contains("status"));
+        assert!(modal.selected_columns.contains("amount"));
+    }
+
+    #[test]
+    fn test_help_keys_scroll_and_close() {
+        let mut app = sample_app(Screen::Help);
+        app.prev_screen = Some(Box::new(Screen::Table(TableState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            items: vec!["orders".to_string()],
+            selected: 0,
+        })));
+        assert_eq!(app.help_scroll, 0);
+
+        help_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.help_scroll, 1);
+
+        help_keys(&mut app, KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(app.help_scroll, 0);
+
+        help_keys(&mut app, KeyEvent::from(KeyCode::Char('G')));
+        assert_eq!(app.help_scroll, 100);
+
+        help_keys(&mut app, KeyEvent::from(KeyCode::Char('g')));
+        assert_eq!(app.help_scroll, 0);
+
+        help_keys(&mut app, KeyEvent::from(KeyCode::Char('q')));
+        assert!(matches!(app.screen, Screen::Table(_)));
+    }
+
+    #[test]
+    fn test_actions_keys_page_down_and_up_in_table_view() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            selected: 0,
+            results: Some(ResultsState {
+                rows: (0..50).map(|i| vec![format!("{i}")]).collect(),
+                columns: vec!["id".to_string()],
+                selected_row: 0,
+                selected_col: 0,
+                is_paginated: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        app.active_panel = ActivePanel::MainViewer;
+
+        // Page down
+        actions_keys(&mut app, KeyEvent::from(KeyCode::PageDown));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 15);
+
+        // Page down again
+        actions_keys(&mut app, KeyEvent::from(KeyCode::PageDown));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 30);
+
+        // Page up
+        actions_keys(&mut app, KeyEvent::from(KeyCode::PageUp));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 15);
+
+        // Ctrl+d (page down)
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_d);
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 30);
+
+        // Ctrl+u (page up)
+        let ctrl_u = KeyEvent::new(KeyCode::Char('u'), crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_u);
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_row, 15);
+    }
+
+    #[test]
+    fn test_actions_keys_horizontal_navigation_in_table_view() {
+        let cols: Vec<String> = (0..20).map(|i| format!("col_{i}")).collect();
+        let mut app = sample_app(Screen::Actions(ActionState {
+            selected: 0,
+            results: Some(ResultsState {
+                rows: vec![vec!["val".to_string()]],
+                columns: cols,
+                selected_row: 0,
+                selected_col: 0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        app.active_panel = ActivePanel::MainViewer;
+
+        // 1. Ctrl+Right moves 5 columns right
+        let ctrl_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_right);
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
+
+        // 2. Ctrl+l moves 5 columns right
+        let ctrl_l = KeyEvent::new(KeyCode::Char('l'), crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_l);
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 10);
+
+        // 3. Ctrl+Left moves 5 columns left
+        let ctrl_left = KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_left);
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
+
+        // 4. End jumps to last column (19)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::End));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 19);
+
+        // 5. Home jumps to first column (0)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Home));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+
+        // 6. '$' jumps to last column
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('$')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 19);
+
+        // 7. '0' jumps to first column
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('0')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+
+        // 8. Shift+Right moves 5 columns right
+        let shift_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::SHIFT);
+        actions_keys(&mut app, shift_right);
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
+
+        // 9. 'L' moves 5 columns right
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('L')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 10);
+
+        // 10. 'H' moves 5 columns left
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('H')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
+
+        // 11. Shift+Left moves 5 columns left
+        let shift_left = KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::SHIFT);
+        actions_keys(&mut app, shift_left);
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+
+        // 12. ']' moves 1 column right and '[' moves 1 column left
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char(']')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 1);
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('[')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+
+        // 13. '>' moves 5 columns right and '<' moves 5 columns left
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('<')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
+
+        // 14. Test global handle_key_sync with '0' when number_buffer is empty
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('>'))); // col 5
+        assert!(app.number_buffer.is_empty());
+        crate::tui::handler::handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('0')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(
+            state.results.as_ref().unwrap().selected_col,
+            0,
+            "'0' with empty buffer must jump to column 0"
+        );
+        assert!(
+            app.number_buffer.is_empty(),
+            "number_buffer must remain empty when '0' is pressed alone"
+        );
+    }
+
+    #[test]
+    fn actions_keys_s_and_shift_s_toggle_sorting_not_schema() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(sample_leaf_results_state()),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // Press 'S': should toggle sort to Desc (NOT switch to Schema!)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('S')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(
+            state.selected, 0,
+            "Selected menu action must remain TableView (0)"
+        );
+        assert_eq!(
+            state.results.as_ref().unwrap().sort,
+            Some(("event_type".to_string(), crate::app::SortDirection::Desc))
+        );
+
+        // Press 'S' again: Asc
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('S')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(
+            state.results.as_ref().unwrap().sort,
+            Some(("event_type".to_string(), crate::app::SortDirection::Asc))
+        );
+
+        // Press 's' (lowercase): None
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('s')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.results.as_ref().unwrap().sort, None);
+    }
+
+    #[test]
+    fn actions_keys_reworded_lowercase_hotkeys_trigger_actions() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            ..Default::default()
+        }));
+
+        // All menu actions have lowercase hotkeys
+        for (key, _, _) in crate::app::ACTIONS {
+            assert!(key.is_lowercase(), "Key '{key}' must be lowercase");
+        }
+
+        let schema_idx = crate::app::ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == crate::app::Action::Schema)
+            .unwrap();
+        let partitions_idx = crate::app::ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == crate::app::Action::Partitions)
+            .unwrap();
+        let stats_idx = crate::app::ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == crate::app::Action::ShowStats)
+            .unwrap();
+        let sample_idx = crate::app::ACTIONS
+            .iter()
+            .position(|(_, _, a)| *a == crate::app::Action::Sample)
+            .unwrap();
+
+        // 'e' triggers Schema
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('e')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.selected, schema_idx);
+
+        // 'i' is no longer assigned to any action
+        if let Screen::Actions(ref mut s) = app.screen {
+            s.selected = 0;
+        }
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('i')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.selected, 0, "'i' should not trigger any action");
+
+        // 'p' triggers Partitions
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('p')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.selected, partitions_idx);
+
+        // 't' triggers Show Stats
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('t')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.selected, stats_idx);
+
+        // 'm' triggers Sample Mode
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('m')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        assert_eq!(state.selected, sample_idx);
+    }
+
+    #[test]
+    fn test_vim_visual_line_mode_selection_and_yank() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["col1".to_string(), "col2".to_string()];
+        res.rows = vec![
+            vec!["r0c0".to_string(), "r0c1".to_string()],
+            vec!["r1c0".to_string(), "r1c1".to_string()],
+            vec!["r2c0".to_string(), "r2c1".to_string()],
+        ];
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // 1. Shift+V enters visual line mode
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('V')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(
+            res.visual_mode,
+            crate::app::VisualMode::Line { anchor_row: 0 }
+        );
+
+        // 2. 'j' moves cursor down to row 1, expanding selection to rows 0..=1
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.selected_row, 1);
+        assert!(res.is_cell_selected(0, 0));
+        assert!(res.is_cell_selected(0, 1));
+        assert!(res.is_cell_selected(1, 0));
+        assert!(res.is_cell_selected(1, 1));
+        assert!(!res.is_cell_selected(2, 0));
+
+        // 3. 'y' yanks the 2 rows as TSV and exits visual mode
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('y')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.visual_mode, crate::app::VisualMode::None);
+        let toast = app.copied_toast.as_ref().unwrap().0.clone();
+        assert!(toast.contains("2 selected row(s) (CSV)"));
+    }
+
+    #[test]
+    fn test_vim_visual_block_mode_selection_and_swap_ends() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["col0".to_string(), "col1".to_string(), "col2".to_string()];
+        res.rows = vec![
+            vec!["r0c0".to_string(), "r0c1".to_string(), "r0c2".to_string()],
+            vec!["r1c0".to_string(), "r1c1".to_string(), "r1c2".to_string()],
+            vec!["r2c0".to_string(), "r2c1".to_string(), "r2c2".to_string()],
+        ];
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // 1. Ctrl+v enters visual block mode
+        let ctrl_v = KeyEvent::new(KeyCode::Char('v'), crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_v);
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(
+            res.visual_mode,
+            crate::app::VisualMode::Block {
+                anchor_row: 0,
+                anchor_col: 0
+            }
+        );
+
+        // 2. 'j' moves down and 'l' moves right to (1, 1)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.selected_row, 1);
+        assert_eq!(res.selected_col, 1);
+        assert!(res.is_cell_selected(0, 0));
+        assert!(res.is_cell_selected(0, 1));
+        assert!(res.is_cell_selected(1, 0));
+        assert!(res.is_cell_selected(1, 1));
+        assert!(!res.is_cell_selected(0, 2));
+
+        // 3. 'o' swaps anchor and cursor
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('o')));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.selected_row, 0);
+        assert_eq!(res.selected_col, 0);
+        assert_eq!(
+            res.visual_mode,
+            crate::app::VisualMode::Block {
+                anchor_row: 1,
+                anchor_col: 1
+            }
+        );
+
+        // 4. Esc exits visual mode but stays in MainViewer
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.visual_mode, crate::app::VisualMode::None);
+        assert_eq!(app.active_panel, ActivePanel::MainViewer);
+
+        // 5. Esc again focuses MenuPane
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.active_panel, ActivePanel::MenuPane);
+    }
+
+    #[test]
+    fn test_vim_yank_whole_row_with_uppercase_y() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["col0".to_string(), "col1".to_string()];
+        res.rows = vec![
+            vec!["r0c0".to_string(), "r0c1".to_string()],
+            vec!["r1c0".to_string(), "r1c1".to_string()],
+        ];
+        res.selected_row = 1;
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // 'Y' yanks the whole visible row 1
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('Y')));
+        let toast = app.copied_toast.as_ref().unwrap().0.clone();
+        assert!(toast.contains("1 visible row(s) (CSV)"));
+    }
+
+    #[test]
+    fn test_shift_arrow_keys_enter_and_extend_visual_modes() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["c0".to_string(), "c1".to_string(), "c2".to_string()];
+        res.rows = vec![
+            vec!["0".to_string(), "1".to_string(), "2".to_string()],
+            vec!["3".to_string(), "4".to_string(), "5".to_string()],
+        ];
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // Shift+Down enters visual line mode
+        let shift_down = KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::SHIFT);
+        actions_keys(&mut app, shift_down);
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(
+            res.visual_mode,
+            crate::app::VisualMode::Line { anchor_row: 0 }
+        );
+        assert_eq!(res.selected_row, 1);
+
+        // Esc exits visual mode
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
+
+        // Shift+Right enters visual block mode
+        let shift_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::SHIFT);
+        actions_keys(&mut app, shift_right);
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(
+            res.visual_mode,
+            crate::app::VisualMode::Block {
+                anchor_row: 1,
+                anchor_col: 0
+            }
         );
     }
 }

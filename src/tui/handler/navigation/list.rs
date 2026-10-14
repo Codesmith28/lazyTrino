@@ -27,7 +27,7 @@ pub fn check_trigger_infinite_scroll(app: &mut App) -> Option<Command> {
         && state.is_paginated
         && !state.is_fetching_next_page
         && state.has_more_rows
-        && state.scroll_v + 15 >= state.rows.len()
+        && state.selected_row.max(state.scroll_v.get()) + 15 >= state.rows.len()
     {
         state.is_fetching_next_page = true;
         let offset = state.rows.len();

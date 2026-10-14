@@ -19,11 +19,15 @@ use crate::app::*;
 use crate::trino::client::TrinoClient;
 use crate::trino::error::TrinoClientError;
 
+pub mod column_modal;
 mod commands;
 mod export;
+pub mod filter_modal;
+pub mod help_modal;
 mod mouse;
 mod navigation;
 mod query;
+pub mod saved_views_modal;
 
 pub fn extract_from_tables(sql: &str) -> Vec<String> {
     query::extract_from_tables(sql)
@@ -123,6 +127,12 @@ pub enum Command {
         filters: Vec<(String, String)>,
         column: String,
     },
+    FetchPartitionCount {
+        catalog: String,
+        schema: String,
+        table: String,
+        filters: Vec<(String, String)>,
+    },
 }
 
 #[derive(Debug)]
@@ -199,11 +209,58 @@ pub enum AsyncResult {
         column: String,
         result: Result<crate::trino::types::QueryResults, TrinoClientError>,
     },
+    FetchPartitionCount {
+        log_id: usize,
+        catalog: String,
+        schema: String,
+        table: String,
+        filters: Vec<(String, String)>,
+        result: Result<crate::trino::types::QueryResults, TrinoClientError>,
+    },
 }
 
 pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     preserve_public_api_symbols();
+
+    // Guard against mode desynchronization: if any modal is currently visible,
+    // key events MUST be handled by that modal and never leak to background panes.
+    if app.filter_modal.is_some() {
+        if app.mode != Mode::FilterModal {
+            app.mode = Mode::FilterModal;
+        }
+        return filter_modal::handle_filter_modal_key(app, key);
+    }
+    if app.column_modal.is_some() {
+        if app.mode != Mode::ColumnModal {
+            app.mode = Mode::ColumnModal;
+        }
+        return column_modal::handle_column_modal_key(app, key);
+    }
+    if app.help_modal.is_some() {
+        if app.mode != Mode::HelpModal {
+            app.mode = Mode::HelpModal;
+        }
+        return help_modal::handle_help_modal_key(app, key);
+    }
+    if app.saved_views_modal.is_some() {
+        if app.mode != Mode::SavedViewsModal {
+            app.mode = Mode::SavedViewsModal;
+        }
+        return saved_views_modal::handle_saved_views_modal_key(app, key);
+    }
+    if app.save_view_prompt.is_some() {
+        if app.mode != Mode::SaveViewPrompt {
+            app.mode = Mode::SaveViewPrompt;
+        }
+        return saved_views_modal::handle_save_view_prompt_key(app, key);
+    }
+
     match app.mode {
+        Mode::HelpModal => return help_modal::handle_help_modal_key(app, key),
+        Mode::FilterModal => return filter_modal::handle_filter_modal_key(app, key),
+        Mode::ColumnModal => return column_modal::handle_column_modal_key(app, key),
+        Mode::SavedViewsModal => return saved_views_modal::handle_saved_views_modal_key(app, key),
+        Mode::SaveViewPrompt => return saved_views_modal::handle_save_view_prompt_key(app, key),
         Mode::QueryInput => return query::handle_query_input_mode(app, key),
         Mode::Search => return query::handle_search_mode(app, key),
         Mode::Normal => {}
@@ -217,6 +274,18 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return None;
     }
 
+    if code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        saved_views_modal::open_save_view_prompt(app);
+        return None;
+    }
+
+    if (code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL))
+        || (code == KeyCode::Char('B') && !key.modifiers.contains(KeyModifiers::CONTROL))
+    {
+        saved_views_modal::open_saved_views_modal(app);
+        return None;
+    }
+
     if matches!(app.screen, Screen::Connect(_)) {
         return navigation::connect_keys(app, key);
     }
@@ -226,13 +295,23 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     }
 
     if code == KeyCode::Char('?') {
-        app.prev_screen = Some(Box::new(app.screen.clone()));
-        app.clear_mouse_selection();
-        app.screen = Screen::Help;
+        if app.help_modal.is_some() || matches!(app.screen, Screen::Help) {
+            help_modal::close_help_modal(app);
+            if matches!(app.screen, Screen::Help) {
+                navigation::go_back(app);
+            }
+            return None;
+        }
+        help_modal::open_help_modal(app);
         return None;
     }
 
-    if code == KeyCode::Char('/') {
+    if code == KeyCode::Char('/')
+        && matches!(
+            app.screen,
+            Screen::Catalog(_) | Screen::Schema(_) | Screen::Table(_) | Screen::Help
+        )
+    {
         app.mode = Mode::Search;
         return None;
     }
@@ -242,6 +321,9 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         let is_in_table = matches!(app.screen, Screen::Actions(_));
         if is_in_table && app.active_panel == ActivePanel::MainViewer {
             app.set_active_panel(ActivePanel::MenuPane);
+            return None;
+        } else if matches!(app.screen, Screen::Help) && !app.search_query.is_empty() {
+            app.search_query.clear();
             return None;
         } else {
             navigation::go_back(app);
@@ -255,7 +337,7 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     }
 
     if let KeyCode::Char(c) = code
-        && c.is_ascii_digit()
+        && ((c.is_ascii_digit() && c != '0') || (c == '0' && !app.number_buffer.is_empty()))
         && matches!(app.active_panel, ActivePanel::MainViewer)
     {
         navigation::update_number_buffer(app, c);
@@ -268,6 +350,6 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         Screen::Schema(_) => navigation::schema_keys(app, key),
         Screen::Table(_) => navigation::table_keys(app, key),
         Screen::Actions(_) => navigation::actions_keys(app, key),
-        Screen::Help => None,
+        Screen::Help => navigation::help_keys(app, key),
     }
 }

@@ -31,45 +31,73 @@ pub fn spinner(app: &App) -> String {
 
 pub fn footer_hint(app: &App) -> Option<&'static str> {
     match app.mode {
+        Mode::ColumnModal | Mode::FilterModal => {
+            Some(" Space:toggle  a:all/none  Enter:apply  Esc:cancel  j/k:move ")
+        }
+        Mode::SavedViewsModal => {
+            Some(" Space:toggle  a:all/none  Enter:restore  d/Del:delete  j/k:move  Esc:close ")
+        }
+        Mode::SaveViewPrompt => Some(" Type:name  Bksp:del  Enter:save  Esc:cancel "),
         Mode::Search => Some(" Type:filter  Bksp:del  Enter:close  Esc:clear "),
         Mode::QueryInput => Some(" Enter:run  Esc:cancel  Ctrl+A:all  Ctrl+C:copy  Ctrl+V:paste "),
-        Mode::Normal => match &app.screen {
-            Screen::Connect(_) => Some(" Tab:next field  Enter:connect  ?:help  Ctrl+C:quit "),
-            Screen::Catalog(_) => Some(" j/k:move  l/Enter:select  /:search  ?:help  Ctrl+C:quit "),
-            Screen::Schema(_) | Screen::Table(_) => {
-                Some(" j/k:move  l/Enter:select  h/Esc:back  /:search  ?:help  Ctrl+C:quit ")
-            }
-            Screen::Actions(state) => {
-                let selected_action = ACTIONS.get(state.selected).map(|(_, _, action)| *action);
-
-                match app.active_panel {
-                    ActivePanel::MenuPane => Some(
-                        " j/k:move  l/Enter:run  h/Esc:back  v/c/i/s/n/p/P/S:action  Tab:pane  ?:help  Ctrl+C:quit ",
-                    ),
-                    ActivePanel::MainViewer => match selected_action {
-                        Some(Action::TableView) if state.results.is_some() => Some(
-                            " j/k:rows  </>:cols  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
-                        ),
-                        Some(Action::Partitions) if !app.partition_tree_lines.is_empty() => Some(
-                            " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
-                        ),
-                        Some(Action::Schema) if !app.vertical_schema_cols.is_empty() => Some(
-                            " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
-                        ),
-                        _ if state.results.is_some() => Some(
-                            " j/k:rows  </>:cols  g/G:top/btm  Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
-                        ),
-                        Some(Action::TableView) => Some(
-                            " q/:query  Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
-                        ),
-                        _ => Some(
-                            " Esc:menu  Tab:pane  v/c/i/s/n/p/P/S:action  ?:help  Ctrl+C:quit ",
-                        ),
-                    },
+        Mode::HelpModal | Mode::Normal => {
+            let screen = if let Screen::Help = &app.screen {
+                app.prev_screen.as_deref().unwrap_or(&app.screen)
+            } else {
+                &app.screen
+            };
+            match screen {
+                Screen::Connect(_) => Some(" Tab:next field  Enter:connect  ?:help  Ctrl+C:quit "),
+                Screen::Catalog(_) => {
+                    Some(" j/k:move  l/Enter:select  /:search  ?:help  Ctrl+C:quit ")
                 }
+                Screen::Schema(_) | Screen::Table(_) => {
+                    Some(" j/k:move  l/Enter:select  h/Esc:back  /:search  ?:help  Ctrl+C:quit ")
+                }
+                Screen::Actions(state) => {
+                    let selected_action = ACTIONS.get(state.selected).map(|(_, _, action)| *action);
+
+                    match app.active_panel {
+                        ActivePanel::MenuPane => Some(
+                            " j/k:move  l/Enter:run  h/Esc:back  v/c/e/t/m/p:action  Tab:pane  ?:help  Ctrl+C:quit ",
+                        ),
+                        ActivePanel::MainViewer => match selected_action {
+                            Some(Action::TableView)
+                                if state.results.is_some() && state.drilldown.is_some() =>
+                            {
+                                Some(
+                                    " hjkl/←→:cells  <:up  S:sort  C:cols  F:filter  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                )
+                            }
+                            Some(Action::TableView) if state.results.is_some() => Some(
+                                " hjkl/←→:cells  S:sort  C:cols  F:filter  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                            ),
+                            Some(Action::Partitions) if !app.partition_tree_lines.is_empty() => {
+                                Some(
+                                    " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                )
+                            }
+                            Some(Action::Schema) if !app.vertical_schema_cols.is_empty() => Some(
+                                " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                            ),
+                            _ if state.results.is_some() => Some(
+                                " hjkl/←→:cells  S:sort  C:cols  F:filter  g/G:top/btm  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                            ),
+                            Some(Action::TableView) if state.drilldown.is_some() => Some(
+                                " j/k:move  >/Enter:drill  <:up  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                            ),
+                            Some(Action::TableView) => Some(
+                                " q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                            ),
+                            _ => Some(
+                                " Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                            ),
+                        },
+                    }
+                }
+                Screen::Help => Some(" /:search  Esc/?:close  Ctrl+C:quit "),
             }
-            Screen::Help => None,
-        },
+        }
     }
 }
 
