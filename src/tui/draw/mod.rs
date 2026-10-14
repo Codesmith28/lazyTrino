@@ -217,7 +217,11 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
                 _ => "",
             };
             let (is_metadata_loading, is_ddl_loading, has_pending_action) = match effective_screen {
-                Screen::Actions(a) => (a.metadata_loading, a.ddl_loading, a.pending_action.is_some()),
+                Screen::Actions(a) => (
+                    a.metadata_loading,
+                    a.ddl_loading,
+                    a.pending_action.is_some(),
+                ),
                 _ => (false, false, false),
             };
 

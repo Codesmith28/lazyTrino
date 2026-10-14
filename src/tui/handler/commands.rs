@@ -1088,7 +1088,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                     drilldown.truncated = truncated;
                     drilldown.error = None;
 
-                    return super::navigation::actions::maybe_fetch_selected_partition_count(action_state);
+                    return super::navigation::actions::maybe_fetch_selected_partition_count(
+                        action_state,
+                    );
                 }
             }
             Err(e) => {
@@ -1606,7 +1608,9 @@ mod tests {
                 ..
             }) if catalog == "hive" && schema == "default" && table == "events"
         ));
-        let Screen::Actions(s) = &app.screen else { panic!() };
+        let Screen::Actions(s) = &app.screen else {
+            panic!()
+        };
         assert_eq!(s.pending_action, None);
         assert!(!s.ddl_loading);
     }
@@ -1633,7 +1637,9 @@ mod tests {
                 table: "events_part".to_string(),
                 partitioned_by: vec!["dt".to_string(), "region".to_string()],
                 location: "s3://bucket/events_part".to_string(),
-                ddl_text: "CREATE TABLE hive.default.events_part (id bigint, dt varchar, region varchar)".to_string(),
+                ddl_text:
+                    "CREATE TABLE hive.default.events_part (id bigint, dt varchar, region varchar)"
+                        .to_string(),
                 show_create_error: None,
             },
         );
@@ -1648,7 +1654,9 @@ mod tests {
                 filters,
             }) if catalog == "hive" && schema == "default" && table == "events_part" && column == "dt" && filters.is_empty()
         ));
-        let Screen::Actions(s) = &app.screen else { panic!() };
+        let Screen::Actions(s) = &app.screen else {
+            panic!()
+        };
         assert_eq!(s.pending_action, None);
         assert!(!s.ddl_loading);
         assert!(s.drilldown.is_some());
@@ -1691,20 +1699,20 @@ mod tests {
                             name: "username".to_string(),
                         },
                     ],
-                    data: vec![
-                        vec![
-                            "20261014120000".to_string(),
-                            "key1".to_string(),
-                            "101".to_string(),
-                            "alice".to_string(),
-                        ],
-                    ],
+                    data: vec![vec![
+                        "20261014120000".to_string(),
+                        "key1".to_string(),
+                        "101".to_string(),
+                        "alice".to_string(),
+                    ]],
                     duration_ms: 10,
                 }),
             },
         );
 
-        let Screen::Actions(s) = &app.screen else { panic!() };
+        let Screen::Actions(s) = &app.screen else {
+            panic!()
+        };
         let res = s.results.as_ref().unwrap();
         assert!(res.hidden_columns.contains("_hoodie_commit_time"));
         assert!(res.hidden_columns.contains("_hoodie_record_key"));

@@ -1801,12 +1801,16 @@ pub mod tests {
         // 1. Enter visual block mode
         let shift_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::SHIFT);
         actions_keys(&mut app, shift_right);
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert!(state.results.as_ref().unwrap().is_in_visual_mode());
 
         // Pressing 'u' clears visual mode without switching panels
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('u')));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert!(!state.results.as_ref().unwrap().is_in_visual_mode());
         assert_eq!(app.active_panel, ActivePanel::MainViewer);
 
@@ -1820,10 +1824,14 @@ pub mod tests {
 
         // 3. Enter visual block mode and test Esc: it clears visual mode and DOES NOT switch to MenuPane
         actions_keys(&mut app, shift_right);
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert!(state.results.as_ref().unwrap().is_in_visual_mode());
         actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
-        let Screen::Actions(state) = &app.screen else { panic!() };
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
         assert!(!state.results.as_ref().unwrap().is_in_visual_mode());
         assert_eq!(app.active_panel, ActivePanel::MainViewer);
 
