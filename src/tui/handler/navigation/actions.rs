@@ -69,6 +69,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
 
         if s.metadata_loading && matches!(action, Action::Partitions | Action::Schema) {
             s.selected = action_idx;
+            s.pending_action = Some(action_idx);
             s.results = None;
             s.drilldown = None;
             let query = action.build_query(&s.catalog, &s.schema, &s.table);
@@ -83,6 +84,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
         }
         if s.ddl_loading && matches!(action, Action::TableView | Action::TableDDL) {
             s.selected = action_idx;
+            s.pending_action = Some(action_idx);
             s.results = None;
             s.drilldown = None;
             let query = action.build_query(&s.catalog, &s.schema, &s.table);
@@ -96,6 +98,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
             return None;
         }
 
+        s.pending_action = None;
         let prev_selected = s.selected;
         s.selected = action_idx;
         if app.active_panel != ActivePanel::MainViewer {
@@ -579,13 +582,44 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
-                        KeyCode::Esc => {
-                            if let Some(ref mut res) = s.results
-                                && res.visual_mode != crate::app::VisualMode::None
-                            {
+                        KeyCode::Char('u') if !is_ctrl => {
+                            if let Some(ref mut res) = s.results {
                                 res.exit_visual_mode();
+                                res.clear_selection();
+                            }
+                            app.mouse_selection_anchor = None;
+                            app.mouse_selection_current = None;
+                            app.is_selecting_text = false;
+                            None
+                        }
+                        KeyCode::Esc => {
+                            let has_visual = s
+                                .results
+                                .as_ref()
+                                .map(|r| r.visual_mode != crate::app::VisualMode::None)
+                                .unwrap_or(false);
+                            let has_query_sel = s
+                                .results
+                                .as_ref()
+                                .map(|r| r.selection_anchor.is_some())
+                                .unwrap_or(false);
+                            let has_mouse = app.mouse_selection_anchor.is_some()
+                                || app.mouse_selection_current.is_some()
+                                || app.is_selecting_text;
+
+                            if has_visual || has_query_sel || has_mouse {
+                                if let Some(ref mut res) = s.results {
+                                    res.exit_visual_mode();
+                                    res.clear_selection();
+                                }
+                                app.mouse_selection_anchor = None;
+                                app.mouse_selection_current = None;
+                                app.is_selecting_text = false;
                             } else {
-                                app.set_active_panel(ActivePanel::MenuPane);
+                                app.mouse_selection_anchor = None;
+                                app.mouse_selection_current = None;
+                                app.is_selecting_text = false;
+                                app.active_panel = ActivePanel::MenuPane;
                             }
                             None
                         }

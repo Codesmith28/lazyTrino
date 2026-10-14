@@ -269,6 +269,7 @@ pub struct ActionState {
     pub metadata_loading: bool,
     pub drilldown: Option<DrillDownState>,
     pub pending_view_restore: Option<crate::saved_views::SavedView>,
+    pub pending_action: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1241,6 +1242,12 @@ impl App {
     pub fn clear_mouse_selection(&mut self) {
         self.mouse_selection_anchor = None;
         self.mouse_selection_current = None;
+    }
+
+    pub fn has_mouse_selection(&self) -> bool {
+        self.mouse_selection_anchor.is_some()
+            || self.mouse_selection_current.is_some()
+            || self.is_selecting_text
     }
 
     /// Switches the focused pane, clearing any stale mouse-click highlight

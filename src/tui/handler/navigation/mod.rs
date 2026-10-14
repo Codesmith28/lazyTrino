@@ -1779,4 +1779,63 @@ pub mod tests {
             }
         );
     }
+
+    #[test]
+    fn test_u_and_esc_undo_and_clear_selection() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["id".to_string(), "name".to_string()];
+        res.rows = vec![
+            vec!["1".to_string(), "alice".to_string()],
+            vec!["2".to_string(), "bob".to_string()],
+        ];
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // 1. Enter visual block mode
+        let shift_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::SHIFT);
+        actions_keys(&mut app, shift_right);
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert!(state.results.as_ref().unwrap().is_in_visual_mode());
+
+        // Pressing 'u' clears visual mode without switching panels
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('u')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert!(!state.results.as_ref().unwrap().is_in_visual_mode());
+        assert_eq!(app.active_panel, ActivePanel::MainViewer);
+
+        // 2. Set mouse selection and press 'u'
+        app.mouse_selection_anchor = Some((10, 5));
+        app.mouse_selection_current = Some((20, 5));
+        assert!(app.has_mouse_selection());
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('u')));
+        assert!(!app.has_mouse_selection());
+        assert_eq!(app.active_panel, ActivePanel::MainViewer);
+
+        // 3. Enter visual block mode and test Esc: it clears visual mode and DOES NOT switch to MenuPane
+        actions_keys(&mut app, shift_right);
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert!(state.results.as_ref().unwrap().is_in_visual_mode());
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert!(!state.results.as_ref().unwrap().is_in_visual_mode());
+        assert_eq!(app.active_panel, ActivePanel::MainViewer);
+
+        // 4. Set mouse selection and test Esc: it clears mouse selection and DOES NOT switch to MenuPane
+        app.mouse_selection_anchor = Some((10, 5));
+        assert!(app.has_mouse_selection());
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert!(!app.has_mouse_selection());
+        assert_eq!(app.active_panel, ActivePanel::MainViewer);
+
+        // 5. When no selection is active, Esc switches to MenuPane
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.active_panel, ActivePanel::MenuPane);
+    }
 }

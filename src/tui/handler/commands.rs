@@ -501,7 +501,7 @@ pub fn dispatch_command(
     }
 }
 
-pub fn handle_async_result(app: &mut App, result: AsyncResult) {
+pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command> {
     match result {
         AsyncResult::Connect {
             log_id,
@@ -616,16 +616,72 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 && action_state.table == table
             {
                 action_state.metadata = Some(TableRecon {
-                    partitioned_by,
+                    partitioned_by: partitioned_by.clone(),
                     location,
                     ddl_text,
                 });
                 action_state.ddl_loading = false;
-                if matches!(
+
+                let should_run_table_view = action_state.pending_action == Some(0)
+                    || (action_state.selected == 0
+                        && action_state.results.is_none()
+                        && action_state.drilldown.is_none());
+
+                if should_run_table_view {
+                    action_state.pending_action = None;
+                    if partitioned_by.is_empty() {
+                        let query = Action::TableView.build_query(&catalog, &schema, &table);
+                        let query_len = query.len();
+                        action_state.query_buffer = query.clone();
+                        action_state.query_cursor = query_len;
+                        return Some(Command::ExecuteQuery {
+                            query,
+                            is_paginated: true,
+                            catalog,
+                            schema,
+                            table,
+                            filters: Vec::new(),
+                        });
+                    } else {
+                        let first_col = partitioned_by[0].clone();
+                        let query = crate::trino::queries::distinct_partition_values(
+                            &catalog,
+                            &schema,
+                            &table,
+                            &[],
+                            &first_col,
+                            DRILLDOWN_LEVEL_LIMIT,
+                        );
+                        let query_len = query.len();
+                        action_state.query_buffer = query;
+                        action_state.query_cursor = query_len;
+                        action_state.drilldown = Some(DrillDownState {
+                            partition_cols: partitioned_by,
+                            path: Vec::new(),
+                            levels_cache: Vec::new(),
+                            selected: 0,
+                            loading: true,
+                            error: None,
+                            truncated: false,
+                            table_count: None,
+                            table_count_loading: true,
+                            counts_cache: std::collections::HashMap::new(),
+                            current_count_loading: true,
+                        });
+                        return Some(Command::FetchPartitionLevel {
+                            catalog,
+                            schema,
+                            table,
+                            filters: Vec::new(),
+                            column: first_col,
+                        });
+                    }
+                } else if matches!(
                     ACTIONS.get(action_state.selected).map(|(_, _, a)| a),
                     Some(Action::TableDDL)
                 ) && action_state.results.is_none()
                 {
+                    action_state.pending_action = None;
                     super::navigation::populate_table_ddl_results(action_state);
                 }
             }
@@ -662,6 +718,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 app.partition_tree_lines = partition_lines;
                 app.vertical_schema_cols = columns;
                 action_state.metadata_loading = false;
+                action_state.pending_action = None;
             }
         }
         AsyncResult::ExecuteQuery {
@@ -722,8 +779,14 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         .map(|r| r.col_distinct_values.clone())
                         .unwrap_or_default();
                     let hidden_cols = existing_results
+                        .filter(|r| !r.columns.is_empty())
                         .map(|r| r.hidden_columns.clone())
-                        .unwrap_or_default();
+                        .unwrap_or_else(|| {
+                            cols.iter()
+                                .filter(|c| c.starts_with('_'))
+                                .cloned()
+                                .collect()
+                        });
                     let unfilt = existing_results
                         .and_then(|r| r.unfiltered_rows.clone())
                         .or_else(|| {
@@ -734,7 +797,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                             }
                         });
 
-                    let res_state = ResultsState {
+                    let mut res_state = ResultsState {
                         query_buffer,
                         query_cursor,
                         columns: cols,
@@ -766,6 +829,12 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                         hidden_columns: hidden_cols,
                         ..Default::default()
                     };
+
+                    if let Some(col_name) = res_state.columns.get(res_state.selected_col)
+                        && !res_state.is_column_visible(col_name)
+                    {
+                        res_state.selected_col = res_state.first_visible_col();
+                    }
 
                     let cur_selected = if let Screen::Actions(ref a) = app.screen {
                         a.selected
@@ -1018,6 +1087,8 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     drilldown.loading = false;
                     drilldown.truncated = truncated;
                     drilldown.error = None;
+
+                    return super::navigation::actions::maybe_fetch_selected_partition_count(action_state);
                 }
             }
             Err(e) => {
@@ -1106,6 +1177,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
             }
         },
     }
+    None
 }
 
 #[cfg(test)]
@@ -1495,5 +1567,210 @@ mod tests {
             action_state.query_buffer,
             "SELECT * FROM iceberg.sales.orders OFFSET 0 LIMIT 235"
         );
+    }
+
+    #[test]
+    fn fetch_table_ddl_auto_dispatches_table_view_for_unpartitioned_table_when_pending() {
+        let mut app = App::new(sample_config(), false);
+        app.screen = Screen::Actions(ActionState {
+            catalog: "hive".to_string(),
+            schema: "default".to_string(),
+            table: "events".to_string(),
+            selected: 0,
+            pending_action: Some(0),
+            ddl_loading: true,
+            ..Default::default()
+        });
+
+        let cmd = handle_async_result(
+            &mut app,
+            AsyncResult::FetchTableDdl {
+                show_create_log_id: 1,
+                catalog: "hive".to_string(),
+                schema: "default".to_string(),
+                table: "events".to_string(),
+                partitioned_by: Vec::new(),
+                location: "s3://bucket/events".to_string(),
+                ddl_text: "CREATE TABLE hive.default.events (id bigint)".to_string(),
+                show_create_error: None,
+            },
+        );
+
+        assert!(matches!(
+            cmd,
+            Some(Command::ExecuteQuery {
+                catalog,
+                schema,
+                table,
+                is_paginated: true,
+                ..
+            }) if catalog == "hive" && schema == "default" && table == "events"
+        ));
+        let Screen::Actions(s) = &app.screen else { panic!() };
+        assert_eq!(s.pending_action, None);
+        assert!(!s.ddl_loading);
+    }
+
+    #[test]
+    fn fetch_table_ddl_auto_dispatches_drilldown_for_partitioned_table_when_pending() {
+        let mut app = App::new(sample_config(), false);
+        app.screen = Screen::Actions(ActionState {
+            catalog: "hive".to_string(),
+            schema: "default".to_string(),
+            table: "events_part".to_string(),
+            selected: 0,
+            pending_action: Some(0),
+            ddl_loading: true,
+            ..Default::default()
+        });
+
+        let cmd = handle_async_result(
+            &mut app,
+            AsyncResult::FetchTableDdl {
+                show_create_log_id: 1,
+                catalog: "hive".to_string(),
+                schema: "default".to_string(),
+                table: "events_part".to_string(),
+                partitioned_by: vec!["dt".to_string(), "region".to_string()],
+                location: "s3://bucket/events_part".to_string(),
+                ddl_text: "CREATE TABLE hive.default.events_part (id bigint, dt varchar, region varchar)".to_string(),
+                show_create_error: None,
+            },
+        );
+
+        assert!(matches!(
+            cmd,
+            Some(Command::FetchPartitionLevel {
+                catalog,
+                schema,
+                table,
+                column,
+                filters,
+            }) if catalog == "hive" && schema == "default" && table == "events_part" && column == "dt" && filters.is_empty()
+        ));
+        let Screen::Actions(s) = &app.screen else { panic!() };
+        assert_eq!(s.pending_action, None);
+        assert!(!s.ddl_loading);
+        assert!(s.drilldown.is_some());
+    }
+
+    #[test]
+    fn execute_query_hides_hudi_internal_columns_by_default_and_selects_first_visible() {
+        let mut app = App::new(sample_config(), false);
+        app.screen = Screen::Actions(ActionState {
+            catalog: "hudi".to_string(),
+            schema: "analytics".to_string(),
+            table: "users".to_string(),
+            selected: 0,
+            ..Default::default()
+        });
+
+        handle_async_result(
+            &mut app,
+            AsyncResult::ExecuteQuery {
+                log_id: 1,
+                query_buffer: "SELECT * FROM hudi.analytics.users".to_string(),
+                query_cursor: 34,
+                catalog: "hudi".to_string(),
+                schema: "analytics".to_string(),
+                table: "users".to_string(),
+                is_paginated: true,
+                filters: Vec::new(),
+                result: Ok(crate::trino::types::QueryResults {
+                    columns: vec![
+                        crate::trino::types::Column {
+                            name: "_hoodie_commit_time".to_string(),
+                        },
+                        crate::trino::types::Column {
+                            name: "_hoodie_record_key".to_string(),
+                        },
+                        crate::trino::types::Column {
+                            name: "user_id".to_string(),
+                        },
+                        crate::trino::types::Column {
+                            name: "username".to_string(),
+                        },
+                    ],
+                    data: vec![
+                        vec![
+                            "20261014120000".to_string(),
+                            "key1".to_string(),
+                            "101".to_string(),
+                            "alice".to_string(),
+                        ],
+                    ],
+                    duration_ms: 10,
+                }),
+            },
+        );
+
+        let Screen::Actions(s) = &app.screen else { panic!() };
+        let res = s.results.as_ref().unwrap();
+        assert!(res.hidden_columns.contains("_hoodie_commit_time"));
+        assert!(res.hidden_columns.contains("_hoodie_record_key"));
+        assert!(!res.hidden_columns.contains("user_id"));
+        assert!(!res.hidden_columns.contains("username"));
+        // First visible column is user_id at index 2
+        assert_eq!(res.selected_col, 2);
+    }
+
+    #[test]
+    fn fetch_partition_level_auto_dispatches_count_for_selected_item_zero() {
+        let mut app = App::new(sample_config(), false);
+        app.screen = Screen::Actions(ActionState {
+            catalog: "lake".to_string(),
+            schema: "default".to_string(),
+            table: "logs".to_string(),
+            selected: 0,
+            drilldown: Some(DrillDownState {
+                partition_cols: vec!["dt".to_string()],
+                path: Vec::new(),
+                levels_cache: Vec::new(),
+                selected: 0,
+                loading: true,
+                error: None,
+                truncated: false,
+                table_count: None,
+                table_count_loading: true,
+                counts_cache: std::collections::HashMap::new(),
+                current_count_loading: true,
+            }),
+            ..Default::default()
+        });
+
+        let cmd = handle_async_result(
+            &mut app,
+            AsyncResult::FetchPartitionLevel {
+                log_id: 1,
+                catalog: "lake".to_string(),
+                schema: "default".to_string(),
+                table: "logs".to_string(),
+                filters: Vec::new(),
+                column: "dt".to_string(),
+                result: Ok(crate::trino::types::QueryResults {
+                    columns: vec![crate::trino::types::Column {
+                        name: "dt".to_string(),
+                    }],
+                    data: vec![
+                        vec!["2026-10-14".to_string()],
+                        vec!["2026-10-13".to_string()],
+                    ],
+                    duration_ms: 20,
+                }),
+            },
+        );
+
+        assert!(matches!(
+            cmd,
+            Some(Command::FetchPartitionCount {
+                catalog,
+                schema,
+                table,
+                filters,
+            }) if catalog == "lake"
+                && schema == "default"
+                && table == "logs"
+                && filters == vec![("dt".to_string(), "2026-10-14".to_string())]
+        ));
     }
 }

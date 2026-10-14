@@ -104,6 +104,7 @@ pub fn drilldown_go_up(s: &mut ActionState) -> Option<Command> {
             s.query_cursor = query.len();
             s.query_buffer = query;
         }
+        return super::actions::maybe_fetch_selected_partition_count(s);
     }
     None
 }
