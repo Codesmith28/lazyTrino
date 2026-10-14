@@ -19,53 +19,24 @@ Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[C
 ## Layout Overview
 
 ```
-+----------------------------------+-------------------------------------------------------------------------+
-| Menu — <table_name>              |  Centralized Search Bar [/ to search]                                   |
-| (Resizable Panel Split)          +-------------------------------------------------------------------------+
-|                                  |  Breadcrumbs: iceberg › sales › orders                                  |
-| ▸ [v] Table View Mode            |  Table Query Bar [Press q or : to write query]                          |
-|   [c] Table DDL                  |  SQL > SELECT * FROM "iceberg"."sales"."orders" LIMIT 100               |
-|   [s] Schema & Info              +-------------------------------------------------------------------------+
-|   [t] Show Stats                 |  Table View (100 records | sorted by id desc) [C:cols F:filter S:sort]   |
-|   [m] Sample Mode (20 rows)      |  +----+-------------+-------------------------+-----------------------+ |
-|   [p] Partitions                 |  | id | customer_id | order_date              | total_amount          | |
-|                                  |  +----+-------------+-------------------------+-----------------------+ |
-|                                  |  | 99 | C-1042      | 2026-10-14 09:12:00 UTC | 1,420.50              | |
-|                                  |  | 98 | C-0819      | 2026-10-14 08:45:22 UTC |   310.00              | |
-|                                  |  +----+-------------+-------------------------+-----------------------+ |
-+----------------------------------+-------------------------------------------------------------------------+
-| Query Inspector & Audit Logs [Status: SUCCESS | Duration: 38ms | Rows: 100]                                |
-+------------------------------------------------------------------------------------------------------------+
-| Footer Hints [j/k:rows  h/l:cols  V:vis-line  ^V:vis-block  y:yank  C:cols  F:filter  S:sort  ?:help  ^C:quit] |
-+------------------------------------------------------------------------------------------------------------+
++----------------------------+---------------------------------------------------------------+
+| Menu - <table_name>        | Table Query Bar [Press q or : to write query]                 |
+| (Resizable Split)          | SQL > SELECT * FROM "iceberg"."sales"."orders" LIMIT 100      |
+|                            +---------------------------------------------------------------+
+| > [v] Table View Mode      | iceberg > sales > orders | 100 records | sorted by id desc    |
+|                            +---------------------------------------------------------------+
+|   [c] Table DDL            | +----+-------------+-------------------------+--------------+ |
+|   [s] Schema & Info        | | id | customer_id | order_date              | total_amount | |
+|   [t] Show Stats           | +----+-------------+-------------------------+--------------+ |
+|   [m] Sample (20 rows)     | | 99 | C-1042      | 2026-10-14 09:12:00 UTC |     1,420.50 | |
+|   [p] Partitions           | | 98 | C-0819      | 2026-10-14 08:45:22 UTC |       310.00 | |
+|                            | +----+-------------+-------------------------+--------------+ |
++----------------------------+---------------------------------------------------------------+
+| Query Inspector & Audit Logs [Status: SUCCESS | Duration: 38ms | Rows: 100]                |
++--------------------------------------------------------------------------------------------+
+| Footer Hints [j/k:rows  h/l:cols  V:line  ^V:block  y:yank  C:cols  F:filter  S:sort]      |
++--------------------------------------------------------------------------------------------+
 ```
-
----
-
-## Key Features
-
-- 🗂️ **Hierarchical Catalog Navigation**: Seamlessly navigate through Catalogs $\rightarrow$ Schemas $\rightarrow$ Tables $\rightarrow$ Table Actions.
-- 🌲 **Partition Drill-Down (`cd`/`ls` style)**: Browse partitioned datasets one partition level at a time without split timeouts or full table scans.
-- 📑 **Saved Table Views (`Ctrl+S` / `Ctrl+O` / `B`)**: Name and persist custom table view states (active filters, hidden columns, sort orders). Manage saved views with search, multi-selection (`Space`), select-all (`a`), and batch delete (`d`).
-- 🔍 **Nested JSON & Map Flattening (`C`)**: Interactive column inspection modal with tree-view drilldown for nested structures. Automatically generates equivalent Trino SQL queries to unnest and extract nested fields.
-- 🎯 **Advanced Vim Visual Modes**:
-  - Visual Line (`V`) for full row selections.
-  - Visual Block (`Ctrl+V`) for rectangular cell matrices.
-  - Swap cursor and anchor ends (`o` / `O`).
-  - Automatic visual mode on `Shift+Arrow` keys or mouse Shift-Click & Drag.
-- 📋 **Context-Aware Clipboard & Export**:
-  - `y`: Smart clipboard copy — copies single cell value, selected rows, or visual blocks formatted as CSV.
-  - `Y`: Yank whole row, or export the loaded dataset to a CSV file.
-- 🔃 **Column-wise Cyclic Sorting (`S` / Header Click)**: Cycle sorting on the active column: Ascending (`▲`) $\rightarrow$ Descending (`▼`) $\rightarrow$ Clear.
-- 🎛️ **Comparator & Value Filtering (`F`)**:
-  - Numeric comparator filters (`>`, `<`, `>=`, `<=`, `=`, `!=`, `BETWEEN`).
-  - Distinct categorical value checklist with instant search and toggle selection.
-- 👁️ **Column Visibility Manager (`C`)**: Hide or display specific columns to easily inspect wide schemas.
-- ✍️ **Interactive SQL Query Bar (`q` / `:`)**: In-line query buffer with cursor editing, selection, clipboard integration (`Ctrl+C`/`Ctrl+V`), and instant execution.
-- ♾️ **Incremental Viewport Scrolling**: Smooth incremental horizontal and vertical scrolling with visual scrollbars.
-- 🖱️ **Interactive Mouse Support**: Click to select rows/columns/actions, scroll wheel navigation, and click-and-drag vertical pane border resizing.
-- 📊 **Query Inspector & Audit Log**: Real-time query execution monitoring, durations (ms), fetched row counts, and traceback details.
-- 🔑 **Interactive Connection Screen & Config Profiles**: Interactive login screen with persistent connection profiles via `config.toml`.
 
 ---
 
@@ -73,28 +44,19 @@ Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[C
 
 ### Option 1: One-Line Installer (macOS & Linux)
 
-Install the latest pre-compiled binary directly to `~/.local/bin`:
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Codesmith28/lazyTrino/main/install.sh | bash
 ```
 
-The installer automatically detects your operating system (macOS / Linux) and CPU architecture (Apple Silicon ARM64, Intel x86_64, Linux x86_64 / ARM64).
+The installer automatically detects your operating system and architecture (`arm64` / `x86_64`) and installs to `~/.local/bin/lazyTrino`.
 
 ### Option 2: Pre-built Binaries
 
-Download pre-compiled release packages for macOS, Linux, or Windows from [GitHub Releases](https://github.com/Codesmith28/lazyTrino/releases).
-
-| Platform | Target | Archive |
-| --- | --- | --- |
-| **macOS (Apple Silicon)** | `aarch64-apple-darwin` | `.tar.gz` |
-| **macOS (Intel)** | `x86_64-apple-darwin` | `.tar.gz` |
-| **Linux (x86_64)** | `x86_64-unknown-linux-gnu` | `.tar.gz` |
-| **Windows (x86_64)** | `x86_64-pc-windows-msvc` | `.zip` |
+Download pre-compiled binaries for macOS (Apple Silicon / Intel), Linux, or Windows from [GitHub Releases](https://github.com/Codesmith28/lazyTrino/releases).
 
 ### Option 3: Built-in Self-Updater
 
-If you already have `lazyTrino` installed, update to the latest release at any time:
+Update to the latest release at any time:
 
 ```bash
 lazyTrino --update
@@ -104,16 +66,7 @@ lazyTrino -u
 
 ### Option 4: Build from Source
 
-Requires [Rust](https://rustup.rs/) (stable 1.85+):
-
 ```bash
-git clone https://github.com/Codesmith28/lazyTrino.git
-cd lazyTrino
-
-# Build native release binary
-cargo build --release
-
-# Or install directly to ~/.cargo/bin
 cargo install --path .
 ```
 
@@ -125,58 +78,36 @@ cargo install --path .
 # Connect using default URL (http://localhost:8080)
 lazyTrino
 
-# Connect to a custom server
-lazyTrino --url http://trino.example.com:8080 --user admin
-
-# Connect with password authentication
+# Connect to custom server
 lazyTrino --url https://trino.example.com:8443 --user admin --password secret
 
 # Connect using a named profile
 lazyTrino --profile prod
-
-# Update to latest version
-lazyTrino --update
 ```
-
-### Command-Line Options
-
-| Flag | Short / Alias | Default | Description |
-| --- | --- | --- | --- |
-| `--url` | | `http://localhost:8080` | Trino coordinator REST server URL |
-| `--user` | | `$USER` (or `trino`) | Trino username |
-| `--password` | `--pass` | *(none)* | Trino password |
-| `--profile <NAME>` | | *(none)* | Load connection defaults from named profile |
-| `--log-level <LEVEL>` | | `info` | Set file log level (`trace`, `debug`, `info`, `warn`, `error`) |
-| `--no-log` | | `false` | Disable file logging entirely |
-| `--update` | `-u` | | Check for and install latest GitHub release |
-| `-h`, `--help` | | | Print CLI help |
-| `-V`, `--version` | | | Print version |
-
-### Configuration Profiles
-
-Persistent connection profiles can be saved in an OS-specific `config.toml`:
-
-- **macOS**: `~/Library/Application Support/lazytrino/config.toml`
-- **Linux**: `~/.config/lazytrino/config.toml`
-- **Windows**: `%APPDATA%\lazytrino\config.toml`
-
-```toml
-default_profile = "local"
-
-[profiles.local]
-url = "http://localhost:8080"
-user = "trino"
-
-[profiles.prod]
-url = "https://trino.example.com:8443"
-user = "admin"
-```
-
-**Resolution Precedence**: CLI flags $\rightarrow$ `LAZYTRINO_*` env vars $\rightarrow$ Selected Profile $\rightarrow$ `[last_used]` values $\rightarrow$ Built-in defaults.
 
 ---
 
-## Keybindings & Controls
+## Key Features
+
+- 🗂️ **Catalog & Schema Hierarchy**: Drill down from Catalogs $\rightarrow$ Schemas $\rightarrow$ Tables $\rightarrow$ Actions.
+- 🌲 **Partition Drill-Down (`cd`/`ls` style)**: Browse partitioned tables one partition level at a time with instant counts and no split errors.
+- 📑 **Saved Table Views (`Ctrl+S` / `Ctrl+O` / `B`)**: Name and persist custom view states (filters, hidden columns, sort orders) with multi-select and batch deletion.
+- 🔍 **Nested JSON & Map Flattening (`C`)**: Interactive column modal with tree-view drilldown that generates unnesting Trino SQL queries.
+- 🎯 **Advanced Vim Visual Modes**: Visual Line (`V`), Visual Block (`Ctrl+V`), cursor/anchor swap (`o`/`O`), and Shift-drag mouse selection.
+- 📋 **Context-Aware Clipboard & Export**: Single cell copy, multi-cell/row CSV export (`y`), and full dataset CSV file dump (`Y`).
+- 🔃 **Column-wise Sorting (`S`)**: Cycle active column sort: Ascending (`▲`) $\rightarrow$ Descending (`▼`) $\rightarrow$ None.
+- 🎛️ **Column Filtering (`F`)**: Numeric comparator filters (`>`, `<`, `>=`, `<=`, `=`, `!=`, `BETWEEN`) and distinct categorical value checklists.
+- 👁️ **Column Visibility Manager (`C`)**: Hide or display specific columns in wide tables.
+- ✍️ **Interactive SQL Query Bar (`q` / `:`)**: Buffer editing with text selection, clipboard support, and instant query execution.
+- 🖱️ **Mouse & Resizable Split**: Click-to-select, wheel scrolling, and draggable vertical pane divider.
+- 📊 **Audit Logs & Status Bar**: Real-time query execution monitoring, latency (ms), row counts, and traceback errors.
+
+---
+
+## ⌨️ Keybindings & Controls
+
+<details>
+  <summary><b>Click to expand full keybindings and shortcuts table</b></summary>
 
 ### Global & Hierarchy Navigation
 
@@ -267,20 +198,51 @@ When a table is selected in the menu, press the action hotkey:
 | Mouse Wheel | Scroll lists, partition trees, column horizontal scroll, and result tables |
 | Drag Vertical Border | Dynamically resize split ratio between Menu and Preview panes |
 
+</details>
+
 ---
 
-## Contributing & Development
+## ⚙️ Configuration Profiles & CLI Options
 
-```bash
-# Run code formatting check
-cargo fmt --check
+<details>
+  <summary><b>Click to expand CLI flags and configuration profile options</b></summary>
 
-# Run linter
-cargo clippy -- -D warnings
+### CLI Options
 
-# Run all test suites
-cargo test --all
+| Flag | Short / Alias | Default | Description |
+| --- | --- | --- | --- |
+| `--url` | | `http://localhost:8080` | Trino coordinator REST server URL |
+| `--user` | | `$USER` (or `trino`) | Trino username |
+| `--password` | `--pass` | *(none)* | Trino password |
+| `--profile <NAME>` | | *(none)* | Load connection defaults from named profile |
+| `--log-level <LEVEL>` | | `info` | Set file log level (`trace`, `debug`, `info`, `warn`, `error`) |
+| `--no-log` | | `false` | Disable file logging entirely |
+| `--update` | `-u` | | Check for and install latest GitHub release |
+| `-h`, `--help` | | | Print CLI help |
+| `-V`, `--version` | | | Print version |
+
+### Configuration File
+
+Saved in:
+- **macOS**: `~/Library/Application Support/lazytrino/config.toml`
+- **Linux**: `~/.config/lazytrino/config.toml`
+- **Windows**: `%APPDATA%\lazytrino\config.toml`
+
+```toml
+default_profile = "local"
+
+[profiles.local]
+url = "http://localhost:8080"
+user = "trino"
+
+[profiles.prod]
+url = "https://trino.example.com:8443"
+user = "admin"
 ```
+
+**Resolution Precedence**: CLI flags $\rightarrow$ `LAZYTRINO_*` env vars $\rightarrow$ Selected Profile $\rightarrow$ `[last_used]` values $\rightarrow$ Built-in defaults.
+
+</details>
 
 ---
 
