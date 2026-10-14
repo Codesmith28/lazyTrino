@@ -260,6 +260,12 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                     }
                     None
                 }
+                KeyCode::Char('S') => {
+                    if let Some(ref mut res) = s.results {
+                        res.toggle_sort(&app.vertical_schema_cols);
+                    }
+                    None
+                }
                 _ => None,
             },
             ActivePanel::MainViewer => {
@@ -528,6 +534,12 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         KeyCode::Char('C') => {
                             if s.results.is_some() {
                                 crate::tui::handler::column_modal::open_column_modal(app);
+                            }
+                            None
+                        }
+                        KeyCode::Char('S') | KeyCode::Char('s') => {
+                            if let Some(ref mut res) = s.results {
+                                res.toggle_sort(&app.vertical_schema_cols);
                             }
                             None
                         }

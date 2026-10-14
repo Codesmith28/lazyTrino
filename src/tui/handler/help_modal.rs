@@ -95,14 +95,36 @@ pub fn handle_help_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> {
                 }
                 None
             }
-            KeyCode::Char('g') => {
+            KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char('f')
+                if code == KeyCode::PageDown
+                    || key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                if let Some(ref mut m) = app.help_modal {
+                    let total_lines =
+                        crate::tui::screens::help::build_help_lines(&m.search_query).len();
+                    m.scroll = (m.scroll + 15).min(total_lines.saturating_sub(1));
+                    app.help_scroll = m.scroll;
+                }
+                None
+            }
+            KeyCode::PageUp | KeyCode::Char('u') | KeyCode::Char('b')
+                if code == KeyCode::PageUp
+                    || key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                if let Some(ref mut m) = app.help_modal {
+                    m.scroll = m.scroll.saturating_sub(15);
+                    app.help_scroll = m.scroll;
+                }
+                None
+            }
+            KeyCode::Char('g') | KeyCode::Home => {
                 if let Some(ref mut m) = app.help_modal {
                     m.scroll = 0;
                     app.help_scroll = 0;
                 }
                 None
             }
-            KeyCode::Char('G') => {
+            KeyCode::Char('G') | KeyCode::End => {
                 if let Some(ref mut m) = app.help_modal {
                     m.scroll = 100;
                     app.help_scroll = 100;

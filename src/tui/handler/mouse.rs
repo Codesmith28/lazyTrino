@@ -42,10 +42,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
         return handle_column_modal_mouse(app, mouse, term_width, term_height);
     }
     if app.help_modal.is_some() {
-        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            crate::tui::handler::help_modal::close_help_modal(app);
-        }
-        return None;
+        return handle_help_modal_mouse(app, mouse, term_width, term_height);
     }
 
     let bottom_y = term_height.saturating_sub(7);
@@ -951,8 +948,11 @@ fn handle_column_modal_mouse(
     term_width: u16,
     term_height: u16,
 ) -> Option<Command> {
-    let modal_width = (term_width * 60 / 100).clamp(45, 80).min(term_width);
-    let modal_height = 20.min(term_height);
+    let modal = app.column_modal.as_ref()?;
+    let modal_width = (term_width * 60 / 100).clamp(40, 80).min(term_width);
+    let max_height = term_height.saturating_sub(4).max(10);
+    let needed_height = (modal.columns.len() as u16 + 8).min(max_height);
+    let modal_height = needed_height.clamp(11, 24).min(term_height);
     let popup_area = Rect {
         x: (term_width.saturating_sub(modal_width)) / 2,
         y: (term_height.saturating_sub(modal_height)) / 2,
@@ -971,6 +971,110 @@ fn handle_column_modal_mouse(
                 return None;
             }
             app.mode = Mode::ColumnModal;
+            let _rel_x = mouse.column.saturating_sub(popup_area.x);
+            let rel_y = mouse.row.saturating_sub(popup_area.y);
+            let modal = app.column_modal.as_mut()?;
+
+            // Check if clicking in search box area (rel_y 1..=3)
+            if rel_y >= 1 && rel_y <= 3 {
+                modal.is_searching = true;
+                return None;
+            }
+
+            // List area starts at rel_y 4
+            let list_start_y = 4;
+            let list_end_y = popup_area.height.saturating_sub(2);
+            if rel_y >= list_start_y && rel_y < list_end_y {
+                let item_offset = (rel_y - list_start_y) as usize;
+                let matched = modal.filtered_indices();
+                let target_idx = modal.scroll + item_offset;
+                if target_idx < matched.len() {
+                    modal.cursor = target_idx;
+                    let orig_idx = matched[target_idx];
+                    if let Some(col) = modal.columns.get(orig_idx).cloned() {
+                        if modal.selected_columns.contains(&col) {
+                            if modal.selected_columns.len() > 1 {
+                                modal.selected_columns.remove(&col);
+                            }
+                        } else {
+                            modal.selected_columns.insert(col);
+                        }
+                    }
+                }
+            }
+            None
+        }
+        MouseEventKind::ScrollUp => {
+            if let Some(ref mut m) = app.column_modal {
+                m.cursor = m.cursor.saturating_sub(2);
+                if m.cursor < m.scroll {
+                    m.scroll = m.cursor;
+                }
+            }
+            None
+        }
+        MouseEventKind::ScrollDown => {
+            if let Some(ref mut m) = app.column_modal {
+                let matched_len = m.filtered_indices().len();
+                if matched_len > 0 {
+                    let vis_h = (popup_area.height.saturating_sub(6) as usize).max(1);
+                    m.cursor = (m.cursor + 2).min(matched_len - 1);
+                    if m.cursor >= m.scroll + vis_h {
+                        m.scroll = m.cursor.saturating_sub(vis_h.saturating_sub(1));
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn handle_help_modal_mouse(
+    app: &mut App,
+    mouse: MouseEvent,
+    term_width: u16,
+    term_height: u16,
+) -> Option<Command> {
+    if app.help_modal.is_none() {
+        return None;
+    }
+    let modal_width = (term_width * 80 / 100).clamp(60, 110).min(term_width);
+    let modal_height = (term_height * 85 / 100).clamp(18, 45).min(term_height);
+    let popup_area = Rect {
+        x: (term_width.saturating_sub(modal_width)) / 2,
+        y: (term_height.saturating_sub(modal_height)) / 2,
+        width: modal_width,
+        height: modal_height,
+    };
+
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            if mouse.column < popup_area.x
+                || mouse.column >= popup_area.x + popup_area.width
+                || mouse.row < popup_area.y
+                || mouse.row >= popup_area.y + popup_area.height
+            {
+                crate::tui::handler::help_modal::close_help_modal(app);
+            }
+            None
+        }
+        MouseEventKind::ScrollUp => {
+            if let Some(ref mut m) = app.help_modal {
+                m.scroll = m.scroll.saturating_sub(3);
+                app.help_scroll = m.scroll;
+            }
+            None
+        }
+        MouseEventKind::ScrollDown => {
+            if let Some(ref mut m) = app.help_modal {
+                let total_lines =
+                    crate::tui::screens::help::build_help_lines(&m.search_query).len();
+                let content_h = (popup_area.height.saturating_sub(6) as usize).max(1);
+                let max_scroll = total_lines.saturating_sub(content_h);
+                m.scroll = (m.scroll + 3).min(max_scroll);
+                app.help_scroll = m.scroll;
+            }
             None
         }
         _ => None,
@@ -1450,5 +1554,86 @@ mod tests {
             handle_mouse_sync(&mut app, mouse_up);
             assert!(!app.is_dragging_h_scrollbar, "Mouse up must reset is_dragging_h_scrollbar");
         }
+    }
+
+    #[test]
+    fn test_mouse_scroll_and_click_in_help_modal() {
+        let mut app = sample_app();
+        crate::tui::handler::help_modal::open_help_modal(&mut app);
+        assert_eq!(app.help_modal.as_ref().unwrap().scroll, 0);
+
+        // ScrollDown
+        let scroll_down = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 30,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, scroll_down);
+        assert!(app.help_modal.as_ref().unwrap().scroll > 0, "Mouse ScrollDown must scroll help modal");
+
+        // ScrollUp
+        let scroll_up = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 30,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, scroll_up);
+        assert_eq!(app.help_modal.as_ref().unwrap().scroll, 0, "Mouse ScrollUp must scroll back up");
+
+        // Click outside closes help modal (e.g. at (0, 0))
+        let click_outside = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, click_outside);
+        assert!(app.help_modal.is_none(), "Click outside help modal must close it");
+    }
+
+    #[test]
+    fn test_mouse_scroll_and_click_in_column_modal() {
+        let mut app = sample_app();
+        app.column_modal = Some(ColumnModalState {
+            columns: vec!["id".to_string(), "name".to_string(), "status".to_string()],
+            selected_columns: ["id".to_string(), "name".to_string(), "status".to_string()].into_iter().collect(),
+            cursor: 0,
+            scroll: 0,
+            search_query: String::new(),
+            is_searching: false,
+        });
+        app.mode = Mode::ColumnModal;
+
+        // Mouse scroll down
+        let scroll_down = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 30,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, scroll_down);
+        assert!(app.column_modal.as_ref().unwrap().cursor > 0, "Mouse ScrollDown must move cursor");
+
+        // Mouse scroll up
+        let scroll_up = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 30,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, scroll_up);
+        assert_eq!(app.column_modal.as_ref().unwrap().cursor, 0, "Mouse ScrollUp must return to 0");
+
+        // Click outside closes column modal
+        let click_outside = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, click_outside);
+        assert!(app.column_modal.is_none(), "Click outside column modal must close it");
     }
 }

@@ -136,8 +136,32 @@ pub fn render_actions_count_box(
     app: &App,
     state: &ActionState,
 ) {
+    let title = if !state.table.is_empty() {
+        if let Some(ref dd) = state.drilldown
+            && !dd.path.is_empty()
+        {
+            let p_str = dd
+                .path
+                .iter()
+                .map(|(c, v)| format!("{c}={v}"))
+                .collect::<Vec<_>>()
+                .join(" › ");
+            format!(
+                " Dataset Records — {} › {} › {} › {} ",
+                state.catalog, state.schema, state.table, p_str
+            )
+        } else {
+            format!(
+                " Dataset Records — {} › {} › {} ",
+                state.catalog, state.schema, state.table
+            )
+        }
+    } else {
+        " Dataset Records ".to_string()
+    };
+
     let block = Block::default()
-        .title(" Dataset Records ")
+        .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme::style(theme::ACCENT_BORDER));

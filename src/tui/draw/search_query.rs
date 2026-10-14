@@ -156,12 +156,19 @@ pub fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
                     || state.results.as_ref().is_some_and(|results| results.is_paginated))
     );
 
+    let table_scope = match effective_screen {
+        Screen::Actions(state) if !state.table.is_empty() => {
+            format!(" — {} › {} › {} ", state.catalog, state.schema, state.table)
+        }
+        _ => " ".to_string(),
+    };
+
     let title = if is_editing {
-        " Table Query Bar [EDITING - Press Enter to run, Esc to cancel] "
+        format!(" Table Query Bar{table_scope}[EDITING - Press Enter to run, Esc to cancel] ")
     } else if is_table_view {
-        " Table Query Bar [Press 'q' or ':' to write query] "
+        format!(" Table Query Bar{table_scope}[Press 'q' or ':' to write query] ")
     } else {
-        " Table Query Bar [Disabled - Active only in full data table view] "
+        format!(" Table Query Bar{table_scope}[Disabled - Active only in full data table view] ")
     };
 
     let block = Block::default()

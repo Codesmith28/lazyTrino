@@ -1390,5 +1390,76 @@ pub mod tests {
         assert_eq!(state.results.as_ref().unwrap().selected_col, 0, "'0' with empty buffer must jump to column 0");
         assert!(app.number_buffer.is_empty(), "number_buffer must remain empty when '0' is pressed alone");
     }
+
+    #[test]
+    fn actions_keys_S_and_s_toggle_sorting_not_schema() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(sample_leaf_results_state()),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // Press 'S': should toggle sort to Desc (NOT switch to Schema!)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('S')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.selected, 0, "Selected menu action must remain TableView (0)");
+        assert_eq!(
+            state.results.as_ref().unwrap().sort,
+            Some(("event_type".to_string(), crate::app::SortDirection::Desc))
+        );
+
+        // Press 'S' again: Asc
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('S')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(
+            state.results.as_ref().unwrap().sort,
+            Some(("event_type".to_string(), crate::app::SortDirection::Asc))
+        );
+
+        // Press 's' (lowercase): None
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('s')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.results.as_ref().unwrap().sort, None);
+    }
+
+    #[test]
+    fn actions_keys_reworded_lowercase_hotkeys_trigger_actions() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            ..Default::default()
+        }));
+
+        // All menu actions have lowercase hotkeys
+        for (key, _, _) in crate::app::ACTIONS {
+            assert!(key.is_lowercase(), "Key '{key}' must be lowercase");
+        }
+
+        // 'e' triggers Schema (index 6)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('e')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.selected, 6);
+
+        // 'p' triggers Partitions (index 5)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('p')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.selected, 5);
+
+        // 't' triggers Show Stats (index 3)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('t')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.selected, 3);
+
+        // 'm' triggers Sample Mode (index 4)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('m')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        assert_eq!(state.selected, 4);
+    }
 }
 

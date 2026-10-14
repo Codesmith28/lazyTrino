@@ -877,7 +877,13 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                 {
                     state.rows.extend(new_rows.clone());
                     if let Some(ref mut unfilt) = state.unfiltered_rows {
-                        unfilt.extend(new_rows);
+                        unfilt.extend(new_rows.clone());
+                    }
+                    if let Some(ref mut unsorted) = state.unsorted_rows {
+                        unsorted.extend(new_rows);
+                    }
+                    if state.sort.is_some() {
+                        state.apply_sort(&app.vertical_schema_cols);
                     }
                     state.offset = offset;
                     state.is_fetching_next_page = false;

@@ -120,14 +120,41 @@ pub fn handle_column_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
             }
             None
         }
-        KeyCode::Char('g') => {
+        KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char('f')
+            if code == KeyCode::PageDown
+                || key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+        {
+            if let Some(ref mut m) = app.column_modal {
+                let matched = m.filtered_indices();
+                if !matched.is_empty() {
+                    m.cursor = (m.cursor + 10).min(matched.len() - 1);
+                    if m.cursor >= m.scroll + 10 {
+                        m.scroll = m.cursor.saturating_sub(9);
+                    }
+                }
+            }
+            None
+        }
+        KeyCode::PageUp | KeyCode::Char('u') | KeyCode::Char('b')
+            if code == KeyCode::PageUp
+                || key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+        {
+            if let Some(ref mut m) = app.column_modal {
+                m.cursor = m.cursor.saturating_sub(10);
+                if m.cursor < m.scroll {
+                    m.scroll = m.cursor;
+                }
+            }
+            None
+        }
+        KeyCode::Char('g') | KeyCode::Home => {
             if let Some(ref mut m) = app.column_modal {
                 m.cursor = 0;
                 m.scroll = 0;
             }
             None
         }
-        KeyCode::Char('G') => {
+        KeyCode::Char('G') | KeyCode::End => {
             if let Some(ref mut m) = app.column_modal {
                 let matched = m.filtered_indices();
                 if !matched.is_empty() {

@@ -303,6 +303,8 @@ pub struct ResultsState {
     pub column_filters: HashMap<String, ColumnFilter>,
     pub col_distinct_values: HashMap<String, Vec<String>>,
     pub hidden_columns: HashSet<String>,
+    pub sort: Option<(String, SortDirection)>,
+    pub unsorted_rows: Option<Vec<Vec<String>>>,
 }
 
 pub fn format_count(n: usize) -> String {
@@ -415,6 +417,86 @@ impl ResultsState {
         self.selection_anchor = Some(0);
         self.query_cursor = self.query_buffer.len();
     }
+
+    pub fn toggle_sort(&mut self, vertical_schema_cols: &[VerticalColumn]) {
+        if self.columns.is_empty() || self.rows.is_empty() {
+            return;
+        }
+        let col_idx = self.selected_col.min(self.columns.len().saturating_sub(1));
+        let col_name = self.columns[col_idx].clone();
+
+        if self.unsorted_rows.is_none() {
+            self.unsorted_rows = Some(self.rows.clone());
+        }
+
+        let next_sort = match &self.sort {
+            Some((cur_col, SortDirection::Desc)) if cur_col == &col_name => {
+                Some((col_name.clone(), SortDirection::Asc))
+            }
+            Some((cur_col, SortDirection::Asc)) if cur_col == &col_name => None,
+            _ => Some((col_name.clone(), SortDirection::Desc)),
+        };
+
+        self.sort = next_sort;
+        self.apply_sort(vertical_schema_cols);
+    }
+
+    pub fn apply_sort(&mut self, vertical_schema_cols: &[VerticalColumn]) {
+        if let Some((ref col_name, direction)) = self.sort {
+            if let Some(col_idx) = self.columns.iter().position(|c| c == col_name) {
+                let data_type = vertical_schema_cols
+                    .iter()
+                    .find(|c| c.name.eq_ignore_ascii_case(col_name))
+                    .map(|c| c.data_type.as_str());
+
+                self.rows.sort_by(|row_a, row_b| {
+                    let val_a = row_a.get(col_idx).map(|s| s.as_str()).unwrap_or("");
+                    let val_b = row_b.get(col_idx).map(|s| s.as_str()).unwrap_or("");
+                    let is_null_a = val_a.trim().is_empty() || val_a.trim().eq_ignore_ascii_case("null");
+                    let is_null_b = val_b.trim().is_empty() || val_b.trim().eq_ignore_ascii_case("null");
+
+                    if is_null_a && is_null_b {
+                        return std::cmp::Ordering::Equal;
+                    }
+                    if is_null_a {
+                        return std::cmp::Ordering::Greater;
+                    }
+                    if is_null_b {
+                        return std::cmp::Ordering::Less;
+                    }
+
+                    let ord = compare_non_null_cell_values(val_a.trim(), val_b.trim(), data_type);
+                    match direction {
+                        SortDirection::Asc => ord,
+                        SortDirection::Desc => ord.reverse(),
+                    }
+                });
+            }
+        } else if let Some(ref unsorted) = self.unsorted_rows {
+            if self.column_filters.is_empty() {
+                self.rows = unsorted.clone();
+            } else {
+                self.rows = unsorted
+                    .iter()
+                    .filter(|row| {
+                        for (filter_col, filter) in &self.column_filters {
+                            if let Some(idx) = self.columns.iter().position(|c| c == filter_col) {
+                                let val = row.get(idx).map(|s| s.as_str()).unwrap_or("");
+                                if !filter.matches(val) {
+                                    return false;
+                                }
+                            }
+                        }
+                        true
+                    })
+                    .cloned()
+                    .collect();
+            }
+            self.unsorted_rows = None;
+        }
+        self.selected_row = 0;
+        self.scroll_v.set(0);
+    }
 }
 
 // `ActionState` (which embeds the optional `ResultsState` with query text/rows) is
@@ -431,6 +513,62 @@ pub enum Screen {
     Table(TableState),
     Actions(ActionState),
     Help,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortDirection {
+    Desc,
+    Asc,
+}
+
+pub fn is_numeric_type(t: &str) -> bool {
+    let t = t.to_lowercase();
+    t.starts_with("tinyint")
+        || t.starts_with("smallint")
+        || t.starts_with("integer")
+        || t.starts_with("int")
+        || t.starts_with("bigint")
+        || t.starts_with("real")
+        || t.starts_with("float")
+        || t.starts_with("double")
+        || t.starts_with("decimal")
+        || t.starts_with("numeric")
+}
+
+pub fn compare_cell_values(a: &str, b: &str, data_type: Option<&str>) -> std::cmp::Ordering {
+    let a_trim = a.trim();
+    let b_trim = b.trim();
+    let is_null_a = a_trim.is_empty() || a_trim.eq_ignore_ascii_case("null");
+    let is_null_b = b_trim.is_empty() || b_trim.eq_ignore_ascii_case("null");
+
+    if is_null_a && is_null_b {
+        return std::cmp::Ordering::Equal;
+    }
+    if is_null_a {
+        return std::cmp::Ordering::Greater;
+    }
+    if is_null_b {
+        return std::cmp::Ordering::Less;
+    }
+
+    compare_non_null_cell_values(a_trim, b_trim, data_type)
+}
+
+pub fn compare_non_null_cell_values(a: &str, b: &str, data_type: Option<&str>) -> std::cmp::Ordering {
+    let is_numeric = data_type.map(is_numeric_type).unwrap_or(false)
+        || (a.parse::<f64>().is_ok() && b.parse::<f64>().is_ok());
+
+    if is_numeric {
+        if let (Ok(num_a), Ok(num_b)) = (a.parse::<f64>(), b.parse::<f64>()) {
+            return num_a.partial_cmp(&num_b).unwrap_or(std::cmp::Ordering::Equal);
+        }
+    }
+
+    if let (Ok(bool_a), Ok(bool_b)) = (a.parse::<bool>(), b.parse::<bool>()) {
+        return bool_a.cmp(&bool_b);
+    }
+
+    a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -703,10 +841,10 @@ pub const ACTIONS: &[(char, &str, Action)] = &[
     ('v', "Table View Mode", Action::TableView),
     ('c', "Table DDL", Action::TableDDL),
     ('i', "Info Schema", Action::InfoSchema),
-    ('s', "Show Stats", Action::ShowStats),
-    ('p', "Sample Mode (20 rows)", Action::Sample),
-    ('P', "Partitions", Action::Partitions),
-    ('S', "Schema", Action::Schema),
+    ('t', "Show Stats", Action::ShowStats),
+    ('m', "Sample Mode (20 rows)", Action::Sample),
+    ('p', "Partitions", Action::Partitions),
+    ('e', "Schema", Action::Schema),
 ];
 
 impl Action {

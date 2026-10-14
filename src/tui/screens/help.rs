@@ -56,6 +56,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
             "  g / G                          Jump to top / bottom of active preview pane",
             "  C                              Open column visibility modal (filter which columns to see in view)",
             "  F                              Open filter modal for the current column",
+            "  S                              Toggle column sorting (desc -> asc -> none)",
             "  y                              Copy loaded result grid as TSV (Y exports it as CSV)",
             "  Esc                            Switch focus to Menu Pane / Go back to Tables list",
             "  Enter                          Select menu option & focus Preview Pane",
@@ -66,8 +67,8 @@ const HELP_SECTIONS: &[HelpSection] = &[
         items: &[
             "  v                              Table View Mode (Infinite Scroll grid)",
             "  c / i                          Table DDL / Info Schema",
-            "  s / p                          Show Stats / Sample (20 rows)",
-            "  P / S                          Partitions Tree / Vertical Schema Inspector",
+            "  t / m                          Show Stats / Sample (20 rows)",
+            "  p / e                          Partitions Tree / Vertical Schema Inspector",
         ],
     },
     HelpSection {

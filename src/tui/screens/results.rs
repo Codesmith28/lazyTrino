@@ -160,11 +160,15 @@ pub fn compute_column_width(
         })
         .max()
         .unwrap_or(0);
-    let header_len = if state.column_filters.contains_key(col_name) {
-        col_name.len() + 4
-    } else {
-        col_name.len()
-    };
+    let mut header_len = col_name.len();
+    if state.column_filters.contains_key(col_name) {
+        header_len += 4;
+    }
+    if let Some((ref sort_col, _)) = state.sort {
+        if sort_col == col_name {
+            header_len += 2;
+        }
+    }
     let raw_width = (header_len.max(max_data) as u16).max(8);
     let max_allowed = (available_width / 2).max(15) as u16;
     raw_width.min(max_allowed) as usize
@@ -613,7 +617,19 @@ pub fn render(
     is_active: bool,
     app: &crate::app::App,
 ) {
-    let title_prefix = " Query Results : ";
+    let title_prefix = if !state.table.is_empty() {
+        format!(
+            " Query Results — {} › {} › {} : ",
+            state.catalog, state.schema, state.table
+        )
+    } else {
+        " Query Results : ".to_string()
+    };
+    let sort_str = match &state.sort {
+        Some((col, crate::app::SortDirection::Asc)) => format!(", sorted by {col} asc"),
+        Some((col, crate::app::SortDirection::Desc)) => format!(", sorted by {col} desc"),
+        None => String::new(),
+    };
     let main_title = if state.invalid_query_error.is_some() {
         format!("{title_prefix}Invalid Query ")
     } else if state.is_paginated {
@@ -651,17 +667,17 @@ pub fn render(
 
         if state.is_fetching_next_page {
             format!(
-                "{title_prefix}Table View — Infinite Scroll{partition_str} ({} rows loaded{total_str}, col {col_str}) [Fetching page...] ",
+                "{title_prefix}Table View — Infinite Scroll{partition_str} ({} rows loaded{total_str}, col {col_str}{sort_str}) [Fetching page...] ",
                 state.rows.len()
             )
         } else if !state.has_more_rows {
             format!(
-                "{title_prefix}Table View — Infinite Scroll{partition_str} (All {} rows loaded{total_str}, col {col_str}) ",
+                "{title_prefix}Table View — Infinite Scroll{partition_str} (All {} rows loaded{total_str}, col {col_str}{sort_str}) ",
                 state.rows.len()
             )
         } else {
             format!(
-                "{title_prefix}Table View — Infinite Scroll{partition_str} ({} rows loaded{total_str}, col {col_str}) ",
+                "{title_prefix}Table View — Infinite Scroll{partition_str} ({} rows loaded{total_str}, col {col_str}{sort_str}) ",
                 state.rows.len()
             )
         }
@@ -681,7 +697,7 @@ pub fn render(
         };
 
         format!(
-            "{title_prefix}Sample Mode ({} sample rows, col {col_str}) ",
+            "{title_prefix}Sample Mode ({} sample rows, col {col_str}{sort_str}) ",
             state.rows.len()
         )
     };
@@ -824,11 +840,13 @@ pub fn render(
         .map(|(orig_col_idx, c)| {
             let is_selected_col = *orig_col_idx == state.selected_col;
             let has_filter = state.column_filters.contains_key(c);
-            let display_name = if has_filter {
-                format!("{c} [F]")
-            } else {
-                c.to_string()
+            let sort_indicator = match &state.sort {
+                Some((col_name, crate::app::SortDirection::Asc)) if col_name == c => " ▲",
+                Some((col_name, crate::app::SortDirection::Desc)) if col_name == c => " ▼",
+                _ => "",
             };
+            let filter_indicator = if has_filter { " [F]" } else { "" };
+            let display_name = format!("{c}{filter_indicator}{sort_indicator}");
             let style = if is_selected_col && is_active {
                 theme::warning_bold_style().add_modifier(Modifier::UNDERLINED)
             } else if is_selected_col {
@@ -1626,5 +1644,180 @@ mod tests {
         assert_eq!(state.scroll_h.get(), 0);
         let (_first, last) = visible_col_range_indices(&state, avail_width, 0);
         assert!(state.selected_col <= last);
+    }
+
+    #[test]
+    fn test_toggle_sort_cyclic_desc_asc_none() {
+        let cols = vec!["id".to_string(), "name".to_string()];
+        let rows = vec![
+            vec!["3".to_string(), "Charlie".to_string()],
+            vec!["1".to_string(), "Alice".to_string()],
+            vec!["2".to_string(), "Bob".to_string()],
+        ];
+        let mut state = ResultsState {
+            columns: cols,
+            rows: rows.clone(),
+            selected_col: 0,
+            ..Default::default()
+        };
+
+        // 1st toggle: Descending
+        state.toggle_sort(&[]);
+        assert_eq!(
+            state.sort,
+            Some(("id".to_string(), crate::app::SortDirection::Desc))
+        );
+        assert_eq!(
+            state.rows,
+            vec![
+                vec!["3".to_string(), "Charlie".to_string()],
+                vec!["2".to_string(), "Bob".to_string()],
+                vec!["1".to_string(), "Alice".to_string()],
+            ]
+        );
+
+        // 2nd toggle: Ascending
+        state.toggle_sort(&[]);
+        assert_eq!(
+            state.sort,
+            Some(("id".to_string(), crate::app::SortDirection::Asc))
+        );
+        assert_eq!(
+            state.rows,
+            vec![
+                vec!["1".to_string(), "Alice".to_string()],
+                vec!["2".to_string(), "Bob".to_string()],
+                vec!["3".to_string(), "Charlie".to_string()],
+            ]
+        );
+
+        // 3rd toggle: No-sorting (original order restored)
+        state.toggle_sort(&[]);
+        assert_eq!(state.sort, None);
+        assert_eq!(state.rows, rows);
+    }
+
+    #[test]
+    fn test_sort_numeric_column_orders_properly() {
+        let cols = vec!["val".to_string()];
+        let rows = vec![
+            vec!["10".to_string()],
+            vec!["2".to_string()],
+            vec!["NULL".to_string()],
+            vec!["-5".to_string()],
+            vec!["100.5".to_string()],
+        ];
+        let mut state = ResultsState {
+            columns: cols,
+            rows: rows.clone(),
+            selected_col: 0,
+            ..Default::default()
+        };
+
+        // Desc: 100.5, 10, 2, -5, NULL (null at bottom)
+        state.toggle_sort(&[]);
+        assert_eq!(
+            state.rows,
+            vec![
+                vec!["100.5".to_string()],
+                vec!["10".to_string()],
+                vec!["2".to_string()],
+                vec!["-5".to_string()],
+                vec!["NULL".to_string()],
+            ]
+        );
+
+        // Asc: -5, 2, 10, 100.5, NULL (null at bottom)
+        state.toggle_sort(&[]);
+        assert_eq!(
+            state.rows,
+            vec![
+                vec!["-5".to_string()],
+                vec!["2".to_string()],
+                vec!["10".to_string()],
+                vec!["100.5".to_string()],
+                vec!["NULL".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn test_sort_string_column_orders_properly() {
+        let cols = vec!["name".to_string()];
+        let rows = vec![
+            vec!["banana".to_string()],
+            vec!["Apple".to_string()],
+            vec!["NULL".to_string()],
+            vec!["cherry".to_string()],
+        ];
+        let mut state = ResultsState {
+            columns: cols,
+            rows,
+            selected_col: 0,
+            ..Default::default()
+        };
+
+        // Desc: cherry, banana, Apple, NULL
+        state.toggle_sort(&[]);
+        assert_eq!(
+            state.rows,
+            vec![
+                vec!["cherry".to_string()],
+                vec!["banana".to_string()],
+                vec!["Apple".to_string()],
+                vec!["NULL".to_string()],
+            ]
+        );
+
+        // Asc: Apple, banana, cherry, NULL
+        state.toggle_sort(&[]);
+        assert_eq!(
+            state.rows,
+            vec![
+                vec!["Apple".to_string()],
+                vec!["banana".to_string()],
+                vec!["cherry".to_string()],
+                vec!["NULL".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn test_render_table_with_sort_indicators() {
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+        let state = ResultsState {
+            columns: vec!["id".to_string(), "name".to_string()],
+            rows: vec![vec!["1".to_string(), "Alice".to_string()]],
+            sort: Some(("id".to_string(), crate::app::SortDirection::Desc)),
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            is_paginated: true,
+            ..Default::default()
+        };
+
+        let backend = TestBackend::new(160, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+
+        terminal
+            .draw(|f| {
+                render(f, Rect::new(0, 0, 160, 20), &state, "".to_string(), true, &app);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let mut content = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                content.push_str(buffer.cell((x, y)).unwrap().symbol());
+            }
+            content.push('\n');
+        }
+
+        assert!(content.contains("▼"), "Header should contain sort indicator: {content}");
+        assert!(content.contains("sorted by id desc"), "Title should show sort info: {content}");
+        assert!(content.contains("iceberg › sales › orders"), "Title should show table breadcrumb: {content}");
     }
 }
