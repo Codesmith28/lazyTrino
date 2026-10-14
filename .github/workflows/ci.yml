@@ -255,9 +255,13 @@ jobs:
     if: needs.prepare-release.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
       - name: Transition draft release to published
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release edit "${{ needs.prepare-release.outputs.tag }}" --draft=false --latest
           echo "Release ${{ needs.prepare-release.outputs.tag }} published successfully!"
@@ -271,8 +275,12 @@ jobs:
     if: needs.prepare-release.outputs.should_release == 'true' && failure()
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
       - name: Delete draft release and tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release delete "${{ needs.prepare-release.outputs.tag }}" --yes --cleanup-tag || true
