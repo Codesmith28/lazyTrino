@@ -307,6 +307,20 @@ pub struct ResultsState {
     pub hidden_columns: HashSet<String>,
     pub sort: Option<(String, SortDirection)>,
     pub unsorted_rows: Option<Vec<Vec<String>>>,
+    pub visual_mode: VisualMode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum VisualMode {
+    #[default]
+    None,
+    Line {
+        anchor_row: usize,
+    },
+    Block {
+        anchor_row: usize,
+        anchor_col: usize,
+    },
 }
 
 pub fn format_count(n: usize) -> String {
@@ -418,6 +432,75 @@ impl ResultsState {
     pub fn select_all(&mut self) {
         self.selection_anchor = Some(0);
         self.query_cursor = self.query_buffer.len();
+    }
+
+    pub fn is_in_visual_mode(&self) -> bool {
+        self.visual_mode != VisualMode::None
+    }
+
+    pub fn enter_visual_line(&mut self) {
+        self.visual_mode = VisualMode::Line {
+            anchor_row: self.selected_row,
+        };
+    }
+
+    pub fn enter_visual_block(&mut self) {
+        self.visual_mode = VisualMode::Block {
+            anchor_row: self.selected_row,
+            anchor_col: self.selected_col,
+        };
+    }
+
+    pub fn exit_visual_mode(&mut self) {
+        self.visual_mode = VisualMode::None;
+    }
+
+    pub fn toggle_visual_ends(&mut self) {
+        match self.visual_mode {
+            VisualMode::Line { ref mut anchor_row } => {
+                std::mem::swap(anchor_row, &mut self.selected_row);
+            }
+            VisualMode::Block {
+                ref mut anchor_row,
+                ref mut anchor_col,
+            } => {
+                std::mem::swap(anchor_row, &mut self.selected_row);
+                std::mem::swap(anchor_col, &mut self.selected_col);
+            }
+            VisualMode::None => {}
+        }
+    }
+
+    pub fn is_cell_selected(&self, row: usize, col: usize) -> bool {
+        match self.visual_mode {
+            VisualMode::None => false,
+            VisualMode::Line { anchor_row } => {
+                let min_r = anchor_row.min(self.selected_row);
+                let max_r = anchor_row.max(self.selected_row);
+                row >= min_r && row <= max_r
+            }
+            VisualMode::Block {
+                anchor_row,
+                anchor_col,
+            } => {
+                let min_r = anchor_row.min(self.selected_row);
+                let max_r = anchor_row.max(self.selected_row);
+                let min_c = anchor_col.min(self.selected_col);
+                let max_c = anchor_col.max(self.selected_col);
+                row >= min_r && row <= max_r && col >= min_c && col <= max_c
+            }
+        }
+    }
+
+    pub fn is_row_selected(&self, row: usize) -> bool {
+        match self.visual_mode {
+            VisualMode::None => false,
+            VisualMode::Line { anchor_row } | VisualMode::Block { anchor_row, .. } => {
+                let min_r = anchor_row.min(self.selected_row);
+                let max_r = anchor_row.max(self.selected_row);
+                row >= min_r && row <= max_r
+            }
+        }
     }
 
     pub fn toggle_sort(&mut self, vertical_schema_cols: &[VerticalColumn]) {

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::{ACTIONS, ActivePanel, App, Screen};
-use crate::tui::handler::{export, mouse, query};
+use crate::tui::handler::{mouse, query};
 
 use super::list::filter_items;
 
@@ -81,7 +81,7 @@ pub fn copy_active_pane_content(app: &mut App) {
                             .collect::<Vec<_>>()
                             .join("\n");
                     } else {
-                        export::copy_results_to_clipboard(app);
+                        copy_results_selection_or_cell(app);
                         return;
                     }
                 }
@@ -94,6 +94,144 @@ pub fn copy_active_pane_content(app: &mut App) {
         query::copy_to_clipboard(&text_to_copy);
         app.copied_toast = Some((toast_summary(&text_to_copy), std::time::Instant::now()));
     }
+}
+
+pub fn copy_results_selection_or_cell(app: &mut App) {
+    let Screen::Actions(ref mut s) = app.screen else {
+        return;
+    };
+    let Some(ref mut res) = s.results else {
+        app.copied_toast = Some((
+            "No query results to copy".to_string(),
+            std::time::Instant::now(),
+        ));
+        return;
+    };
+
+    match res.visual_mode {
+        crate::app::VisualMode::Line { anchor_row } => {
+            let min_r = anchor_row.min(res.selected_row);
+            let max_r = anchor_row
+                .max(res.selected_row)
+                .min(res.rows.len().saturating_sub(1));
+            let vis_cols = res.visible_columns();
+            let mut lines = Vec::new();
+            for r in min_r..=max_r {
+                if let Some(row) = res.rows.get(r) {
+                    let line = vis_cols
+                        .iter()
+                        .map(|(c, _)| row.get(*c).map(|s| s.as_str()).unwrap_or(""))
+                        .collect::<Vec<_>>()
+                        .join("\t");
+                    lines.push(line);
+                }
+            }
+            let text = lines.join("\n");
+            query::copy_to_clipboard(&text);
+            let count = max_r.saturating_sub(min_r) + 1;
+            app.copied_toast = Some((
+                format!("Copied {count} selected row(s) (TSV)"),
+                std::time::Instant::now(),
+            ));
+            res.exit_visual_mode();
+        }
+        crate::app::VisualMode::Block {
+            anchor_row,
+            anchor_col,
+        } => {
+            let min_r = anchor_row.min(res.selected_row);
+            let max_r = anchor_row
+                .max(res.selected_row)
+                .min(res.rows.len().saturating_sub(1));
+            let min_c = anchor_col.min(res.selected_col);
+            let max_c = anchor_col.max(res.selected_col);
+            let vis_cols: Vec<_> = res
+                .visible_columns()
+                .into_iter()
+                .filter(|(c, _)| *c >= min_c && *c <= max_c)
+                .collect();
+            let mut lines = Vec::new();
+            for r in min_r..=max_r {
+                if let Some(row) = res.rows.get(r) {
+                    let line = vis_cols
+                        .iter()
+                        .map(|(c, _)| row.get(*c).map(|s| s.as_str()).unwrap_or(""))
+                        .collect::<Vec<_>>()
+                        .join("\t");
+                    lines.push(line);
+                }
+            }
+            let text = lines.join("\n");
+            query::copy_to_clipboard(&text);
+            let r_count = max_r.saturating_sub(min_r) + 1;
+            let c_count = vis_cols.len();
+            app.copied_toast = Some((
+                format!("Copied {r_count}x{c_count} cell block (TSV)"),
+                std::time::Instant::now(),
+            ));
+            res.exit_visual_mode();
+        }
+        crate::app::VisualMode::None => {
+            let cell_val = res
+                .rows
+                .get(res.selected_row)
+                .and_then(|r| r.get(res.selected_col))
+                .cloned()
+                .unwrap_or_default();
+            query::copy_to_clipboard(&cell_val);
+            let summary = if cell_val.len() > 30 {
+                format!("{}...", &cell_val[..27])
+            } else {
+                cell_val
+            };
+            app.copied_toast = Some((
+                format!("Copied cell: {summary}"),
+                std::time::Instant::now(),
+            ));
+        }
+    }
+}
+
+pub fn yank_whole_row(app: &mut App) {
+    let Screen::Actions(ref mut s) = app.screen else {
+        return;
+    };
+    let Some(ref mut res) = s.results else {
+        app.copied_toast = Some((
+            "No query results to copy".to_string(),
+            std::time::Instant::now(),
+        ));
+        return;
+    };
+
+    let (min_r, max_r) = match res.visual_mode {
+        crate::app::VisualMode::Line { anchor_row }
+        | crate::app::VisualMode::Block { anchor_row, .. } => {
+            (anchor_row.min(res.selected_row), anchor_row.max(res.selected_row))
+        }
+        crate::app::VisualMode::None => (res.selected_row, res.selected_row),
+    };
+    let max_r = max_r.min(res.rows.len().saturating_sub(1));
+    let vis_cols = res.visible_columns();
+    let mut lines = Vec::new();
+    for r in min_r..=max_r {
+        if let Some(row) = res.rows.get(r) {
+            let line = vis_cols
+                .iter()
+                .map(|(c, _)| row.get(*c).map(|s| s.as_str()).unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("\t");
+            lines.push(line);
+        }
+    }
+    let text = lines.join("\n");
+    query::copy_to_clipboard(&text);
+    let count = max_r.saturating_sub(min_r) + 1;
+    app.copied_toast = Some((
+        format!("Copied {count} visible row(s) (TSV)"),
+        std::time::Instant::now(),
+    ));
+    res.exit_visual_mode();
 }
 
 pub fn toast_summary(text: &str) -> String {

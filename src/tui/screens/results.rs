@@ -702,8 +702,15 @@ pub fn render(
         )
     };
 
+    let visual_indicator = match state.visual_mode {
+        crate::app::VisualMode::Line { .. } => "-- VISUAL LINE -- ",
+        crate::app::VisualMode::Block { .. } => "-- VISUAL BLOCK -- ",
+        crate::app::VisualMode::None => "",
+    };
+    let title = format!("{visual_indicator}{main_title}");
+
     let block = Block::default()
-        .title(main_title)
+        .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme::border_style(is_active));
@@ -940,11 +947,10 @@ pub fn render(
 
                 let is_mouse_sel = is_active
                     && app.is_area_mouse_selected_rect(col_x, col_w as u16, row_y, cell_h.max(1));
-                let is_cell_selected =
+                let is_cursor_cell =
                     row_idx == state.selected_row && *col_idx == state.selected_col;
-                let style = if is_mouse_sel {
-                    theme::selection_style()
-                } else if is_cell_selected {
+                let is_vim_sel = state.is_cell_selected(row_idx, *col_idx);
+                let style = if is_mouse_sel || is_vim_sel || is_cursor_cell {
                     theme::selection_style_for(is_active)
                 } else if is_summary {
                     if *col_idx == 0 {

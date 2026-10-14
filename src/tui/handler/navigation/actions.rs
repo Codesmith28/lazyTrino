@@ -17,7 +17,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use crate::app::{
     ACTIONS, Action, ActionState, ActivePanel, App, DrillDownState, Mode, ResultsState, Screen,
 };
-use crate::tui::handler::{Command, export};
+use crate::tui::handler::Command;
 
 use super::clipboard::copy_active_pane_content;
 use super::drilldown::{drilldown_drill_into_selected, drilldown_go_up};
@@ -362,6 +362,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
                                 app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
                             } else if let Some(ref mut res) = s.results {
+                                if is_shift && code == KeyCode::Down && res.visual_mode == crate::app::VisualMode::None {
+                                    res.enter_visual_line();
+                                }
                                 if !res.rows.is_empty() {
                                     res.selected_row =
                                         (res.selected_row + 1).min(res.rows.len().saturating_sub(1));
@@ -376,6 +379,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             } else if is_schema {
                                 app.schema_scroll = app.schema_scroll.saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {
+                                if is_shift && code == KeyCode::Up && res.visual_mode == crate::app::VisualMode::None {
+                                    res.enter_visual_line();
+                                }
                                 res.selected_row = res.selected_row.saturating_sub(1);
                             }
                             None
@@ -412,6 +418,18 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         }
                         KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Left => {
                             if let Some(ref mut res) = s.results {
+                                if is_shift && code == KeyCode::Left {
+                                    match res.visual_mode {
+                                        crate::app::VisualMode::None => res.enter_visual_block(),
+                                        crate::app::VisualMode::Line { anchor_row } => {
+                                            res.visual_mode = crate::app::VisualMode::Block {
+                                                anchor_row,
+                                                anchor_col: res.selected_col,
+                                            };
+                                        }
+                                        crate::app::VisualMode::Block { .. } => {}
+                                    }
+                                }
                                 let step = if is_ctrl || is_shift || is_alt || code == KeyCode::Char('H') {
                                     5
                                 } else {
@@ -427,6 +445,18 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             if let Some(ref mut res) = s.results
                                 && !res.columns.is_empty()
                             {
+                                if is_shift && code == KeyCode::Right {
+                                    match res.visual_mode {
+                                        crate::app::VisualMode::None => res.enter_visual_block(),
+                                        crate::app::VisualMode::Line { anchor_row } => {
+                                            res.visual_mode = crate::app::VisualMode::Block {
+                                                anchor_row,
+                                                anchor_col: res.selected_col,
+                                            };
+                                        }
+                                        crate::app::VisualMode::Block { .. } => {}
+                                    }
+                                }
                                 let step = if is_ctrl || is_shift || is_alt || code == KeyCode::Char('L') {
                                     5
                                 } else {
@@ -435,6 +465,40 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 for _ in 0..step {
                                     res.selected_col = res.next_visible_col();
                                 }
+                            }
+                            None
+                        }
+                        KeyCode::Char('w') if !is_ctrl => {
+                            if let Some(ref mut res) = s.results && !res.columns.is_empty() {
+                                res.selected_col = res.next_visible_col();
+                            }
+                            None
+                        }
+                        KeyCode::Char('V') if !is_ctrl => {
+                            if let Some(ref mut res) = s.results {
+                                if matches!(res.visual_mode, crate::app::VisualMode::Line { .. }) {
+                                    res.exit_visual_mode();
+                                } else {
+                                    res.enter_visual_line();
+                                }
+                            }
+                            None
+                        }
+                        KeyCode::Char('v') | KeyCode::Char('V') if is_ctrl => {
+                            if let Some(ref mut res) = s.results {
+                                if matches!(res.visual_mode, crate::app::VisualMode::Block { .. }) {
+                                    res.exit_visual_mode();
+                                } else {
+                                    res.enter_visual_block();
+                                }
+                            }
+                            None
+                        }
+                        KeyCode::Char('o') | KeyCode::Char('O') => {
+                            if let Some(ref mut res) = s.results
+                                && res.visual_mode != crate::app::VisualMode::None
+                            {
+                                res.toggle_visual_ends();
                             }
                             None
                         }
@@ -496,7 +560,13 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Esc => {
-                            app.set_active_panel(ActivePanel::MenuPane);
+                            if let Some(ref mut res) = s.results
+                                && res.visual_mode != crate::app::VisualMode::None
+                            {
+                                res.exit_visual_mode();
+                            } else {
+                                app.set_active_panel(ActivePanel::MenuPane);
+                            }
                             None
                         }
                         KeyCode::Char('g') => {
@@ -555,14 +625,8 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             copy_active_pane_content(app);
                             None
                         }
-                        KeyCode::Char('Y')
-                            if s.selected < ACTIONS.len()
-                                && !matches!(
-                                    ACTIONS[s.selected].2,
-                                    Action::Partitions | Action::Schema
-                                ) =>
-                        {
-                            export::export_results_to_csv_file(app);
+                        KeyCode::Char('Y') => {
+                            super::clipboard::yank_whole_row(app);
                             None
                         }
                         _ => None,

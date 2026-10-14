@@ -1503,5 +1503,189 @@ pub mod tests {
         let Screen::Actions(state) = &app.screen else { panic!() };
         assert_eq!(state.selected, sample_idx);
     }
+
+    #[test]
+    fn test_vim_visual_line_mode_selection_and_yank() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["col1".to_string(), "col2".to_string()];
+        res.rows = vec![
+            vec!["r0c0".to_string(), "r0c1".to_string()],
+            vec!["r1c0".to_string(), "r1c1".to_string()],
+            vec!["r2c0".to_string(), "r2c1".to_string()],
+        ];
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // 1. Shift+V enters visual line mode
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('V')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.visual_mode, crate::app::VisualMode::Line { anchor_row: 0 });
+
+        // 2. 'j' moves cursor down to row 1, expanding selection to rows 0..=1
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.selected_row, 1);
+        assert!(res.is_cell_selected(0, 0));
+        assert!(res.is_cell_selected(0, 1));
+        assert!(res.is_cell_selected(1, 0));
+        assert!(res.is_cell_selected(1, 1));
+        assert!(!res.is_cell_selected(2, 0));
+
+        // 3. 'y' yanks the 2 rows as TSV and exits visual mode
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('y')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.visual_mode, crate::app::VisualMode::None);
+        let toast = app.copied_toast.as_ref().unwrap().0.clone();
+        assert!(toast.contains("2 selected row(s) (TSV)"));
+    }
+
+    #[test]
+    fn test_vim_visual_block_mode_selection_and_swap_ends() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["col0".to_string(), "col1".to_string(), "col2".to_string()];
+        res.rows = vec![
+            vec!["r0c0".to_string(), "r0c1".to_string(), "r0c2".to_string()],
+            vec!["r1c0".to_string(), "r1c1".to_string(), "r1c2".to_string()],
+            vec!["r2c0".to_string(), "r2c1".to_string(), "r2c2".to_string()],
+        ];
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // 1. Ctrl+v enters visual block mode
+        let ctrl_v = KeyEvent::new(KeyCode::Char('v'), crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_v);
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(
+            res.visual_mode,
+            crate::app::VisualMode::Block {
+                anchor_row: 0,
+                anchor_col: 0
+            }
+        );
+
+        // 2. 'j' moves down and 'l' moves right to (1, 1)
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.selected_row, 1);
+        assert_eq!(res.selected_col, 1);
+        assert!(res.is_cell_selected(0, 0));
+        assert!(res.is_cell_selected(0, 1));
+        assert!(res.is_cell_selected(1, 0));
+        assert!(res.is_cell_selected(1, 1));
+        assert!(!res.is_cell_selected(0, 2));
+
+        // 3. 'o' swaps anchor and cursor
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('o')));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.selected_row, 0);
+        assert_eq!(res.selected_col, 0);
+        assert_eq!(
+            res.visual_mode,
+            crate::app::VisualMode::Block {
+                anchor_row: 1,
+                anchor_col: 1
+            }
+        );
+
+        // 4. Esc exits visual mode but stays in MainViewer
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.visual_mode, crate::app::VisualMode::None);
+        assert_eq!(app.active_panel, ActivePanel::MainViewer);
+
+        // 5. Esc again focuses MenuPane
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.active_panel, ActivePanel::MenuPane);
+    }
+
+    #[test]
+    fn test_vim_yank_whole_row_with_uppercase_y() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["col0".to_string(), "col1".to_string()];
+        res.rows = vec![
+            vec!["r0c0".to_string(), "r0c1".to_string()],
+            vec!["r1c0".to_string(), "r1c1".to_string()],
+        ];
+        res.selected_row = 1;
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // 'Y' yanks the whole visible row 1
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('Y')));
+        let toast = app.copied_toast.as_ref().unwrap().0.clone();
+        assert!(toast.contains("1 visible row(s) (TSV)"));
+    }
+
+    #[test]
+    fn test_shift_arrow_keys_enter_and_extend_visual_modes() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["c0".to_string(), "c1".to_string(), "c2".to_string()];
+        res.rows = vec![
+            vec!["0".to_string(), "1".to_string(), "2".to_string()],
+            vec!["3".to_string(), "4".to_string(), "5".to_string()],
+        ];
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        // Shift+Down enters visual line mode
+        let shift_down = KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::SHIFT);
+        actions_keys(&mut app, shift_down);
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(res.visual_mode, crate::app::VisualMode::Line { anchor_row: 0 });
+        assert_eq!(res.selected_row, 1);
+
+        // Esc exits visual mode
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
+
+        // Shift+Right enters visual block mode
+        let shift_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::SHIFT);
+        actions_keys(&mut app, shift_right);
+        let Screen::Actions(state) = &app.screen else { panic!() };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!(
+            res.visual_mode,
+            crate::app::VisualMode::Block {
+                anchor_row: 1,
+                anchor_col: 0
+            }
+        );
+    }
 }
 

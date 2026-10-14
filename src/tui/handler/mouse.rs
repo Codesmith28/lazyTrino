@@ -194,8 +194,21 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                                 mouse.row,
                             )
                         {
-                            res.selected_row = row_idx;
-                            res.selected_col = col_idx;
+                            let is_shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
+                            if is_shift {
+                                if res.visual_mode == VisualMode::None {
+                                    res.visual_mode = VisualMode::Block {
+                                        anchor_row: res.selected_row,
+                                        anchor_col: res.selected_col,
+                                    };
+                                }
+                                res.selected_row = row_idx;
+                                res.selected_col = col_idx;
+                            } else {
+                                res.exit_visual_mode();
+                                res.selected_row = row_idx;
+                                res.selected_col = col_idx;
+                            }
                             res.last_selected_row.set(row_idx);
                             res.last_selected_col.set(col_idx);
                             app.clear_mouse_selection();
@@ -271,6 +284,33 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 }
                 return None;
             }
+            if let Some(inner) = results_table_inner_rect(app, term_width, term_height)
+                && let Screen::Actions(ref mut a) = app.screen
+                && let Some(ref mut res) = a.results
+                && !app.is_dragging_h_scrollbar
+                && !app.is_dragging_resizer
+                && !app.is_dragging_query_select
+                && let Some((row_idx, col_idx)) =
+                    crate::tui::screens::results::hit_test_cell(
+                        res,
+                        inner,
+                        mouse.column,
+                        mouse.row,
+                    )
+            {
+                if res.visual_mode == VisualMode::None {
+                    res.visual_mode = VisualMode::Block {
+                        anchor_row: res.selected_row,
+                        anchor_col: res.selected_col,
+                    };
+                }
+                res.selected_row = row_idx;
+                res.selected_col = col_idx;
+                res.last_selected_row.set(row_idx);
+                res.last_selected_col.set(col_idx);
+                app.clear_mouse_selection();
+                return None;
+            }
             if let Some((a_x, a_y)) = app.mouse_selection_anchor
                 && (mouse.column != a_x || mouse.row != a_y)
             {
@@ -280,6 +320,26 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             if app.is_dragging_resizer {
                 let pct = ((mouse.column as u32 * 100) / term_width as u32) as u16;
                 app.main_panel_pct = pct.clamp(8, 80);
+            }
+        }
+        MouseEventKind::Down(MouseButton::Right) => {
+            if let Some(inner) = results_table_inner_rect(app, term_width, term_height)
+                && let Screen::Actions(ref mut a) = app.screen
+                && let Some(ref mut res) = a.results
+                && let Some((row_idx, col_idx)) =
+                    crate::tui::screens::results::hit_test_cell(
+                        res,
+                        inner,
+                        mouse.column,
+                        mouse.row,
+                    )
+            {
+                if res.visual_mode == VisualMode::None {
+                    res.selected_row = row_idx;
+                    res.selected_col = col_idx;
+                }
+                crate::tui::handler::navigation::clipboard::copy_results_selection_or_cell(app);
+                return None;
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
@@ -1625,5 +1685,88 @@ mod tests {
         };
         handle_mouse_sync(&mut app, click_outside);
         assert!(app.column_modal.is_none(), "Click outside column modal must close it");
+    }
+
+    #[test]
+    fn test_mouse_shift_click_and_drag_selection() {
+        let mut app = sample_app();
+        let res_state = ResultsState {
+            query_buffer: "SELECT * FROM orders".to_string(),
+            query_cursor: 20,
+            columns: vec!["id".to_string(), "status".to_string()],
+            rows: vec![
+                vec!["1".to_string(), "OK".to_string()],
+                vec!["2".to_string(), "PENDING".to_string()],
+                vec!["3".to_string(), "FAILED".to_string()],
+            ],
+            scroll_v: std::cell::Cell::new(0),
+            scroll_h: std::cell::Cell::new(0),
+            selected_row: 0,
+            selected_col: 0,
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            ..Default::default()
+        };
+
+        app.clear_mouse_selection();
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: 0,
+            query_buffer: "SELECT * FROM orders".to_string(),
+            query_cursor: 20,
+            results: Some(res_state),
+            ..Default::default()
+        });
+
+        let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
+        let inner = results_table_inner_rect(&app, term_width, term_height).expect("inner rect");
+
+        // 1. Click row 0, col 0
+        let click_r0c0 = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: inner.x + 2,
+            row: inner.y + 2,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, click_r0c0);
+        let Screen::Actions(a) = &app.screen else { panic!() };
+        let res = a.results.as_ref().unwrap();
+        assert_eq!(res.visual_mode, VisualMode::None);
+        assert_eq!(res.selected_row, 0);
+        assert_eq!(res.selected_col, 0);
+
+        // 2. Drag to row 1, col 1
+        let drag_r1c1 = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: inner.x + 18,
+            row: inner.y + 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, drag_r1c1);
+        let Screen::Actions(a) = &app.screen else { panic!() };
+        let res = a.results.as_ref().unwrap();
+        assert_eq!(
+            res.visual_mode,
+            VisualMode::Block {
+                anchor_row: 0,
+                anchor_col: 0
+            }
+        );
+        assert_eq!(res.selected_row, 1);
+        assert_eq!(res.selected_col, 1);
+
+        // 3. Right-click copies the block selection
+        let right_click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: inner.x + 18,
+            row: inner.y + 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, right_click);
+        let toast = app.copied_toast.as_ref().unwrap().0.clone();
+        assert!(toast.contains("cell block (TSV)"));
     }
 }
