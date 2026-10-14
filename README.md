@@ -9,7 +9,7 @@
 ### ⚡ Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Codesmith28/lazyTrino/main/install.sh | bash
+curl -fsSL --connect-timeout 2 https://raw.githubusercontent.com/Codesmith28/lazyTrino/main/install.sh | bash
 ```
 
 > Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[Crossterm](https://github.com/crossterm-rs/crossterm)**. Pre-compiled binaries for macOS, Linux, and Windows are available on [GitHub Releases](https://github.com/Codesmith28/lazyTrino/releases).
@@ -51,7 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/Codesmith28/lazyTrino/main/install.
 ### Option 1: One-Line Installer (macOS & Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Codesmith28/lazyTrino/main/install.sh | bash
+curl -fsSL --connect-timeout 2 https://raw.githubusercontent.com/Codesmith28/lazyTrino/main/install.sh | bash
 ```
 
 The installer automatically detects your operating system and architecture (`arm64` / `x86_64`) and installs to `~/.local/bin/lazyTrino`.

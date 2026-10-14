@@ -24,6 +24,7 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     RED="${ESC}[0;31m"
     BOLD="${ESC}[1m"
     DIM="${ESC}[2m"
+    ITALIC="${ESC}[3m"
     RESET="${ESC}[0m"
 else
     CYAN=''
@@ -32,6 +33,7 @@ else
     RED=''
     BOLD=''
     DIM=''
+    ITALIC=''
     RESET=''
 fi
 
@@ -52,7 +54,7 @@ error() {
 }
 
 print_banner() {
-    printf "%s%s" "$CYAN" "$BOLD"
+    printf "%s%s%s" "$CYAN" "$BOLD" "$ITALIC"
     cat <<'EOF'
  _                      _____    _             
 | |                    |_   _|  (_)            
@@ -65,7 +67,7 @@ print_banner() {
 
 EOF
     printf "%s\n" "$RESET"
-    printf "%sTerminal UI for Trino & Presto%s\n\n" "$DIM" "$RESET"
+    printf "%s%sTerminal UI for Trino & Presto%s\n\n" "$DIM" "$ITALIC" "$RESET"
 }
 
 detect_os() {
@@ -133,15 +135,15 @@ http_get() {
 
     if [ "$HTTP_CLIENT" = "curl" ]; then
         if [ -n "$auth_header" ]; then
-            curl -fsSL -H "User-Agent: lazyTrino-installer" -H "$auth_header" "$url"
+            curl -fsSL --connect-timeout 2 -H "User-Agent: lazyTrino-installer" -H "$auth_header" "$url"
         else
-            curl -fsSL -H "User-Agent: lazyTrino-installer" "$url"
+            curl -fsSL --connect-timeout 2 -H "User-Agent: lazyTrino-installer" "$url"
         fi
     else
         if [ -n "$auth_header" ]; then
-            wget -qO- --header="$auth_header" --user-agent="lazyTrino-installer" "$url"
+            wget -qO- --timeout=2 --header="$auth_header" --user-agent="lazyTrino-installer" "$url"
         else
-            wget -qO- --user-agent="lazyTrino-installer" "$url"
+            wget -qO- --timeout=2 --user-agent="lazyTrino-installer" "$url"
         fi
     fi
 }
@@ -150,9 +152,9 @@ http_download() {
     url="$1"
     dest="$2"
     if [ "$HTTP_CLIENT" = "curl" ]; then
-        curl -fL --connect-timeout 10 -H "User-Agent: lazyTrino-installer" --progress-bar -o "$dest" "$url"
+        curl -fL --connect-timeout 2 -H "User-Agent: lazyTrino-installer" --progress-bar -o "$dest" "$url"
     else
-        wget -q --connect-timeout=10 --show-progress --user-agent="lazyTrino-installer" -O "$dest" "$url"
+        wget -q --timeout=2 --show-progress --user-agent="lazyTrino-installer" -O "$dest" "$url"
     fi
 }
 
@@ -178,9 +180,9 @@ main() {
         # 1. First try GitHub redirect on releases/latest (fast and avoids API rate limits)
         TAG=""
         if [ "$HTTP_CLIENT" = "curl" ]; then
-            TAG="$(curl -fsSI --connect-timeout 5 "https://github.com/${REPO}/releases/latest" 2>/dev/null | grep -i '^location:' | awk -F'/' '{print $NF}' | tr -d '\r\n' || true)"
+            TAG="$(curl -fsSI --connect-timeout 2 "https://github.com/${REPO}/releases/latest" 2>/dev/null | grep -i '^location:' | awk -F'/' '{print $NF}' | tr -d '\r\n' || true)"
         else
-            TAG="$(wget --spider --timeout=5 --server-response "https://github.com/${REPO}/releases/latest" 2>&1 | grep -i 'Location:' | awk -F'/' '{print $NF}' | tr -d '\r\n' || true)"
+            TAG="$(wget --spider --timeout=2 --server-response "https://github.com/${REPO}/releases/latest" 2>&1 | grep -i 'Location:' | awk -F'/' '{print $NF}' | tr -d '\r\n' || true)"
         fi
 
         # 2. Fallback to GitHub API if redirect was unavailable
@@ -193,7 +195,7 @@ main() {
 
         # 3. Fallback to hardcoded known stable release
         if [ -z "$TAG" ]; then
-            TAG="v0.2.0"
+            TAG="v0.2.1"
         fi
     fi
 

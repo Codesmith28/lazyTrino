@@ -24,6 +24,7 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     RED="${ESC}[0;31m"
     BOLD="${ESC}[1m"
     DIM="${ESC}[2m"
+    ITALIC="${ESC}[3m"
     RESET="${ESC}[0m"
 else
     CYAN=''
@@ -32,6 +33,7 @@ else
     RED=''
     BOLD=''
     DIM=''
+    ITALIC=''
     RESET=''
 fi
 
