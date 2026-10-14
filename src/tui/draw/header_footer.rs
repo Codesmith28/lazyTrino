@@ -34,6 +34,9 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
         Mode::ColumnModal | Mode::FilterModal => {
             Some(" Space:toggle  a:all/none  Enter:apply  Esc:cancel  j/k:move ")
         }
+        Mode::SavedViewsModal => {
+            Some(" Enter:restore  d/Del:delete  j/k:move  Esc:close ")
+        }
         Mode::Search => Some(" Type:filter  Bksp:del  Enter:close  Esc:clear "),
         Mode::QueryInput => Some(" Enter:run  Esc:cancel  Ctrl+A:all  Ctrl+C:copy  Ctrl+V:paste "),
         Mode::HelpModal | Mode::Normal => {

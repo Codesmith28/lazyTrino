@@ -164,10 +164,10 @@ pub fn compute_column_width(
     if state.column_filters.contains_key(col_name) {
         header_len += 4;
     }
-    if let Some((ref sort_col, _)) = state.sort {
-        if sort_col == col_name {
-            header_len += 2;
-        }
+    if let Some((ref sort_col, _)) = state.sort
+        && sort_col == col_name
+    {
+        header_len += 2;
     }
     let raw_width = (header_len.max(max_data) as u16).max(8);
     let max_allowed = (available_width / 2).max(15) as u16;
@@ -993,6 +993,7 @@ pub fn render(
         frame.render_stateful_widget(
             Scrollbar::default()
                 .orientation(ScrollbarOrientation::HorizontalBottom)
+                .thumb_symbol("▄")
                 .begin_symbol(Some("◄"))
                 .end_symbol(Some("►")),
             inner,

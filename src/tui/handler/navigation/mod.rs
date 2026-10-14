@@ -1409,7 +1409,7 @@ pub mod tests {
     }
 
     #[test]
-    fn actions_keys_S_and_s_toggle_sorting_not_schema() {
+    fn actions_keys_s_and_shift_s_toggle_sorting_not_schema() {
         let mut app = sample_app(Screen::Actions(ActionState {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),

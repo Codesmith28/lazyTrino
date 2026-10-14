@@ -264,6 +264,7 @@ pub struct ActionState {
     /// queries resolve. Gates `Partitions` and `Schema`.
     pub metadata_loading: bool,
     pub drilldown: Option<DrillDownState>,
+    pub pending_view_restore: Option<crate::saved_views::SavedView>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -559,10 +560,10 @@ pub fn compare_non_null_cell_values(a: &str, b: &str, data_type: Option<&str>) -
     let is_numeric = data_type.map(is_numeric_type).unwrap_or(false)
         || (a.parse::<f64>().is_ok() && b.parse::<f64>().is_ok());
 
-    if is_numeric {
-        if let (Ok(num_a), Ok(num_b)) = (a.parse::<f64>(), b.parse::<f64>()) {
-            return num_a.partial_cmp(&num_b).unwrap_or(std::cmp::Ordering::Equal);
-        }
+    if is_numeric
+        && let (Ok(num_a), Ok(num_b)) = (a.parse::<f64>(), b.parse::<f64>())
+    {
+        return num_a.partial_cmp(&num_b).unwrap_or(std::cmp::Ordering::Equal);
     }
 
     if let (Ok(bool_a), Ok(bool_b)) = (a.parse::<bool>(), b.parse::<bool>()) {
@@ -580,6 +581,7 @@ pub enum Mode {
     FilterModal,
     ColumnModal,
     HelpModal,
+    SavedViewsModal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -827,6 +829,26 @@ pub struct HelpModalState {
     pub scroll: usize,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SavedViewsModalState {
+    pub views: Vec<crate::saved_views::SavedView>,
+    pub selected: usize,
+    pub scroll: usize,
+    pub pending_delete: Option<String>,
+}
+
+impl SavedViewsModalState {
+    pub fn new() -> Self {
+        let views = crate::saved_views::load_saved_views();
+        Self {
+            views,
+            selected: 0,
+            scroll: 0,
+            pending_delete: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
     TableView,
@@ -894,6 +916,7 @@ pub struct App {
     pub column_modal: Option<ColumnModalState>,
     pub help_modal: Option<HelpModalState>,
     pub help_scroll: usize,
+    pub saved_views_modal: Option<SavedViewsModalState>,
 }
 
 impl App {
@@ -940,6 +963,7 @@ impl App {
             column_modal: None,
             help_modal: None,
             help_scroll: 0,
+            saved_views_modal: None,
         }
     }
 

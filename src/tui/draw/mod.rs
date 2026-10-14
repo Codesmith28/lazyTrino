@@ -439,6 +439,9 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
             app.help_scroll,
         );
     }
+    if let Some(ref modal) = app.saved_views_modal {
+        screens::saved_views_modal::render(frame, frame.area(), modal);
+    }
 }
 
 #[cfg(test)]

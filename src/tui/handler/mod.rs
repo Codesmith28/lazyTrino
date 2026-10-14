@@ -27,6 +27,7 @@ pub mod help_modal;
 mod mouse;
 mod navigation;
 mod query;
+pub mod saved_views_modal;
 
 pub fn extract_from_tables(sql: &str) -> Vec<String> {
     query::extract_from_tables(sql)
@@ -241,11 +242,18 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         }
         return help_modal::handle_help_modal_key(app, key);
     }
+    if app.saved_views_modal.is_some() {
+        if app.mode != Mode::SavedViewsModal {
+            app.mode = Mode::SavedViewsModal;
+        }
+        return saved_views_modal::handle_saved_views_modal_key(app, key);
+    }
 
     match app.mode {
         Mode::HelpModal => return help_modal::handle_help_modal_key(app, key),
         Mode::FilterModal => return filter_modal::handle_filter_modal_key(app, key),
         Mode::ColumnModal => return column_modal::handle_column_modal_key(app, key),
+        Mode::SavedViewsModal => return saved_views_modal::handle_saved_views_modal_key(app, key),
         Mode::QueryInput => return query::handle_query_input_mode(app, key),
         Mode::Search => return query::handle_search_mode(app, key),
         Mode::Normal => {}
@@ -256,6 +264,18 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     if code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         info!("User pressed Ctrl+C, quitting...");
         app.should_quit = true;
+        return None;
+    }
+
+    if code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        saved_views_modal::save_current_view(app);
+        return None;
+    }
+
+    if (code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL))
+        || (code == KeyCode::Char('B') && !key.modifiers.contains(KeyModifiers::CONTROL))
+    {
+        saved_views_modal::open_saved_views_modal(app);
         return None;
     }
 

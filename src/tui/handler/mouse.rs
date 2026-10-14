@@ -44,6 +44,14 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
     if app.help_modal.is_some() {
         return handle_help_modal_mouse(app, mouse, term_width, term_height);
     }
+    if app.saved_views_modal.is_some() {
+        return crate::tui::handler::saved_views_modal::handle_saved_views_modal_mouse(
+            app,
+            mouse,
+            term_width,
+            term_height,
+        );
+    }
 
     let bottom_y = term_height.saturating_sub(7);
     let is_in_table = matches!(app.screen, Screen::Actions(_));
@@ -113,8 +121,18 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 if mouse.column < border_x && mouse.row < bottom_y {
                     if is_in_table {
                         let clicked_row = mouse.row.saturating_sub(1) as usize;
-                        if clicked_row < ACTIONS.len() {
-                            return trigger_action(app, clicked_row);
+                        let line_counts = crate::tui::screens::actions::item_line_counts(border_x.saturating_sub(2));
+                        let mut acc = 0;
+                        let mut clicked_idx = None;
+                        for (idx, count) in line_counts.iter().enumerate() {
+                            if clicked_row >= acc && clicked_row < acc + count {
+                                clicked_idx = Some(idx);
+                                break;
+                            }
+                            acc += count;
+                        }
+                        if let Some(idx) = clicked_idx {
+                            return trigger_action(app, idx);
                         } else {
                             app.set_active_panel(ActivePanel::MenuPane);
                         }
@@ -815,22 +833,8 @@ fn handle_filter_modal_mouse(
     term_width: u16,
     term_height: u16,
 ) -> Option<Command> {
-    let modal = app.filter_modal.as_ref()?;
-    let modal_width = (term_width * 60 / 100).clamp(45, 80).min(term_width);
-    let modal_height = match modal.mode {
-        FilterMode::Numeric => 15.min(term_height),
-        FilterMode::Values => {
-            let max_height = term_height.saturating_sub(4).max(10);
-            let needed_height = (modal.values.len() as u16 + if modal.is_numeric_col { 9 } else { 8 }).min(max_height);
-            needed_height.clamp(12, 24).min(term_height)
-        }
-    };
-    let popup_area = Rect {
-        x: (term_width.saturating_sub(modal_width)) / 2,
-        y: (term_height.saturating_sub(modal_height)) / 2,
-        width: modal_width,
-        height: modal_height,
-    };
+    let _ = app.filter_modal.as_ref()?;
+    let popup_area = crate::tui::screens::modal::modal_medium(Rect::new(0, 0, term_width, term_height));
 
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
@@ -952,17 +956,8 @@ fn handle_column_modal_mouse(
     term_width: u16,
     term_height: u16,
 ) -> Option<Command> {
-    let modal = app.column_modal.as_ref()?;
-    let modal_width = (term_width * 60 / 100).clamp(40, 80).min(term_width);
-    let max_height = term_height.saturating_sub(4).max(10);
-    let needed_height = (modal.columns.len() as u16 + 8).min(max_height);
-    let modal_height = needed_height.clamp(11, 24).min(term_height);
-    let popup_area = Rect {
-        x: (term_width.saturating_sub(modal_width)) / 2,
-        y: (term_height.saturating_sub(modal_height)) / 2,
-        width: modal_width,
-        height: modal_height,
-    };
+    let _ = app.column_modal.as_ref()?;
+    let popup_area = crate::tui::screens::modal::modal_medium(Rect::new(0, 0, term_width, term_height));
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             if mouse.column < popup_area.x
@@ -980,7 +975,7 @@ fn handle_column_modal_mouse(
             let modal = app.column_modal.as_mut()?;
 
             // Check if clicking in search box area (rel_y 1..=3)
-            if rel_y >= 1 && rel_y <= 3 {
+            if (1..=3).contains(&rel_y) {
                 modal.is_searching = true;
                 return None;
             }
@@ -1040,17 +1035,8 @@ fn handle_help_modal_mouse(
     term_width: u16,
     term_height: u16,
 ) -> Option<Command> {
-    if app.help_modal.is_none() {
-        return None;
-    }
-    let modal_width = (term_width * 80 / 100).clamp(60, 110).min(term_width);
-    let modal_height = (term_height * 85 / 100).clamp(18, 45).min(term_height);
-    let popup_area = Rect {
-        x: (term_width.saturating_sub(modal_width)) / 2,
-        y: (term_height.saturating_sub(modal_height)) / 2,
-        width: modal_width,
-        height: modal_height,
-    };
+    let _ = app.help_modal.as_ref()?;
+    let popup_area = crate::tui::screens::modal::modal_large(Rect::new(0, 0, term_width, term_height));
 
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {

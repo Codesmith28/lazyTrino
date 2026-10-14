@@ -17,12 +17,12 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
     widgets::{
-        Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState,
+        Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
     },
 };
 
 use crate::app::ColumnModalState;
+use crate::tui::screens::modal;
 use crate::tui::theme;
 
 pub fn render(
@@ -31,20 +31,7 @@ pub fn render(
     modal: &ColumnModalState,
     has_value_filter: impl Fn(&str) -> bool,
 ) {
-    let modal_width = (area.width * 60 / 100).clamp(40, 80).min(area.width);
-    let max_height = area.height.saturating_sub(4).max(10);
-    let needed_height = (modal.columns.len() as u16 + 8).min(max_height);
-    let modal_height = needed_height.clamp(11, 24).min(area.height);
-
-    let popup_area = Rect {
-        x: area.x + (area.width.saturating_sub(modal_width)) / 2,
-        y: area.y + (area.height.saturating_sub(modal_height)) / 2,
-        width: modal_width,
-        height: modal_height,
-    };
-
-    frame.render_widget(Clear, popup_area);
-
+    let popup_area = modal::modal_medium(area);
     let num_selected = modal.selected_columns.len();
     let num_total = modal.columns.len();
     let title = format!(
@@ -52,13 +39,7 @@ pub fn render(
         num_selected, num_total
     );
 
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(theme::border_style(true));
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
+    let inner = modal::render_modal_frame(frame, popup_area, &title, true);
 
     if inner.height < 4 {
         return;

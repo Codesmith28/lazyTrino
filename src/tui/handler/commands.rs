@@ -778,9 +778,45 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) {
                     };
                     if let Screen::Actions(ref mut a) = app.screen {
                         if a.catalog == catalog && a.schema == schema && a.table == table {
-                            a.query_buffer = res_state.query_buffer.clone();
-                            a.query_cursor = res_state.query_cursor;
-                            a.results = Some(res_state);
+                            let mut res = res_state;
+                            if let Some(view) = a.pending_view_restore.take() {
+                                for (col, filter) in view.column_filters {
+                                    res.column_filters.insert(col, filter.to_column_filter());
+                                }
+                                for col in view.hidden_columns {
+                                    res.hidden_columns.insert(col);
+                                }
+                                if let Some((col, dir)) = view.sort {
+                                    res.sort = Some((col, dir.into()));
+                                    res.apply_sort(&app.vertical_schema_cols);
+                                }
+                                if !res.column_filters.is_empty() {
+                                    if res.unfiltered_rows.is_none() {
+                                        res.unfiltered_rows = Some(res.rows.clone());
+                                    }
+                                    if let Some(ref unfilt) = res.unfiltered_rows {
+                                        res.rows = unfilt
+                                            .iter()
+                                            .filter(|row| {
+                                                for (filter_col, filter) in &res.column_filters {
+                                                    if let Some(idx) = res.columns.iter().position(|c| c == filter_col) {
+                                                        let val = row.get(idx).map(|s| s.as_str()).unwrap_or("");
+                                                        if !filter.matches(val) {
+                                                            return false;
+                                                        }
+                                                    }
+                                                }
+                                                true
+                                            })
+                                            .cloned()
+                                            .collect();
+                                    }
+                                }
+                                app.copied_toast = Some((format!("Restored view: {}", view.name), std::time::Instant::now()));
+                            }
+                            a.query_buffer = res.query_buffer.clone();
+                            a.query_cursor = res.query_cursor;
+                            a.results = Some(res);
                         }
                     } else {
                         let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);

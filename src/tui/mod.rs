@@ -35,9 +35,11 @@ mod screens {
     pub mod drilldown;
     pub mod filter_modal;
     pub mod help;
+    pub mod modal;
     pub mod partition_tree;
     pub mod query_inspector;
     pub mod results;
+    pub mod saved_views_modal;
     pub mod schema;
     pub mod table;
     pub mod vertical_schema;

@@ -17,33 +17,16 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
     widgets::{
-        Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState,
+        Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
     },
 };
 
 use crate::app::{FilterModalState, FilterMode, NumericOp};
+use crate::tui::screens::modal;
 use crate::tui::theme;
 
 pub fn render(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
-    let modal_width = (area.width * 60 / 100).clamp(45, 80).min(area.width);
-    let modal_height = match modal.mode {
-        FilterMode::Numeric => 16.min(area.height),
-        FilterMode::Values => {
-            let max_height = area.height.saturating_sub(4).max(10);
-            let needed_height = (modal.values.len() as u16 + if modal.is_numeric_col { 9 } else { 8 }).min(max_height);
-            needed_height.clamp(12, 24).min(area.height)
-        }
-    };
-
-    let popup_area = Rect {
-        x: area.x + (area.width.saturating_sub(modal_width)) / 2,
-        y: area.y + (area.height.saturating_sub(modal_height)) / 2,
-        width: modal_width,
-        height: modal_height,
-    };
-
-    frame.render_widget(Clear, popup_area);
+    let popup_area = modal::modal_medium(area);
 
     let title = match modal.mode {
         FilterMode::Numeric => format!(" Filter Column: {} (Numeric Filter) ", modal.column_name),
@@ -55,13 +38,7 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
         ),
     };
 
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(theme::border_style(true));
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
+    let inner = modal::render_modal_frame(frame, popup_area, &title, true);
 
     if inner.height < 4 {
         return;

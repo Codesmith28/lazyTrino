@@ -17,8 +17,8 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
     widgets::{
-        Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, Wrap,
+        Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Wrap,
     },
 };
 
@@ -70,6 +70,9 @@ const HELP_SECTIONS: &[HelpSection] = &[
             "  e                              Schema (Vertical Columns Inspector)",
             "  t / m                          Show Stats / Sample (20 rows)",
             "  p                              Partitions Tree",
+            "  Ctrl+s                         Save active table view (filters, sort, query)",
+            "  Ctrl+o / B                     Browse and restore saved table views",
+            "  d / Delete (in Saved Views)    Delete saved view (confirms with y/n)",
         ],
     },
     HelpSection {
@@ -171,26 +174,13 @@ pub fn render_modal(
     is_searching: bool,
     scroll: usize,
 ) {
-    let modal_width = (area.width * 70 / 100).clamp(55, 95).min(area.width);
-    let max_height = area.height.saturating_sub(4).max(10);
-    let modal_height = (area.height * 75 / 100).clamp(16, 28).min(max_height).min(area.height);
-
-    let popup_area = Rect {
-        x: area.x + (area.width.saturating_sub(modal_width)) / 2,
-        y: area.y + (area.height.saturating_sub(modal_height)) / 2,
-        width: modal_width,
-        height: modal_height,
-    };
-
-    frame.render_widget(Clear, popup_area);
-
-    let block = Block::default()
-        .title(" Help & Keybindings ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(theme::border_style(true));
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
+    let popup_area = crate::tui::screens::modal::modal_large(area);
+    let inner = crate::tui::screens::modal::render_modal_frame(
+        frame,
+        popup_area,
+        " Help & Keybindings ",
+        true,
+    );
 
     if inner.height < 4 {
         return;
