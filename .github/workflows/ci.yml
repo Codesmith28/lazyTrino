@@ -49,10 +49,10 @@ jobs:
           LOWER_TITLE=$(echo "$PR_TITLE" | tr '[:upper:]' '[:lower:]')
           echo "Inspecting PR Title: $PR_TITLE"
 
-          if echo "$LOWER_TITLE" | grep -qE '(^|\s|\[)(doc|docs)(:|\s|\])'; then
+          if echo "$LOWER_TITLE" | grep -qE '^(doc|docs)(:|\s|\(.*\):)|^\[(doc|docs)\]'; then
             echo "Convention detected: doc (documentation only)"
             echo "kind=doc" >> "$GITHUB_OUTPUT"
-          elif echo "$LOWER_TITLE" | grep -qE '(\b|\[)release(\b|\]|:)'; then
+          elif echo "$LOWER_TITLE" | grep -qE '^release(:|\s|\(.*\):)|^\[release\]'; then
             echo "Convention detected: Release (big release)"
             echo "kind=release" >> "$GITHUB_OUTPUT"
           else
@@ -166,7 +166,7 @@ jobs:
           echo "Merged PR title: $PR_TITLE"
 
           # 2. Skip if doc PR
-          if echo "$LOWER_TITLE" | grep -qE '(^|\s|\[)(doc|docs)(:|\s|\])'; then
+          if echo "$LOWER_TITLE" | grep -qE '^(doc|docs)(:|\s|\(.*\):)|^\[(doc|docs)\]'; then
             echo "PR was a doc PR. Skipping release pipeline."
             echo "should_release=false" >> "$GITHUB_OUTPUT"
             exit 0
