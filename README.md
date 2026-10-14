@@ -1,6 +1,10 @@
 # lazyTrino
 
-**lazyTrino** is a terminal user interface (TUI) for browsing Trino catalogs, schemas, tables, metadata, and query results with keyboard-driven navigation, vim shortcuts, and interactive mouse support.
+[![Release](https://img.shields.io/github/v/release/Codesmith28/lazyTrino?style=flat-square&color=blue)](https://github.com/Codesmith28/lazyTrino/releases)
+[![CI/CD](https://img.shields.io/github/actions/workflow/status/Codesmith28/lazyTrino/ci.yml?branch=main&style=flat-square&label=CI%2FCD)](https://github.com/Codesmith28/lazyTrino/actions)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat-square)](LICENSE)
+
+**lazyTrino** is a terminal user interface (TUI) for browsing Trino and Presto catalogs, schemas, tables, metadata, and query results with keyboard-driven navigation, vim shortcuts, interactive modals, and mouse support.
 
 Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[Crossterm](https://github.com/crossterm-rs/crossterm)**.
 
@@ -15,79 +19,103 @@ Built with **Rust**, **[Ratatui](https://github.com/ratatui/ratatui)**, and **[C
 ## Layout Overview
 
 ```
-+----------------------------------+----------------------------------------------------------------+
-| Menu — <table_name>              |  Centralized Search Bar [/ to search]                          |
-| (Resizable Panel Split)          +----------------------------------------------------------------+
-|                                  |  Table Query Bar [Press q or : to write query]                 |
-| ▸ [v] Table View Mode            |  SQL > SELECT * FROM "catalog"."schema"."table" LIMIT 100      |
-|   [c] Table DDL                  +----------------------------------------------------------------+
-|   [i] Info Schema                |  Preview — <table_name> (Table View Mode)                      |
-|   [s] Show Stats                 |                                                                |
-|   [p] Sample Mode (20 rows)      |  +----+-------------+--------------+                           |
-|   [P] Partitions                 |  | id | name        | status       |                           |
-|   [S] Schema                     |  +----+-------------+--------------+                           |
-|                                  |  | 1  | Alice       | ACTIVE       |                           |
-|                                  |  | 2  | Bob         | INACTIVE     |                           |
-|                                  |  +----+-------------+--------------+                           |
-+----------------------------------+----------------------------------------------------------------+
-| Query Inspector & Audit Logs [Status: SUCCESS | Duration: 42ms | Rows: 100]                       |
-+---------------------------------------------------------------------------------------------------+
-| Footer Hints [j/k:rows  </>:cols  g/G:top/btm  q/:query  Esc:menu  Tab:pane  ?:help  Ctrl+C:quit] |
-+---------------------------------------------------------------------------------------------------+
++----------------------------------+-------------------------------------------------------------------------+
+| Menu — <table_name>              |  Centralized Search Bar [/ to search]                                   |
+| (Resizable Panel Split)          +-------------------------------------------------------------------------+
+|                                  |  Breadcrumbs: iceberg › sales › orders                                  |
+| ▸ [v] Table View Mode            |  Table Query Bar [Press q or : to write query]                          |
+|   [c] Table DDL                  |  SQL > SELECT * FROM "iceberg"."sales"."orders" LIMIT 100               |
+|   [s] Schema & Info              +-------------------------------------------------------------------------+
+|   [t] Show Stats                 |  Table View (100 records | sorted by id desc) [C:cols F:filter S:sort]   |
+|   [m] Sample Mode (20 rows)      |  +----+-------------+-------------------------+-----------------------+ |
+|   [p] Partitions                 |  | id | customer_id | order_date              | total_amount          | |
+|                                  |  +----+-------------+-------------------------+-----------------------+ |
+|                                  |  | 99 | C-1042      | 2026-10-14 09:12:00 UTC | 1,420.50              | |
+|                                  |  | 98 | C-0819      | 2026-10-14 08:45:22 UTC |   310.00              | |
+|                                  |  +----+-------------+-------------------------+-----------------------+ |
++----------------------------------+-------------------------------------------------------------------------+
+| Query Inspector & Audit Logs [Status: SUCCESS | Duration: 38ms | Rows: 100]                                |
++------------------------------------------------------------------------------------------------------------+
+| Footer Hints [j/k:rows  h/l:cols  V:vis-line  ^V:vis-block  y:yank  C:cols  F:filter  S:sort  ?:help  ^C:quit] |
++------------------------------------------------------------------------------------------------------------+
 ```
 
 ---
 
 ## Key Features
 
-- 🗂️ **Hierarchical Catalog Navigation**: Seamlessly drill down from Catalogs $\rightarrow$ Schemas $\rightarrow$ Tables $\rightarrow$ Table Actions.
-- 🔍 **Centralized Real-Time Search (`/`)**: Filter catalogs, schemas, tables, and columns instantly across the active hierarchy.
-- ⚡ **Quick Table Actions**:
-  - `v` **Table View Mode**: Full interactive table browser with infinite scroll, hierarchical partition drilldown, and parallelized live record counts for full tables, partitions, and sub-partitions.
-  - `c` **Table DDL**: `SHOW CREATE TABLE` statement.
-  - `i` **Information Schema**: Column metadata from `information_schema.columns`.
-  - `s` **Show Statistics**: Trino table statistics (`SHOW STATS FOR table`).
-  - `p` **Sample Mode**: Preview sample of 20 rows.
-  - `P` **Partition Tree**: Interactive partition hierarchy and file paths.
-  - `S` **Vertical Schema**: Column-by-column vertical schema inspector.
-- ✍️ **Interactive SQL Query Bar (`q` / `:`)**: Real-time query buffer editing, text selection, clipboard support (`Ctrl+C`/`Ctrl+V`), and custom query execution.
-- ♾️ **Infinite Scroll Pagination**: Automatically fetches and appends subsequent batches of records as you scroll.
-- 🖱️ **Mouse & Resizable UI**: Click to select, scroll wheel support, and click-and-drag vertical border resizing.
-- 📊 **Query Inspector & Audit Log**: Real-time execution status tracking, query durations (ms), fetched row counts, and traceback errors.
-- 🔑 **Interactive Connection Screen**: Built-in login screen with URL, username, and password fields.
+- 🗂️ **Hierarchical Catalog Navigation**: Seamlessly navigate through Catalogs $\rightarrow$ Schemas $\rightarrow$ Tables $\rightarrow$ Table Actions.
+- 🌲 **Partition Drill-Down (`cd`/`ls` style)**: Browse partitioned datasets one partition level at a time without split timeouts or full table scans.
+- 📑 **Saved Table Views (`Ctrl+S` / `Ctrl+O` / `B`)**: Name and persist custom table view states (active filters, hidden columns, sort orders). Manage saved views with search, multi-selection (`Space`), select-all (`a`), and batch delete (`d`).
+- 🔍 **Nested JSON & Map Flattening (`C`)**: Interactive column inspection modal with tree-view drilldown for nested structures. Automatically generates equivalent Trino SQL queries to unnest and extract nested fields.
+- 🎯 **Advanced Vim Visual Modes**:
+  - Visual Line (`V`) for full row selections.
+  - Visual Block (`Ctrl+V`) for rectangular cell matrices.
+  - Swap cursor and anchor ends (`o` / `O`).
+  - Automatic visual mode on `Shift+Arrow` keys or mouse Shift-Click & Drag.
+- 📋 **Context-Aware Clipboard & Export**:
+  - `y`: Smart clipboard copy — copies single cell value, selected rows, or visual blocks formatted as CSV.
+  - `Y`: Yank whole row, or export the loaded dataset to a CSV file.
+- 🔃 **Column-wise Cyclic Sorting (`S` / Header Click)**: Cycle sorting on the active column: Ascending (`▲`) $\rightarrow$ Descending (`▼`) $\rightarrow$ Clear.
+- 🎛️ **Comparator & Value Filtering (`F`)**:
+  - Numeric comparator filters (`>`, `<`, `>=`, `<=`, `=`, `!=`, `BETWEEN`).
+  - Distinct categorical value checklist with instant search and toggle selection.
+- 👁️ **Column Visibility Manager (`C`)**: Hide or display specific columns to easily inspect wide schemas.
+- ✍️ **Interactive SQL Query Bar (`q` / `:`)**: In-line query buffer with cursor editing, selection, clipboard integration (`Ctrl+C`/`Ctrl+V`), and instant execution.
+- ♾️ **Incremental Viewport Scrolling**: Smooth incremental horizontal and vertical scrolling with visual scrollbars.
+- 🖱️ **Interactive Mouse Support**: Click to select rows/columns/actions, scroll wheel navigation, and click-and-drag vertical pane border resizing.
+- 📊 **Query Inspector & Audit Log**: Real-time query execution monitoring, durations (ms), fetched row counts, and traceback details.
+- 🔑 **Interactive Connection Screen & Config Profiles**: Interactive login screen with persistent connection profiles via `config.toml`.
 
 ---
 
 ## Installation & Setup
 
-### Option 1: Pre-built Binaries (Recommended)
-Download the latest pre-compiled binary for macOS (Apple Silicon / Intel), Linux, or Windows from [GitHub Releases](https://github.com/Codesmith28/lazyTrino/releases).
+### Option 1: One-Line Installer (macOS & Linux)
 
-### Option 2: Build from Source
+Install the latest pre-compiled binary directly to `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Codesmith28/lazyTrino/main/install.sh | bash
+```
+
+The installer automatically detects your operating system (macOS / Linux) and CPU architecture (Apple Silicon ARM64, Intel x86_64, Linux x86_64 / ARM64).
+
+### Option 2: Pre-built Binaries
+
+Download pre-compiled release packages for macOS, Linux, or Windows from [GitHub Releases](https://github.com/Codesmith28/lazyTrino/releases).
+
+| Platform | Target | Archive |
+| --- | --- | --- |
+| **macOS (Apple Silicon)** | `aarch64-apple-darwin` | `.tar.gz` |
+| **macOS (Intel)** | `x86_64-apple-darwin` | `.tar.gz` |
+| **Linux (x86_64)** | `x86_64-unknown-linux-gnu` | `.tar.gz` |
+| **Windows (x86_64)** | `x86_64-pc-windows-msvc` | `.zip` |
+
+### Option 3: Built-in Self-Updater
+
+If you already have `lazyTrino` installed, update to the latest release at any time:
+
+```bash
+lazyTrino --update
+# or
+lazyTrino -u
+```
+
+### Option 4: Build from Source
+
 Requires [Rust](https://rustup.rs/) (stable 1.85+):
 
 ```bash
 git clone https://github.com/Codesmith28/lazyTrino.git
 cd lazyTrino
 
-# Build release binary
+# Build native release binary
 cargo build --release
 
 # Or install directly to ~/.cargo/bin
 cargo install --path .
 ```
-
-### Makefile Targets
-
-| Command | Description |
-| --- | --- |
-| `make build` | Build native release binary → `dist/` |
-| `make dev` | Build native debug binary |
-| `make run` | Build and launch `lazyTrino` |
-| `make install` | Install native binary to `~/.local/bin` |
-| `make clean` | Remove build artifacts |
-
-> For cross-compiling to non-native platforms locally (e.g. `make build-all`), install [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild) or [`cross`](https://github.com/cross-rs/cross).
 
 ---
 
@@ -95,13 +123,19 @@ cargo install --path .
 
 ```bash
 # Connect using default URL (http://localhost:8080)
-./lazyTrino
+lazyTrino
 
 # Connect to a custom server
-./lazyTrino --url http://trino.example.com:8080 --user admin
+lazyTrino --url http://trino.example.com:8080 --user admin
 
 # Connect with password authentication
-./lazyTrino --url https://trino.example.com:8443 --user admin --password secret
+lazyTrino --url https://trino.example.com:8443 --user admin --password secret
+
+# Connect using a named profile
+lazyTrino --profile prod
+
+# Update to latest version
+lazyTrino --update
 ```
 
 ### Command-Line Options
@@ -114,10 +148,11 @@ cargo install --path .
 | `--profile <NAME>` | | *(none)* | Load connection defaults from named profile |
 | `--log-level <LEVEL>` | | `info` | Set file log level (`trace`, `debug`, `info`, `warn`, `error`) |
 | `--no-log` | | `false` | Disable file logging entirely |
+| `--update` | `-u` | | Check for and install latest GitHub release |
 | `-h`, `--help` | | | Print CLI help |
 | `-V`, `--version` | | | Print version |
 
-### Configuration
+### Configuration Profiles
 
 Persistent connection profiles can be saved in an OS-specific `config.toml`:
 
@@ -143,67 +178,112 @@ user = "admin"
 
 ## Keybindings & Controls
 
-### Navigation & Hierarchy
+### Global & Hierarchy Navigation
 
 | Key | Action |
 | --- | --- |
 | `j` / `k` or `↓` / `↑` | Move selection down / up |
-| `l` / `→` / `Enter` | Select / drill down |
+| `l` / `→` / `Enter` | Select / drill down into catalog, schema, table, or action |
 | `h` / `←` / `Esc` | Back to parent level / previous screen |
 | `g` / `G` | Jump to top / bottom of list |
 | `<number> + Enter` | Jump directly to item number |
-| `/` | Focus Centralized Search Bar |
-| `Tab` / `Shift+H` / `Shift+L` | Toggle focus between Menu Pane and Preview Pane |
+| `/` | Focus search bar (in menus and modals) |
+| `Tab` / `Shift+H` / `Shift+L` | Toggle focus between Menu Pane (left) and Preview Pane (right) |
 | `?` | Toggle Help overlay |
-| `Ctrl+C` | Quit application |
+| `Ctrl+C` | Quit lazyTrino |
 
 ### Table Actions Menu
 
-When a table is selected, press the corresponding action hotkey:
+When a table is selected in the menu, press the action hotkey:
 
 | Key | Action | Description |
 | --- | --- | --- |
-| `v` | Table View | Open interactive dataset viewer with partition drilldown & live counts |
-| `c` | DDL | Execute `SHOW CREATE TABLE` |
-| `i` | Info Schema | Query `information_schema.columns` metadata |
-| `s` | Show Stats | Execute `SHOW STATS FOR table` |
-| `p` | Sample | Preview 20 sample rows |
-| `P` | Partition Tree | Render interactive partition tree |
-| `S` | Vertical Schema | View vertical column metadata inspector |
+| `v` | Table View Mode | Full interactive table viewer with partition drilldown & live record counts |
+| `c` | Table DDL | Execute `SHOW CREATE TABLE` |
+| `s` | Schema & Info | Column metadata and type details |
+| `t` | Show Stats | Execute `SHOW STATS FOR table` |
+| `m` | Sample Mode | Preview sample of 20 rows |
+| `p` | Partitions Tree | Render interactive partition tree hierarchy |
 
-### Results Viewer & SQL Query Bar
+### Table View & Results Grid
 
 | Key | Action |
 | --- | --- |
-| `j` / `k` or `↓` / `↑` | Scroll result table vertically |
-| `<` / `>` | Scroll result table horizontally |
-| `g` / `G` | Jump to top / bottom of loaded results |
-| `y` | Copy current results to clipboard as CSV |
-| `Y` | Export current results to a CSV file |
+| `j` / `k` or `↓` / `↑` | Move cell cursor / viewport down / up |
+| `h` / `l` or `←` / `→` | Move cell cursor left / right across columns |
+| `PgDn` / `PgUp` | Scroll page down / up (`Ctrl+D` / `Ctrl+U`, `Ctrl+F` / `Ctrl+B`) |
+| `Home` / `End` (or `0` / `$`) | Jump to first / last column |
+| `H` / `L` | Jump 5 columns left / right |
+| `g` / `G` | Jump to top / bottom row |
+| `S` | Cycle column sort: Descending (`▼`) $\rightarrow$ Ascending (`▲`) $\rightarrow$ Clear |
+| `F` | Open Filter Modal for active column (numeric comparators or value list) |
+| `C` | Open Column Modal (toggle column visibility, inspect nested JSON/Map tree) |
+| `Ctrl+S` | Save active view state (prompt for view name) |
+| `Ctrl+O` or `B` | Browse and restore saved views |
 | `q` or `:` | Focus Interactive SQL Query Bar |
-| `Enter` *(Query Bar)* | Execute SQL query |
-| `Shift + ← / →` *(Query Bar)* | Select text in query buffer |
-| `Ctrl+C` / `Ctrl+V` *(Query Bar)* | Copy selected query text / paste clipboard content |
-| `Esc` | Return focus to Menu Pane / cancel query editing |
+| `Esc` | Return focus to Menu Pane / exit drilldown level / close modal |
 
-> **Note on `h`/`l` vs. `<`/`>`:** `h`/`l` (and `←`/`→`) are always
-> *hierarchical* — they move up/down the catalog → schema → table → action
-> tree, and in a partitioned Table View's drill-down, `h` steps up one
-> partition level. They never scroll a result grid. To scroll a wide
-> result grid horizontally (in any results view, including the Table
-> View drill-down's leaf record grid), use `<` / `>` instead.
+### Vim Visual Modes & Clipboard
+
+| Key | Mode / Action |
+| --- | --- |
+| `V` | Enter **Visual Line** mode (select entire rows) |
+| `Ctrl+V` | Enter **Visual Block** mode (rectangular cell block selection) |
+| `Shift + Arrow keys` | Automatically enter and extend visual selection |
+| `o` / `O` | Swap cursor and anchor end in visual selection |
+| `y` | Yank selection to clipboard (CSV format for multi-cell/multi-row, raw string for single cell) |
+| `Y` | Yank active row to clipboard / export results to CSV file |
+| `Esc` | Cancel visual mode |
+
+### Saved Views Modal (`Ctrl+O` / `B`)
+
+| Key | Action |
+| --- | --- |
+| `j` / `k` or `↓` / `↑` | Move through saved views |
+| `Enter` | Restore selected saved view (filters, sorting, column visibility) |
+| `Space` | Toggle multi-selection checkbox on active view |
+| `a` | Select all / Deselect all views |
+| `d` | Delete selected view(s) (prompts `y/n` confirmation) |
+| `/` | Search saved view names |
+| `Esc` | Close saved views modal |
+
+### Interactive SQL Query Bar (`q` / `:`)
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Execute SQL query |
+| `Shift + ← / →` | Select text within query buffer |
+| `Ctrl+C` / `Ctrl+V` | Copy selected SQL text / paste clipboard text |
+| `Esc` | Return to results grid / cancel query editing |
 
 ### Mouse Controls
 
 | Input | Action |
 | --- | --- |
-| Left Click | Select catalog, schema, table, or action menu item |
+| Left Click | Select catalog, schema, table, action, or table cell |
+| Click Column Header | Cycle sort order for clicked column |
+| Shift + Click & Drag | Rectangular visual block selection |
 | Click / Drag Query Bar | Position query cursor and select SQL text |
-| Mouse Wheel | Scroll lists, partition trees, and query result tables |
+| Mouse Wheel | Scroll lists, partition trees, column horizontal scroll, and result tables |
 | Drag Vertical Border | Dynamically resize split ratio between Menu and Preview panes |
+
+---
+
+## Contributing & Development
+
+```bash
+# Run code formatting check
+cargo fmt --check
+
+# Run linter
+cargo clippy -- -D warnings
+
+# Run all test suites
+cargo test --all
+```
 
 ---
 
 ## License
 
-[Apache 2.0](LICENSE)
+Licensed under the [Apache 2.0](LICENSE) License.
