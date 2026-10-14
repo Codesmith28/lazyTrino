@@ -10,8 +10,8 @@ on:
 # Environment optimizations for Rust CI builds
 env:
   CARGO_TERM_COLOR: always
-  # Disable incremental compilation in CI to reduce compiler overhead and prevent cache bloat
-  CARGO_INCREMENTAL: "0"
+  # Enable incremental compilation with rust-cache so only changed code is recompiled
+  CARGO_INCREMENTAL: "1"
 
 permissions:
   contents: write
@@ -230,6 +230,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      # ⚡ Cache crates and compiled dependency artifacts keyed by Cargo.lock
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Build and Upload Rust Binary
         uses: taiki-e/upload-rust-binary-action@v1
