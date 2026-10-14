@@ -56,9 +56,18 @@ curl -fsSL https://raw.githubusercontent.com/Codesmith28/lazyTrino/main/install.
 
 The installer automatically detects your operating system and architecture (`arm64` / `x86_64`) and installs to `~/.local/bin/lazyTrino`.
 
-### Option 2: Pre-built Binaries
+### Option 2: Pre-built Binaries (Manual Install)
 
-Download pre-compiled binaries for macOS (Apple Silicon / Intel), Linux, or Windows from [GitHub Releases](https://github.com/Codesmith28/lazyTrino/releases).
+Download the archive for your architecture from [GitHub Releases](https://github.com/Codesmith28/lazyTrino/releases), extract it, and move the binary into your `PATH`:
+
+```bash
+# Extract archive (macOS & Linux)
+tar -xzf lazyTrino-*.tar.gz
+
+# Move binary to local bin
+chmod +x lazyTrino
+mv lazyTrino ~/.local/bin/ # or sudo mv lazyTrino /usr/local/bin/
+```
 
 ### Option 3: Built-in Self-Updater
 
@@ -74,6 +83,18 @@ lazyTrino -u
 
 ```bash
 cargo install --path .
+```
+
+### Uninstallation
+
+To remove `lazyTrino` from your machine:
+
+```bash
+# Run the uninstaller script
+curl -fsSL https://raw.githubusercontent.com/Codesmith28/lazyTrino/main/uninstall.sh | bash
+
+# Or remove the binary directly
+rm -f ~/.local/bin/lazyTrino
 ```
 
 ---

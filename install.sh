@@ -17,14 +17,14 @@ set -eu
 
 # Terminal color codes
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    CYAN='\033[0;36m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[0;33m'
-    RED='\033[0;31m'
-    BOLD='\033[1m'
-    DIM='\033[2m'
-    ITALIC='\033[3m'
-    RESET='\033[0m'
+    ESC="$(printf '\033')"
+    CYAN="${ESC}[0;36m"
+    GREEN="${ESC}[0;32m"
+    YELLOW="${ESC}[0;33m"
+    RED="${ESC}[0;31m"
+    BOLD="${ESC}[1m"
+    DIM="${ESC}[2m"
+    RESET="${ESC}[0m"
 else
     CYAN=''
     GREEN=''
@@ -32,7 +32,6 @@ else
     RED=''
     BOLD=''
     DIM=''
-    ITALIC=''
     RESET=''
 fi
 
@@ -53,7 +52,7 @@ error() {
 }
 
 print_banner() {
-    printf "${CYAN}${BOLD}${ITALIC}"
+    printf "%s%s" "$CYAN" "$BOLD"
     cat <<'EOF'
  _                      _____    _             
 | |                    |_   _|  (_)            
@@ -65,8 +64,8 @@ print_banner() {
              |___/                             
 
 EOF
-    printf "${RESET}\n"
-    printf "${DIM}${ITALIC}Interactive Terminal UI for Trino & Presto${RESET}\n\n"
+    printf "%s\n" "$RESET"
+    printf "%sTerminal UI for Trino & Presto%s\n\n" "$DIM" "$RESET"
 }
 
 detect_os() {
@@ -120,12 +119,30 @@ check_dependencies() {
     fi
 }
 
+detect_auth_token() {
+    AUTH_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    if [ -z "$AUTH_TOKEN" ] && command -v gh >/dev/null 2>&1; then
+        AUTH_TOKEN="$(gh auth token 2>/dev/null || true)"
+    fi
+}
+
 http_get() {
     url="$1"
+    auth_header=""
+    [ -n "${AUTH_TOKEN:-}" ] && auth_header="Authorization: Bearer ${AUTH_TOKEN}"
+
     if [ "$HTTP_CLIENT" = "curl" ]; then
-        curl -fsSL -H "User-Agent: lazyTrino-installer" "$url"
+        if [ -n "$auth_header" ]; then
+            curl -fsSL -H "User-Agent: lazyTrino-installer" -H "$auth_header" "$url"
+        else
+            curl -fsSL -H "User-Agent: lazyTrino-installer" "$url"
+        fi
     else
-        wget -qO- --user-agent="lazyTrino-installer" "$url"
+        if [ -n "$auth_header" ]; then
+            wget -qO- --header="$auth_header" --user-agent="lazyTrino-installer" "$url"
+        else
+            wget -qO- --user-agent="lazyTrino-installer" "$url"
+        fi
     fi
 }
 
@@ -133,15 +150,16 @@ http_download() {
     url="$1"
     dest="$2"
     if [ "$HTTP_CLIENT" = "curl" ]; then
-        curl -fL -H "User-Agent: lazyTrino-installer" --progress-bar -o "$dest" "$url"
+        curl -fL --connect-timeout 10 -H "User-Agent: lazyTrino-installer" --progress-bar -o "$dest" "$url"
     else
-        wget -q --show-progress --user-agent="lazyTrino-installer" -O "$dest" "$url"
+        wget -q --connect-timeout=10 --show-progress --user-agent="lazyTrino-installer" -O "$dest" "$url"
     fi
 }
 
 main() {
     print_banner
     check_dependencies
+    detect_auth_token
 
     info "Detecting system platform..."
     detect_os
@@ -154,23 +172,31 @@ main() {
 
     if [ -n "$TARGET_TAG" ]; then
         info "Using requested version: ${TARGET_TAG}"
-        RELEASE_API="https://api.github.com/repos/${REPO}/releases/tags/${TARGET_TAG}"
+        TAG="$TARGET_TAG"
     else
         info "Fetching latest release information from GitHub..."
-        RELEASE_API="https://api.github.com/repos/${REPO}/releases/latest"
+        # 1. First try GitHub redirect on releases/latest (fast and avoids API rate limits)
+        TAG=""
+        if [ "$HTTP_CLIENT" = "curl" ]; then
+            TAG="$(curl -fsSI --connect-timeout 5 "https://github.com/${REPO}/releases/latest" 2>/dev/null | grep -i '^location:' | awk -F'/' '{print $NF}' | tr -d '\r\n' || true)"
+        else
+            TAG="$(wget --spider --timeout=5 --server-response "https://github.com/${REPO}/releases/latest" 2>&1 | grep -i 'Location:' | awk -F'/' '{print $NF}' | tr -d '\r\n' || true)"
+        fi
+
+        # 2. Fallback to GitHub API if redirect was unavailable
+        if [ -z "$TAG" ]; then
+            RELEASE_JSON="$(http_get "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null || true)"
+            if [ -n "$RELEASE_JSON" ]; then
+                TAG="$(echo "$RELEASE_JSON" | grep -o '"tag_name": *"[^"]*"' | head -n 1 | cut -d'"' -f4 || true)"
+            fi
+        fi
+
+        # 3. Fallback to hardcoded known stable release
+        if [ -z "$TAG" ]; then
+            TAG="v0.2.0"
+        fi
     fi
 
-    RELEASE_JSON="$(http_get "$RELEASE_API" 2>/dev/null || true)"
-
-    if [ -z "$RELEASE_JSON" ] || echo "$RELEASE_JSON" | grep -q '"message": "Not Found"'; then
-        warn "Could not fetch release metadata from GitHub API (release may not be published yet or rate limit reached)."
-        warn "Attempting fallback to build from source or default binary asset..."
-        TAG="v0.2.0"
-    else
-        TAG="$(echo "$RELEASE_JSON" | grep -o '"tag_name": *"[^"]*"' | head -n 1 | cut -d'"' -f4)"
-    fi
-
-    [ -z "$TAG" ] && TAG="v0.2.0"
     success "Target release version: ${BOLD}${TAG}${RESET}"
 
     # Determine target triple
@@ -184,19 +210,7 @@ main() {
         TARGET="aarch64-apple-darwin"
     fi
 
-    DOWNLOAD_URL=""
-    if [ -n "$RELEASE_JSON" ]; then
-        # Find asset matching target or os-arch
-        ASSET_URL="$(echo "$RELEASE_JSON" | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 | grep -E "${TARGET}|${OS}-${ARCH}" | head -n 1 || true)"
-        if [ -n "$ASSET_URL" ]; then
-            DOWNLOAD_URL="$ASSET_URL"
-        fi
-    fi
-
-    if [ -z "$DOWNLOAD_URL" ]; then
-        # Standard convention: lazyTrino-<tag>-<target>.tar.gz
-        DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/lazyTrino-${TAG}-${TARGET}.tar.gz"
-    fi
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/lazyTrino-${TAG}-${TARGET}.tar.gz"
 
     TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'lazytrino')"
     cleanup() {

@@ -208,6 +208,26 @@ fn extract_binary_from_archive(archive_path: &Path, dest_binary: &Path) -> Resul
     Ok(())
 }
 
+/// Queries the GitHub latest release web redirect (https://github.com/{REPO}/releases/latest)
+/// to determine the latest release tag without hitting API rate limits.
+pub async fn fetch_latest_tag_from_redirect(client: &reqwest::Client) -> Result<String> {
+    let redirect_url = format!("https://github.com/{REPO}/releases/latest");
+    let response = client
+        .get(&redirect_url)
+        .send()
+        .await
+        .context("Failed to query GitHub latest release redirect")?;
+
+    let final_url = response.url().as_str();
+    if let Some(tag_part) = final_url.split("/releases/tag/").nth(1) {
+        let tag = tag_part.split(['?', '#']).next().unwrap_or(tag_part).trim();
+        if !tag.is_empty() {
+            return Ok(tag.to_string());
+        }
+    }
+    bail!("Could not resolve latest release tag from redirect URL: {final_url}")
+}
+
 /// Executes the self-update workflow with rich, decorated progress output.
 pub async fn run_self_update() -> Result<()> {
     print_logo();
@@ -224,41 +244,49 @@ pub async fn run_self_update() -> Result<()> {
         .build()
         .context("Failed to initialize HTTP client")?;
 
+    let auth_token = env::var("GITHUB_TOKEN").or_else(|_| env::var("GH_TOKEN")).ok();
     let api_url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let response = client
-        .get(&api_url)
-        .send()
-        .await
-        .context("Failed to connect to GitHub releases API")?;
-
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        println!(
-            "\x1b[1;33m⚠\x1b[0m No releases currently available on GitHub for \x1b[1m{REPO}\x1b[0m."
-        );
-        return Ok(());
+    let mut req = client.get(&api_url);
+    if let Some(ref token) = auth_token {
+        req = req.header("Authorization", format!("Bearer {token}"));
     }
 
-    if response.status() == reqwest::StatusCode::FORBIDDEN {
-        println!(
-            "\x1b[1;33m⚠\x1b[0m GitHub API rate limit reached. Please check back later or install from https://github.com/{REPO}/releases."
-        );
-        return Ok(());
-    }
+    let (latest_tag, asset) = match req.send().await {
+        Ok(res) if res.status().is_success() => {
+            let release: GithubRelease = res
+                .json()
+                .await
+                .context("Failed to parse GitHub release metadata")?;
+            let tag = release.tag_name.trim().to_string();
+            let matched = match_release_asset(&release.assets, os, arch).cloned();
+            (tag, matched)
+        }
+        _ => {
+            // Fallback to GitHub web redirect on releases/latest (bypasses all API rate limits)
+            let tag = fetch_latest_tag_from_redirect(&client).await?;
+            let triple = match (os, arch) {
+                ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+                ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+                ("darwin", "x86_64") => "x86_64-apple-darwin",
+                ("darwin", "aarch64") => "aarch64-apple-darwin",
+                _ => "",
+            };
+            let matched = if triple.is_empty() {
+                None
+            } else {
+                let name = format!("lazyTrino-{tag}-{triple}.tar.gz");
+                let url = format!("https://github.com/{REPO}/releases/download/{tag}/{name}");
+                Some(ReleaseAsset {
+                    name,
+                    browser_download_url: url,
+                    size: None,
+                })
+            };
+            (tag, matched)
+        }
+    };
 
-    if !response.status().is_success() {
-        bail!(
-            "GitHub API responded with status code {} while checking for updates",
-            response.status()
-        );
-    }
-
-    let release: GithubRelease = response
-        .json()
-        .await
-        .context("Failed to parse GitHub release metadata")?;
-
-    let latest_tag = release.tag_name.trim();
-    if !is_newer(latest_tag, CURRENT_VERSION) {
+    if !is_newer(&latest_tag, CURRENT_VERSION) {
         println!(
             "\x1b[1;32m✔\x1b[0m lazyTrino is already up to date (\x1b[1mv{}\x1b[0m).",
             CURRENT_VERSION
@@ -271,15 +299,13 @@ pub async fn run_self_update() -> Result<()> {
         latest_tag, CURRENT_VERSION
     );
 
-    let asset = match match_release_asset(&release.assets, os, arch) {
+    let asset = match asset {
         Some(a) => a,
         None => {
             println!(
                 "\x1b[1;31m✖\x1b[0m No compatible release binary found for \x1b[1m{os}-{arch}\x1b[0m."
             );
-            if let Some(url) = &release.html_url {
-                println!("  Visit release page to download manually: {url}");
-            }
+            println!("  Visit https://github.com/{REPO}/releases to download manually.");
             return Ok(());
         }
     };
@@ -447,4 +473,17 @@ mod tests {
             "lazyTrino-v0.2.0-x86_64-unknown-linux-gnu.tar.gz"
         );
     }
+
+    #[test]
+    fn test_parse_tag_from_redirect_url() {
+        let url = "https://github.com/Codesmith28/lazyTrino/releases/tag/v0.2.0";
+        let tag = url.split("/releases/tag/").nth(1).unwrap();
+        assert_eq!(tag, "v0.2.0");
+
+        let url_with_query = "https://github.com/Codesmith28/lazyTrino/releases/tag/v1.0.0?ref=xyz#hash";
+        let tag_part = url_with_query.split("/releases/tag/").nth(1).unwrap();
+        let cleaned = tag_part.split(['?', '#']).next().unwrap();
+        assert_eq!(cleaned, "v1.0.0");
+    }
 }
+
