@@ -39,14 +39,18 @@ pub fn render_count_box(frame: &mut Frame, area: Rect, res_state: &ResultsState)
         Span::styled("● ", theme::warning_bold_style()),
     ];
 
-    render_results_count_spans(&mut spans, res_state);
+    render_results_count_spans(&mut spans, res_state, &[]);
 
     let line = Line::from(spans);
     let p = Paragraph::new(line);
     frame.render_widget(p, inner);
 }
 
-fn render_results_count_spans(spans: &mut Vec<Span>, res_state: &ResultsState) {
+fn render_results_count_spans(
+    spans: &mut Vec<Span>,
+    res_state: &ResultsState,
+    schema_cols: &[crate::app::VerticalColumn],
+) {
     let loaded_str = crate::app::format_count(res_state.rows.len());
 
     if !res_state.is_paginated {
@@ -118,15 +122,54 @@ fn render_results_count_spans(spans: &mut Vec<Span>, res_state: &ResultsState) {
         }
     }
 
-    if !res_state.filters.is_empty() {
+    let mut all_filter_strs = Vec::new();
+    for (c, v) in &res_state.filters {
+        all_filter_strs.push(format!("{c}={v}"));
+    }
+    for (c, f) in &res_state.column_filters {
+        match f {
+            crate::app::ColumnFilter::Numeric(num) => {
+                all_filter_strs.push(format!("{c} {} {}", num.op.as_str(), num.raw_value));
+            }
+            crate::app::ColumnFilter::Values(vals) => {
+                let mut sorted_vals: Vec<_> = vals.iter().cloned().collect();
+                sorted_vals.sort();
+                if sorted_vals.len() <= 3 {
+                    all_filter_strs.push(format!("{c} IN ({})", sorted_vals.join(", ")));
+                } else {
+                    all_filter_strs.push(format!("{c} IN ({} values)", sorted_vals.len()));
+                }
+            }
+        }
+    }
+    if !all_filter_strs.is_empty() {
         spans.push(Span::styled("  •  Filters: ", theme::secondary_style()));
-        let filter_str = res_state
-            .filters
+        let filter_str = all_filter_strs.join(", ");
+        spans.push(Span::styled(filter_str, theme::warning_bold_style()));
+    }
+
+    if !res_state.columns.is_empty() && res_state.selected_col < res_state.columns.len() {
+        let col_name = &res_state.columns[res_state.selected_col];
+        let col_type = schema_cols
             .iter()
-            .map(|(c, v)| format!("{c}={v}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        spans.push(Span::styled(filter_str, theme::info_style()));
+            .find(|vc| &vc.name == col_name)
+            .map(|vc| vc.data_type.as_str());
+
+        spans.push(Span::styled("  •  Col: ", theme::secondary_style()));
+        let col_display = if let Some(t) = col_type {
+            format!(
+                "{col_name} ({t}) [{}/{}]",
+                res_state.selected_col + 1,
+                res_state.columns.len()
+            )
+        } else {
+            format!(
+                "{col_name} [{}/{}]",
+                res_state.selected_col + 1,
+                res_state.columns.len()
+            )
+        };
+        spans.push(Span::styled(col_display, theme::info_bold_style()));
     }
 }
 
@@ -237,7 +280,7 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
                     ));
                 }
             } else if let Some(ref res_state) = state.results {
-                render_results_count_spans(&mut spans, res_state);
+                render_results_count_spans(&mut spans, res_state, &app.vertical_schema_cols);
             } else {
                 spans.push(Span::styled("Table View", theme::bold_text_style()));
                 let table_total = state
@@ -334,7 +377,7 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
         }
         _ => {
             if let Some(ref res_state) = state.results {
-                render_results_count_spans(&mut spans, res_state);
+                render_results_count_spans(&mut spans, res_state, &app.vertical_schema_cols);
             } else {
                 let name = crate::app::ACTIONS
                     .get(state.selected)
@@ -718,6 +761,56 @@ mod tests {
         assert!(
             content.contains("2 sample rows loaded"),
             "Must show sample mode rows: {content}"
+        );
+    }
+
+    #[test]
+    fn test_render_count_box_shows_active_column_and_warning_filter_color() {
+        use ratatui::style::Color;
+
+        let state = ResultsState {
+            rows: vec![vec!["1".to_string(), "active".to_string()]],
+            columns: vec!["id".to_string(), "status".to_string()],
+            selected_col: 1,
+            is_paginated: true,
+            has_more_rows: false,
+            filters: vec![("dt".to_string(), "2026-10-14".to_string())],
+            ..Default::default()
+        };
+
+        let backend = TestBackend::new(100, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                render_count_box(f, Rect::new(0, 0, 100, 3), &state);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = (0..3)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(content.contains("Filters: dt=2026-10-14"));
+        assert!(content.contains("Col: status [2/2]"));
+
+        // Verify filter text cell color is Yellow, NOT Cyan
+        let mut found_yellow_filter = false;
+        for x in 0..100 {
+            let cell = buffer.cell((x, 1)).unwrap();
+            if cell.symbol() == "d" && cell.style().fg == Some(Color::Yellow) {
+                found_yellow_filter = true;
+                break;
+            }
+        }
+        assert!(
+            found_yellow_filter,
+            "Filter text must be rendered in Yellow (warning style)"
         );
     }
 }

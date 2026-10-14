@@ -34,6 +34,9 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
         Mode::ColumnModal | Mode::FilterModal => {
             Some(" Space:toggle  a:all/none  Enter:apply  Esc:cancel  j/k:move ")
         }
+        Mode::AppliedFiltersModal => {
+            Some(" j/k:move  d/x:remove filter  c:clear all  Esc/Enter/q:close ")
+        }
         Mode::SavedViewsModal => {
             Some(" Space:toggle  a:all/none  Enter:restore  d/Del:delete  j/k:move  Esc:close ")
         }
@@ -59,18 +62,18 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
 
                     match app.active_panel {
                         ActivePanel::MenuPane => Some(
-                            " j/k:move  l/Enter:run  h/Esc:back  v/c/e/t/m/p:action  Tab:pane  ?:help  Ctrl+C:quit ",
+                            " j/k:move  l/Enter:run  h/Esc:back  A:filters  v/c/e/t/m/p:action  Tab:pane  ?:help  Ctrl+C:quit ",
                         ),
                         ActivePanel::MainViewer => match selected_action {
                             Some(Action::TableView)
                                 if state.results.is_some() && state.drilldown.is_some() =>
                             {
                                 Some(
-                                    " hjkl/←→:cells  <:up  S:sort  C:cols  F:filter  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                    " hjkl/←→:cells  <:up  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
                                 )
                             }
                             Some(Action::TableView) if state.results.is_some() => Some(
-                                " hjkl/←→:cells  S:sort  C:cols  F:filter  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                " hjkl/←→:cells  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
                             ),
                             Some(Action::Partitions) if !app.partition_tree_lines.is_empty() => {
                                 Some(
@@ -78,19 +81,19 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
                                 )
                             }
                             Some(Action::Schema) if !app.vertical_schema_cols.is_empty() => Some(
-                                " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                " j/k:scroll  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
                             ),
                             _ if state.results.is_some() => Some(
-                                " hjkl/←→:cells  S:sort  C:cols  F:filter  u:clear sel  g/G:top/btm  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                " hjkl/←→:cells  S:sort  C:cols  F:filter  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
                             ),
                             Some(Action::TableView) if state.drilldown.is_some() => Some(
-                                " j/k:move  >/Enter:drill  <:up  u:clear sel  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                " j/k:move  >/Enter:drill  <:up  u:clear sel  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
                             ),
                             Some(Action::TableView) => Some(
                                 " q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
                             ),
                             _ => Some(
-                                " Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                " q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
                             ),
                         },
                     }

@@ -37,8 +37,17 @@ impl LogLevel {
 }
 
 #[derive(Debug, Clone, Default, Parser)]
-#[command(name = "lazyTrino", about = "TUI Trino table browser")]
+#[command(
+    name = "lazyTrino",
+    about = "TUI Trino table browser",
+    version = env!("CARGO_PKG_VERSION"),
+    disable_version_flag = true
+)]
 pub struct CliArgs {
+    /// Print version.
+    #[arg(short = 'v', short_alias = 'V', long, action = clap::ArgAction::Version)]
+    pub version: Option<bool>,
+
     /// Trino coordinator REST server URL.
     #[arg(long)]
     pub url: Option<String>,
@@ -66,13 +75,20 @@ pub struct CliArgs {
     /// Update lazyTrino to the latest release.
     #[arg(long, short = 'u')]
     pub update: bool,
+
+    /// Maximum number of queries to cache (default: 10).
+    #[arg(long, alias = "cache-limit", value_name = "COUNT")]
+    pub query_cache_limit: Option<usize>,
 }
+
+pub const DEFAULT_QUERY_CACHE_LIMIT: usize = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionConfig {
     pub url: String,
     pub user: String,
     pub password: String,
+    pub query_cache_limit: usize,
 }
 
 pub fn default_user() -> String {
@@ -87,6 +103,7 @@ impl Default for ConnectionConfig {
             url: "http://localhost:8080".to_string(),
             user: default_user(),
             password: String::new(),
+            query_cache_limit: DEFAULT_QUERY_CACHE_LIMIT,
         }
     }
 }

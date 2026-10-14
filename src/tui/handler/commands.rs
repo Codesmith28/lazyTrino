@@ -43,9 +43,10 @@ pub fn dispatch_command(
                 s.loading = true;
                 s.error = None;
             }
+            let cache_limit = app.config.query_cache_limit;
             let tx = tx.clone();
             tokio::spawn(async move {
-                let res = match TrinoClient::new(&url, &user) {
+                let res = match TrinoClient::with_cache_limit(&url, &user, cache_limit) {
                     Ok(client) => match client.fetch_catalogs().await {
                         Ok(catalogs) => Ok((client, catalogs)),
                         Err(err) => Err(err),
@@ -525,9 +526,12 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                     app.trino_client = Some(client);
                     app.catalogs = catalogs.iter().map(|c| c.trim().to_string()).collect();
                     app.clear_mouse_selection();
+                    let selected = app
+                        .last_selected_catalog
+                        .min(app.catalogs.len().saturating_sub(1));
                     app.screen = Screen::Catalog(CatalogState {
                         items: app.catalogs.clone(),
-                        selected: 0,
+                        selected,
                     });
                 }
                 Err(e) => {
@@ -554,10 +558,13 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                     app.complete_query_log_success(log_id, 25, trimmed.len());
                     app.schemas.insert(catalog.clone(), trimmed.clone());
                     app.clear_mouse_selection();
+                    let saved_selected =
+                        app.last_selected_schema.get(&catalog).copied().unwrap_or(0);
+                    let selected = saved_selected.min(trimmed.len().saturating_sub(1));
                     app.screen = Screen::Schema(SchemaState {
                         catalog: catalog.clone(),
                         items: trimmed,
-                        selected: 0,
+                        selected,
                     });
                 }
                 Err(e) => {
@@ -581,11 +588,17 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                     app.tables
                         .insert((catalog.clone(), schema.clone()), trimmed.clone());
                     app.clear_mouse_selection();
+                    let saved_selected = app
+                        .last_selected_table
+                        .get(&(catalog.clone(), schema.clone()))
+                        .copied()
+                        .unwrap_or(0);
+                    let selected = saved_selected.min(trimmed.len().saturating_sub(1));
                     app.screen = Screen::Table(TableState {
                         catalog: catalog.clone(),
                         schema: schema.clone(),
                         items: trimmed,
-                        selected: 0,
+                        selected,
                     });
                 }
                 Err(e) => {
@@ -667,6 +680,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                             table_count_loading: true,
                             counts_cache: std::collections::HashMap::new(),
                             current_count_loading: true,
+                            path_cursors: std::collections::HashMap::new(),
                         });
                         return Some(Command::FetchPartitionLevel {
                             catalog,
@@ -853,8 +867,16 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                                     res.hidden_columns.insert(col);
                                 }
                                 if let Some((col, dir)) = view.sort {
-                                    res.sort = Some((col, dir.into()));
+                                    res.sort = Some((col.clone(), dir.into()));
                                     res.apply_sort(&app.vertical_schema_cols);
+                                    if let Some(pos) = res.columns.iter().position(|c| c == &col) {
+                                        res.selected_col = pos;
+                                    }
+                                }
+                                if let Some(col_name) = res.columns.get(res.selected_col)
+                                    && !res.is_column_visible(col_name)
+                                {
+                                    res.selected_col = res.first_visible_col();
                                 }
                                 if !res.column_filters.is_empty() {
                                     if res.unfiltered_rows.is_none() {
@@ -1193,6 +1215,7 @@ mod tests {
             url: "http://localhost:8080".to_string(),
             user: "user".to_string(),
             password: String::new(),
+            query_cache_limit: crate::config::DEFAULT_QUERY_CACHE_LIMIT,
         }
     }
 
@@ -1742,6 +1765,7 @@ mod tests {
                 table_count_loading: true,
                 counts_cache: std::collections::HashMap::new(),
                 current_count_loading: true,
+                path_cursors: std::collections::HashMap::new(),
             }),
             ..Default::default()
         });

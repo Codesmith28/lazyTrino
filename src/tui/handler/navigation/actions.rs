@@ -167,6 +167,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                         table_count_loading: true,
                         counts_cache: std::collections::HashMap::new(),
                         current_count_loading: true,
+                        path_cursors: std::collections::HashMap::new(),
                     });
                     Some(Command::FetchPartitionLevel {
                         catalog: s.catalog.clone(),
@@ -214,67 +215,72 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
         .contains(crossterm::event::KeyModifiers::SHIFT);
     let is_alt = key.modifiers.contains(crossterm::event::KeyModifiers::ALT);
 
-    if !is_ctrl
-        && let KeyCode::Char(c) = code
-        && let Some(pos) = ACTIONS.iter().position(|(k, _, _)| *k == c)
-    {
-        return trigger_action(app, pos);
-    }
-
     let safe_columns = crate::app::safe_select_columns(&app.vertical_schema_cols);
     if let Screen::Actions(ref mut s) = app.screen {
         match app.active_panel {
-            ActivePanel::MenuPane => match code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    s.selected = (s.selected + 1) % ACTIONS.len();
-                    s.results = None;
-                    s.drilldown = None;
-                    let action = &ACTIONS[s.selected].2;
-                    let query = action.build_query(&s.catalog, &s.schema, &s.table);
-                    s.query_cursor = query.len();
-                    s.query_buffer = query;
-                    None
+            ActivePanel::MenuPane => {
+                if !is_ctrl
+                    && let KeyCode::Char(c) = code
+                    && let Some(pos) = ACTIONS.iter().position(|(k, _, _)| *k == c)
+                {
+                    return trigger_action(app, pos);
                 }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    s.selected = if s.selected == 0 {
-                        ACTIONS.len() - 1
-                    } else {
-                        s.selected - 1
-                    };
-                    s.results = None;
-                    s.drilldown = None;
-                    let action = &ACTIONS[s.selected].2;
-                    let query = action.build_query(&s.catalog, &s.schema, &s.table);
-                    s.query_cursor = query.len();
-                    s.query_buffer = query;
-                    None
-                }
-                KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
-                    let idx = s.selected;
-                    trigger_action(app, idx)
-                }
-                KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
-                    super::go_back(app);
-                    None
-                }
-                KeyCode::Char('y') => {
-                    copy_active_pane_content(app);
-                    None
-                }
-                KeyCode::Char('C') => {
-                    if s.results.is_some() {
-                        crate::tui::handler::column_modal::open_column_modal(app);
+                match code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        s.selected = (s.selected + 1) % ACTIONS.len();
+                        s.results = None;
+                        s.drilldown = None;
+                        let action = &ACTIONS[s.selected].2;
+                        let query = action.build_query(&s.catalog, &s.schema, &s.table);
+                        s.query_cursor = query.len();
+                        s.query_buffer = query;
+                        None
                     }
-                    None
-                }
-                KeyCode::Char('S') => {
-                    if let Some(ref mut res) = s.results {
-                        res.toggle_sort(&app.vertical_schema_cols);
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        s.selected = if s.selected == 0 {
+                            ACTIONS.len() - 1
+                        } else {
+                            s.selected - 1
+                        };
+                        s.results = None;
+                        s.drilldown = None;
+                        let action = &ACTIONS[s.selected].2;
+                        let query = action.build_query(&s.catalog, &s.schema, &s.table);
+                        s.query_cursor = query.len();
+                        s.query_buffer = query;
+                        None
                     }
-                    None
+                    KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+                        let idx = s.selected;
+                        trigger_action(app, idx)
+                    }
+                    KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
+                        super::go_back(app);
+                        None
+                    }
+                    KeyCode::Char('y') => {
+                        copy_active_pane_content(app);
+                        None
+                    }
+                    KeyCode::Char('C') => {
+                        if s.results.is_some() {
+                            crate::tui::handler::column_modal::open_column_modal(app);
+                        }
+                        None
+                    }
+                    KeyCode::Char('S') => {
+                        if let Some(ref mut res) = s.results {
+                            res.toggle_sort(&app.vertical_schema_cols);
+                        }
+                        None
+                    }
+                    KeyCode::Char('A') | KeyCode::Char('a') => {
+                        crate::tui::handler::applied_filters_modal::open_applied_filters_modal(app);
+                        None
+                    }
+                    _ => None,
                 }
-                _ => None,
-            },
+            }
             ActivePanel::MainViewer => {
                 let in_drilldown = s.drilldown.is_some()
                     && s.selected < ACTIONS.len()
@@ -291,6 +297,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                     && !items.is_empty()
                                 {
                                     dd.selected = (dd.selected + 1).min(items.len() - 1);
+                                    dd.path_cursors.insert(dd.path.clone(), dd.selected);
                                 }
                             }
                             maybe_fetch_selected_partition_count(s)
@@ -298,6 +305,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         KeyCode::Char('k') | KeyCode::Up => {
                             if let Some(dd) = s.drilldown.as_mut() {
                                 dd.selected = dd.selected.saturating_sub(1);
+                                dd.path_cursors.insert(dd.path.clone(), dd.selected);
                             }
                             maybe_fetch_selected_partition_count(s)
                         }
@@ -311,6 +319,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 {
                                     dd.selected =
                                         (dd.selected + 15).min(items.len().saturating_sub(1));
+                                    dd.path_cursors.insert(dd.path.clone(), dd.selected);
                                 }
                             }
                             maybe_fetch_selected_partition_count(s)
@@ -320,12 +329,14 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         {
                             if let Some(dd) = s.drilldown.as_mut() {
                                 dd.selected = dd.selected.saturating_sub(15);
+                                dd.path_cursors.insert(dd.path.clone(), dd.selected);
                             }
                             maybe_fetch_selected_partition_count(s)
                         }
                         KeyCode::Char('g') | KeyCode::Home | KeyCode::Char('0') => {
                             if let Some(dd) = s.drilldown.as_mut() {
                                 dd.selected = 0;
+                                dd.path_cursors.insert(dd.path.clone(), dd.selected);
                             }
                             maybe_fetch_selected_partition_count(s)
                         }
@@ -334,6 +345,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 let depth = dd.depth();
                                 if let Some(items) = dd.levels_cache.get(depth) {
                                     dd.selected = items.len().saturating_sub(1);
+                                    dd.path_cursors.insert(dd.path.clone(), dd.selected);
                                 }
                             }
                             maybe_fetch_selected_partition_count(s)
@@ -347,6 +359,12 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         }
                         KeyCode::Char('y') => {
                             copy_active_pane_content(app);
+                            None
+                        }
+                        KeyCode::Char('A') | KeyCode::Char('a') => {
+                            crate::tui::handler::applied_filters_modal::open_applied_filters_modal(
+                                app,
+                            );
                             None
                         }
                         _ => None,
@@ -507,7 +525,17 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
-                        KeyCode::Char('v') | KeyCode::Char('V') if is_ctrl => {
+                        KeyCode::Char('v') => {
+                            if let Some(ref mut res) = s.results {
+                                if matches!(res.visual_mode, crate::app::VisualMode::Block { .. }) {
+                                    res.exit_visual_mode();
+                                } else {
+                                    res.enter_visual_block();
+                                }
+                            }
+                            None
+                        }
+                        KeyCode::Char('V') if is_ctrl => {
                             if let Some(ref mut res) = s.results {
                                 if matches!(res.visual_mode, crate::app::VisualMode::Block { .. }) {
                                     res.exit_visual_mode();
@@ -655,6 +683,12 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             }
                             None
                         }
+                        KeyCode::Char('A') | KeyCode::Char('a') => {
+                            crate::tui::handler::applied_filters_modal::open_applied_filters_modal(
+                                app,
+                            );
+                            None
+                        }
                         KeyCode::Char('C') => {
                             if s.results.is_some() {
                                 crate::tui::handler::column_modal::open_column_modal(app);
@@ -668,11 +702,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('q') | KeyCode::Char(':') => {
-                            if s.selected < ACTIONS.len()
-                                && matches!(ACTIONS[s.selected].2, Action::TableView)
-                            {
-                                app.mode = Mode::QueryInput;
-                            }
+                            app.mode = Mode::QueryInput;
                             None
                         }
                         KeyCode::Char('y') => {

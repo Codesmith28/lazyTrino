@@ -20,8 +20,9 @@ use crate::app::*;
 use super::{
     Command,
     navigation::{
-        check_trigger_infinite_scroll, clipboard::format_csv_row, extract_list_labels,
-        get_selected, mod_list_selected, trigger_action,
+        check_trigger_infinite_scroll, clipboard::format_csv_row,
+        drilldown::drilldown_drill_into_selected, extract_list_labels, get_selected,
+        list::select_current_item, mod_list_selected, trigger_action,
     },
     query::{
         active_query_buffer, active_query_state_mut, copy_to_clipboard, query_bar_layout,
@@ -60,19 +61,24 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             term_height,
         );
     }
+    if app.applied_filters_modal.is_some() {
+        return crate::tui::handler::applied_filters_modal::handle_applied_filters_modal_mouse(
+            app,
+            mouse,
+            term_width,
+            term_height,
+        );
+    }
 
     let bottom_y = term_height.saturating_sub(7);
     let is_in_table = matches!(app.screen, Screen::Actions(_));
+    let is_table_screen = matches!(app.screen, Screen::Table(_));
     let border_pct = if is_in_table {
-        if app.main_panel_pct > 30 {
-            15
-        } else {
-            app.main_panel_pct.clamp(8, 30)
-        }
-    } else if app.main_panel_pct <= 30 {
-        60
+        app.actions_panel_pct.clamp(10, 60)
+    } else if is_table_screen {
+        100
     } else {
-        app.main_panel_pct
+        app.main_panel_pct.clamp(20, 80)
     };
     let border_x = ((term_width as u32 * border_pct as u32) / 100) as u16;
 
@@ -96,11 +102,8 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                         inner_w,
                         &buf,
                     );
-                    let is_table_view = match &app.screen {
-                        Screen::Actions(a) => a.selected == 0,
-                        _ => false,
-                    };
-                    if is_table_view {
+                    let is_actions_screen = matches!(&app.screen, Screen::Actions(_));
+                    if is_actions_screen {
                         app.mode = Mode::QueryInput;
                     }
                     app.set_active_panel(ActivePanel::MainViewer);
@@ -121,7 +124,11 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             app.mouse_selection_current = Some((mouse.column, mouse.row));
             app.is_selecting_text = false;
 
-            if mouse.row < bottom_y && mouse.column == border_x {
+            let is_on_border = !is_table_screen
+                && mouse.row < bottom_y
+                && (mouse.column as i32 - border_x as i32).abs() <= 1;
+
+            if is_on_border {
                 app.is_dragging_resizer = true;
             } else {
                 app.is_dragging_resizer = false;
@@ -149,6 +156,16 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     } else {
                         app.mode = Mode::Normal;
                         app.set_active_panel(ActivePanel::MainViewer);
+                        if let Some(orig_idx) =
+                            phase1_hit_test(app, term_width, term_height, mouse.column, mouse.row)
+                        {
+                            match &mut app.screen {
+                                Screen::Catalog(s) => s.selected = orig_idx,
+                                Screen::Schema(s) => s.selected = orig_idx,
+                                Screen::Table(s) => s.selected = orig_idx,
+                                _ => {}
+                            }
+                        }
                     }
                 } else if mouse.column >= border_x && mouse.row < bottom_y {
                     app.mode = Mode::Normal;
@@ -228,23 +245,21 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     } else if let Screen::Actions(ref mut a) = app.screen
                         && let Some(ref mut dd) = a.drilldown
                         && a.results.is_none()
+                        && let Some(idx) = drilldown_hit_test(
+                            app.actions_panel_pct,
+                            a.query_buffer.len(),
+                            matches!(app.mode, Mode::QueryInput),
+                            dd,
+                            false,
+                            term_width,
+                            term_height,
+                            mouse.column,
+                            mouse.row,
+                        )
                     {
-                        let preview_inner_y = 3 + 3 + 1;
-                        let list_start_y = if dd.truncated {
-                            preview_inner_y + 1
-                        } else {
-                            preview_inner_y
-                        };
-                        if mouse.row >= list_start_y {
-                            let idx = (mouse.row - list_start_y) as usize;
-                            let depth = dd.depth();
-                            if let Some(items) = dd.levels_cache.get(depth)
-                                && idx < items.len()
-                            {
-                                dd.selected = idx;
-                                return crate::tui::handler::navigation::actions::maybe_fetch_selected_partition_count(a);
-                            }
-                        }
+                        dd.selected = idx;
+                        dd.path_cursors.insert(dd.path.clone(), idx);
+                        return crate::tui::handler::navigation::actions::maybe_fetch_selected_partition_count(a);
                     }
                 }
             }
@@ -326,7 +341,11 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
             if app.is_dragging_resizer {
                 let pct = ((mouse.column as u32 * 100) / term_width as u32) as u16;
-                app.main_panel_pct = pct.clamp(8, 80);
+                if is_in_table {
+                    app.actions_panel_pct = pct.clamp(10, 60);
+                } else if !is_table_screen {
+                    app.main_panel_pct = pct.clamp(20, 80);
+                }
             }
         }
         MouseEventKind::Down(MouseButton::Right) => {
@@ -345,6 +364,11 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
+            let was_dragging_resizer = app.is_dragging_resizer;
+            let was_dragging_h_scrollbar = app.is_dragging_h_scrollbar;
+            let was_dragging_query = app.is_dragging_query_select;
+            let was_selecting_text = app.is_selecting_text;
+
             app.is_dragging_resizer = false;
             app.is_dragging_h_scrollbar = false;
             if app.is_dragging_query_select {
@@ -369,6 +393,38 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                             Some((text.chars().take(30).collect(), std::time::Instant::now()));
                     }
                 }
+                return None;
+            }
+
+            if !was_dragging_resizer
+                && !was_dragging_h_scrollbar
+                && !was_dragging_query
+                && !was_selecting_text
+            {
+                if phase1_hit_test(app, term_width, term_height, mouse.column, mouse.row).is_some()
+                {
+                    return select_current_item(app);
+                }
+
+                if let Screen::Actions(ref mut a) = app.screen
+                    && let Some(ref dd) = a.drilldown
+                    && a.results.is_none()
+                    && drilldown_hit_test(
+                        app.actions_panel_pct,
+                        a.query_buffer.len(),
+                        matches!(app.mode, Mode::QueryInput),
+                        dd,
+                        false,
+                        term_width,
+                        term_height,
+                        mouse.column,
+                        mouse.row,
+                    )
+                    .is_some()
+                {
+                    let safe_columns = crate::app::safe_select_columns(&app.vertical_schema_cols);
+                    return drilldown_drill_into_selected(a, &safe_columns);
+                }
             }
         }
         MouseEventKind::ScrollDown => {
@@ -382,31 +438,12 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 return None;
             }
             let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
-            let alt = mouse.modifiers.contains(KeyModifiers::ALT);
-            let ctrl = mouse.modifiers.contains(KeyModifiers::CONTROL);
             let table_rect = results_table_inner_rect(app, term_width, term_height);
             let avail_width = table_rect
                 .map(|r| (r.width as usize).saturating_sub(4).max(1))
                 .unwrap_or(80);
 
-            let is_on_h_scrollbar = table_rect
-                .map(|inner| {
-                    mouse.row >= inner.y + inner.height.saturating_sub(2)
-                        && mouse.row <= inner.y + inner.height
-                        && mouse.column >= inner.x
-                        && mouse.column < inner.x + inner.width
-                })
-                .unwrap_or(false);
-
-            let is_on_header = table_rect
-                .map(|inner| {
-                    mouse.row <= inner.y + 1
-                        && mouse.column >= inner.x
-                        && mouse.column < inner.x + inner.width
-                })
-                .unwrap_or(false);
-
-            let is_horizontal = shift || alt || ctrl || is_on_h_scrollbar || is_on_header;
+            let is_horizontal = shift;
 
             if is_in_table {
                 let selected_idx = match &app.screen {
@@ -469,8 +506,6 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 return None;
             }
             let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
-            let alt = mouse.modifiers.contains(KeyModifiers::ALT);
-            let ctrl = mouse.modifiers.contains(KeyModifiers::CONTROL);
             let table_rect = results_table_inner_rect(app, term_width, term_height);
             let view_rows = table_rect
                 .map(|r| (r.height as usize).saturating_sub(3).max(1))
@@ -479,24 +514,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 .map(|r| (r.width as usize).saturating_sub(4).max(1))
                 .unwrap_or(80);
 
-            let is_on_h_scrollbar = table_rect
-                .map(|inner| {
-                    mouse.row >= inner.y + inner.height.saturating_sub(2)
-                        && mouse.row <= inner.y + inner.height
-                        && mouse.column >= inner.x
-                        && mouse.column < inner.x + inner.width
-                })
-                .unwrap_or(false);
-
-            let is_on_header = table_rect
-                .map(|inner| {
-                    mouse.row <= inner.y + 1
-                        && mouse.column >= inner.x
-                        && mouse.column < inner.x + inner.width
-                })
-                .unwrap_or(false);
-
-            let is_horizontal = shift || alt || ctrl || is_on_h_scrollbar || is_on_header;
+            let is_horizontal = shift;
 
             if is_in_table {
                 let selected_idx = match &app.screen {
@@ -565,6 +583,198 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
     None
 }
 
+pub(crate) fn phase1_list_inner_rect(app: &App, term_width: u16, term_height: u16) -> Option<Rect> {
+    let is_table_screen = matches!(app.screen, Screen::Table(_));
+    let is_phase1 = matches!(
+        app.screen,
+        Screen::Catalog(_) | Screen::Schema(_) | Screen::Table(_)
+    );
+    if !is_phase1 {
+        return None;
+    }
+    let bottom_y = term_height.saturating_sub(7);
+    let list_width = if is_table_screen {
+        term_width
+    } else {
+        let pct = app.main_panel_pct.clamp(20, 80);
+        ((term_width as u32 * pct as u32) / 100) as u16
+    };
+    let inner_w = list_width.saturating_sub(2).max(1) as usize;
+    let search_active = matches!(app.mode, Mode::Search) && !matches!(app.screen, Screen::Help);
+    let search_height = if search_active {
+        let total_chars = 3 + app.search_query.len();
+        let lines = total_chars.div_ceil(inner_w);
+        (lines as u16 + 2).clamp(3, 8)
+    } else {
+        3
+    };
+    let list_y = search_height + 3;
+    if bottom_y <= list_y + 2 {
+        return None;
+    }
+    let list_h = bottom_y - list_y;
+    Some(Rect {
+        x: 1,
+        y: list_y + 1,
+        width: list_width.saturating_sub(2),
+        height: list_h.saturating_sub(2),
+    })
+}
+
+pub(crate) fn phase1_hit_test(
+    app: &App,
+    term_width: u16,
+    term_height: u16,
+    col: u16,
+    row: u16,
+) -> Option<usize> {
+    let inner = phase1_list_inner_rect(app, term_width, term_height)?;
+    if col < inner.x
+        || col >= inner.x + inner.width
+        || row < inner.y
+        || row >= inner.y + inner.height
+    {
+        return None;
+    }
+    let (items, current_selected) = match &app.screen {
+        Screen::Catalog(s) => (&s.items, s.selected),
+        Screen::Schema(s) => (&s.items, s.selected),
+        Screen::Table(s) => (&s.items, s.selected),
+        _ => return None,
+    };
+    let filtered: Vec<(usize, &String)> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| {
+            app.search_query.is_empty()
+                || name
+                    .to_lowercase()
+                    .contains(&app.search_query.to_lowercase())
+        })
+        .collect();
+    if filtered.is_empty() {
+        return None;
+    }
+    let clamped_selected = current_selected.min(filtered.len().saturating_sub(1));
+    let offset = if clamped_selected >= inner.height as usize {
+        clamped_selected + 1 - inner.height as usize
+    } else {
+        0
+    };
+    let display_idx = offset + (row - inner.y) as usize;
+    if display_idx < filtered.len() {
+        Some(filtered[display_idx].0)
+    } else {
+        None
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn drilldown_list_inner_rect(
+    actions_panel_pct: u16,
+    query_buffer_len: usize,
+    query_active: bool,
+    dd: &DrillDownState,
+    has_results: bool,
+    term_width: u16,
+    term_height: u16,
+) -> Option<Rect> {
+    if has_results {
+        return None;
+    }
+    let bottom_y = term_height.saturating_sub(7);
+    let menu_pct = actions_panel_pct.clamp(10, 60);
+    let menu_width = ((term_width as u32 * menu_pct as u32) / 100) as u16;
+    let preview_x = menu_width;
+    let preview_width = term_width.saturating_sub(menu_width);
+    let inner_w = preview_width.saturating_sub(2).max(1) as usize;
+
+    let query_height = if query_active {
+        let total_chars = 7 + query_buffer_len;
+        let lines = total_chars.div_ceil(inner_w);
+        (lines as u16 + 2).clamp(3, 7)
+    } else {
+        3
+    };
+
+    let preview_pane_y = query_height + 3;
+    if bottom_y <= preview_pane_y + 2 {
+        return None;
+    }
+    let preview_pane_height = bottom_y - preview_pane_y;
+
+    let inner_x = preview_x + 1;
+    let inner_w_area = preview_width.saturating_sub(2);
+    let inner_y = preview_pane_y + 1;
+    let inner_h = preview_pane_height.saturating_sub(2);
+
+    let (content_y, content_h) = if inner_h >= 4 {
+        (inner_y + 1, inner_h.saturating_sub(1))
+    } else {
+        (inner_y, inner_h)
+    };
+
+    let (list_y, list_h) = if dd.truncated && content_h > 1 {
+        (content_y + 1, content_h.saturating_sub(1))
+    } else {
+        (content_y, content_h)
+    };
+
+    Some(Rect {
+        x: inner_x,
+        y: list_y,
+        width: inner_w_area,
+        height: list_h,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn drilldown_hit_test(
+    actions_panel_pct: u16,
+    query_buffer_len: usize,
+    query_active: bool,
+    dd: &DrillDownState,
+    has_results: bool,
+    term_width: u16,
+    term_height: u16,
+    col: u16,
+    row: u16,
+) -> Option<usize> {
+    let inner = drilldown_list_inner_rect(
+        actions_panel_pct,
+        query_buffer_len,
+        query_active,
+        dd,
+        has_results,
+        term_width,
+        term_height,
+    )?;
+    if col < inner.x
+        || col >= inner.x + inner.width
+        || row < inner.y
+        || row >= inner.y + inner.height
+    {
+        return None;
+    }
+    let depth = dd.depth();
+    let values = dd.levels_cache.get(depth)?;
+    if values.is_empty() {
+        return None;
+    }
+    let clamped_selected = dd.selected.min(values.len().saturating_sub(1));
+    let offset = if clamped_selected >= inner.height as usize {
+        clamped_selected + 1 - inner.height as usize
+    } else {
+        0
+    };
+    let display_idx = offset + (row - inner.y) as usize;
+    if display_idx < values.len() {
+        Some(display_idx)
+    } else {
+        None
+    }
+}
+
 pub fn results_table_inner_rect(app: &App, term_width: u16, term_height: u16) -> Option<Rect> {
     let bottom_y = term_height.saturating_sub(7);
     if bottom_y == 0 {
@@ -575,11 +785,7 @@ pub fn results_table_inner_rect(app: &App, term_width: u16, term_height: u16) ->
     };
     a.results.as_ref()?;
 
-    let menu_pct = if app.main_panel_pct > 30 {
-        15
-    } else {
-        app.main_panel_pct.clamp(8, 30)
-    };
+    let menu_pct = app.actions_panel_pct.clamp(10, 60);
     let border_x = ((term_width as u32 * menu_pct as u32) / 100) as u16;
     let preview_width = term_width.saturating_sub(border_x);
     let inner_w = preview_width.saturating_sub(2).max(1) as usize;
@@ -647,10 +853,11 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
 
     if !is_in_table {
         // Phase 1 screens: Catalog, Schema, Table
-        let list_pct = if app.main_panel_pct <= 30 {
-            60
+        let is_table_screen = matches!(app.screen, Screen::Table(_));
+        let list_pct = if is_table_screen {
+            100
         } else {
-            app.main_panel_pct
+            app.main_panel_pct.clamp(20, 80)
         };
         let border_x = ((term_width as u32 * list_pct as u32) / 100) as u16;
 
@@ -708,11 +915,7 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
         }
     } else if let Screen::Actions(state) = &app.screen {
         // Phase 2 screen: Screen::Actions
-        let menu_pct = if app.main_panel_pct > 30 {
-            15
-        } else {
-            app.main_panel_pct.clamp(8, 30)
-        };
+        let menu_pct = app.actions_panel_pct.clamp(10, 60);
         let border_x = ((term_width as u32 * menu_pct as u32) / 100) as u16;
 
         let preview_w = term_width.saturating_sub(border_x);
@@ -1163,6 +1366,7 @@ mod tests {
                 url: "http://localhost:8080".to_string(),
                 user: "admin".to_string(),
                 password: "".to_string(),
+                query_cache_limit: crate::config::DEFAULT_QUERY_CACHE_LIMIT,
             },
             false,
         )
@@ -1606,7 +1810,7 @@ mod tests {
         if let Some(inner) = results_table_inner_rect(&app, term_w, term_h) {
             let scrollbar_row = inner.y + inner.height - 1;
 
-            // 5. Mouse wheel scroll over bottom scrollbar row (without Shift modifier) scrolls horizontally
+            // 5. Mouse wheel scroll over bottom scrollbar row (without Shift modifier) does NOT scroll horizontally
             let wheel_on_scrollbar = MouseEvent {
                 kind: MouseEventKind::ScrollDown,
                 column: inner.x + 5,
@@ -1618,12 +1822,12 @@ mod tests {
                 let res = a.results.as_ref().unwrap();
                 assert_eq!(
                     res.scroll_h.get(),
-                    1,
-                    "Wheel over scrollbar row must scroll right"
+                    0,
+                    "Wheel without Shift must not scroll horizontally"
                 );
             }
 
-            // 6. Mouse wheel scroll over header row (without Shift modifier) scrolls horizontally
+            // 6. Mouse wheel scroll over header row (without Shift modifier) does NOT scroll horizontally
             let wheel_on_header = MouseEvent {
                 kind: MouseEventKind::ScrollDown,
                 column: inner.x + 5,
@@ -1635,9 +1839,22 @@ mod tests {
                 let res = a.results.as_ref().unwrap();
                 assert_eq!(
                     res.scroll_h.get(),
-                    2,
-                    "Wheel over header row must scroll right"
+                    0,
+                    "Wheel without Shift must not scroll horizontally"
                 );
+            }
+
+            // 6b. Mouse wheel scroll with Shift modifier DOES scroll horizontally
+            let shift_wheel = MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: inner.x + 5,
+                row: inner.y,
+                modifiers: KeyModifiers::SHIFT,
+            };
+            handle_mouse_sync(&mut app, shift_wheel);
+            if let Screen::Actions(a) = &app.screen {
+                let res = a.results.as_ref().unwrap();
+                assert_eq!(res.scroll_h.get(), 1, "Shift+Wheel must scroll right");
             }
 
             // 7. Clicking right arrow ► on horizontal scrollbar
@@ -1651,7 +1868,7 @@ mod tests {
             assert!(app.is_dragging_h_scrollbar);
             if let Screen::Actions(a) = &app.screen {
                 let res = a.results.as_ref().unwrap();
-                assert_eq!(res.scroll_h.get(), 3, "Clicking ► must advance scroll_h");
+                assert_eq!(res.scroll_h.get(), 2, "Clicking ► must advance scroll_h");
             }
 
             // 8. Clicking left arrow ◄ on horizontal scrollbar
@@ -1872,5 +2089,85 @@ mod tests {
         handle_mouse_sync(&mut app, right_click);
         let toast = app.copied_toast.as_ref().unwrap().0.clone();
         assert!(toast.contains("cell block (CSV)"));
+    }
+
+    #[test]
+    fn test_mouse_click_to_enter_in_phase1() {
+        let mut app = sample_app();
+        app.screen = Screen::Catalog(CatalogState {
+            items: vec!["hive".to_string(), "iceberg".to_string()],
+            selected: 0,
+        });
+        let (term_w, term_h) = (100, 30);
+        let inner = phase1_list_inner_rect(&app, term_w, term_h).expect("inner rect");
+
+        // 1. Mouse Down on item 1 ("iceberg") updates selected cursor
+        let down_evt = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: inner.x + 2,
+            row: inner.y + 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, down_evt);
+        assert_eq!(get_selected(&app.screen), Some(1));
+
+        // 2. Mouse Up on item 1 enters / triggers navigation
+        let up_evt = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: inner.x + 2,
+            row: inner.y + 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        let cmd = handle_mouse_sync(&mut app, up_evt);
+        assert!(matches!(cmd, Some(Command::FetchSchemas { catalog }) if catalog == "iceberg"));
+    }
+
+    #[test]
+    fn test_mouse_resizer_drag_only() {
+        let mut app = sample_app();
+        app.screen = Screen::Actions(ActionState {
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            selected: 0,
+            ..Default::default()
+        });
+        app.actions_panel_pct = 18;
+        let (term_w, _term_h) = crossterm::terminal::size().unwrap_or((80, 24));
+        let border_x = ((term_w as u32 * 18) / 100) as u16;
+
+        // 1. Mouse Down on border does NOT change percentage (no resize on click)
+        let down_border = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: border_x,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, down_border);
+        assert!(app.is_dragging_resizer);
+        assert_eq!(app.actions_panel_pct, 18, "No resize on Down");
+
+        // 2. Mouse Up on border leaves percentage unchanged
+        let up_border = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: border_x,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, up_border);
+        assert!(!app.is_dragging_resizer);
+        assert_eq!(app.actions_panel_pct, 18, "No resize on simple Click");
+
+        // 3. Mouse Drag on border smoothly resizes actions_panel_pct
+        handle_mouse_sync(&mut app, down_border);
+        let drag_col = ((term_w as u32 * 35) / 100) as u16;
+        let drag_border = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: drag_col,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse_sync(&mut app, drag_border);
+        assert_eq!(app.actions_panel_pct, 35, "Drag must resize pane");
     }
 }
