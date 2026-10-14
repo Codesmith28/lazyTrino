@@ -126,6 +126,12 @@ pub enum Command {
         filters: Vec<(String, String)>,
         column: String,
     },
+    FetchPartitionCount {
+        catalog: String,
+        schema: String,
+        table: String,
+        filters: Vec<(String, String)>,
+    },
 }
 
 #[derive(Debug)]

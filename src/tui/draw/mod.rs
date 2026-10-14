@@ -74,12 +74,16 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
                 3
             };
 
-            let left_chunks =
-                Layout::vertical([Constraint::Length(search_height), Constraint::Min(0)])
-                    .split(main_chunks[0]);
+            let left_chunks = Layout::vertical([
+                Constraint::Length(search_height),
+                Constraint::Length(3),
+                Constraint::Min(0),
+            ])
+            .split(main_chunks[0]);
 
             render_search_bar(frame, left_chunks[0], app);
-            left_chunks[1]
+            render_phase1_count_box(frame, left_chunks[1], effective_screen, &app.search_query);
+            left_chunks[2]
         };
 
         let main_is_active = true;
@@ -179,12 +183,16 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
 
                 let preview_chunks = Layout::vertical([
                     Constraint::Length(query_height),
+                    Constraint::Length(3),
                     Constraint::Min(0),
                 ])
                 .split(preview_column);
 
                 render_query_bar(frame, preview_chunks[0], app);
-                let preview_pane_area = preview_chunks[1];
+                if let Screen::Actions(state) = effective_screen {
+                    render_actions_count_box(frame, preview_chunks[1], app, state);
+                }
+                let preview_pane_area = preview_chunks[2];
 
                 let menu_is_active = app.active_panel == ActivePanel::MenuPane;
                 let preview_is_active = app.active_panel == ActivePanel::MainViewer;
@@ -689,6 +697,81 @@ pub mod help_modal_overlay_regression {
         assert!(found_query, "query buffer should remain visible in query bar behind help modal");
         assert!(found_table_content, "table content should remain visible behind help modal");
         assert!(found_help_modal, "help modal should render floating on top");
+    }
+}
+
+#[cfg(test)]
+pub mod count_box_layout_regression {
+    use super::*;
+    use crate::app::{ActionState, App, ResultsState};
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn count_box_renders_between_query_bar_and_table_results() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".into(),
+            schema: "analytics".into(),
+            table: "customers".into(),
+            selected: 0,
+            query_buffer: "SELECT id, name FROM customers".into(),
+            query_cursor: 30,
+            results: Some(ResultsState {
+                query_buffer: "SELECT id, name FROM customers".into(),
+                query_cursor: 30,
+                columns: vec!["id".into(), "name".into()],
+                rows: vec![vec!["1".into(), "Alice".into()]],
+                is_paginated: true,
+                total_count: Some(25000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        app.main_panel_pct = 15;
+
+        let backend = TestBackend::new(140, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let mut query_bar_row = None;
+        let mut count_box_row = None;
+        let mut table_results_row = None;
+
+        for y in 0..40 {
+            let row_str: String = (22..140).map(|x| buf.cell((x, y)).unwrap().symbol()).collect();
+            if row_str.contains("Table Query Bar") && query_bar_row.is_none() {
+                query_bar_row = Some(y);
+            }
+            if row_str.contains("Dataset Records") && count_box_row.is_none() {
+                count_box_row = Some(y);
+            }
+            if (row_str.contains("Query Results") || row_str.contains("Infinite Scroll"))
+                && table_results_row.is_none()
+            {
+                table_results_row = Some(y);
+            }
+        }
+
+        let qy = query_bar_row.expect("query bar should be rendered");
+        let cy = count_box_row.expect("count box should be rendered");
+        let ty = table_results_row.expect("table results should be rendered");
+
+        assert!(
+            qy < cy,
+            "query bar (y={qy}) should be above count box (y={cy})"
+        );
+        assert!(
+            cy < ty,
+            "count box (y={cy}) should be above table results (y={ty})"
+        );
+
+        // Verify content inside count box line (cy + 1)
+        let count_line: String = (0..140).map(|x| buf.cell((x, cy + 1)).unwrap().symbol()).collect();
+        assert!(
+            count_line.contains("1 rows loaded of 25,000 total"),
+            "count line must contain formatted numbers: {count_line}"
+        );
     }
 }
 

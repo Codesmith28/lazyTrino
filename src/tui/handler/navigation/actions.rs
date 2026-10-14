@@ -280,13 +280,13 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                     dd.selected = (dd.selected + 1).min(items.len() - 1);
                                 }
                             }
-                            None
+                            maybe_fetch_selected_partition_count(s)
                         }
                         KeyCode::Char('k') | KeyCode::Up => {
                             if let Some(dd) = s.drilldown.as_mut() {
                                 dd.selected = dd.selected.saturating_sub(1);
                             }
-                            None
+                            maybe_fetch_selected_partition_count(s)
                         }
                         KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char('f')
                             if code == KeyCode::PageDown || is_ctrl =>
@@ -300,7 +300,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                         (dd.selected + 15).min(items.len().saturating_sub(1));
                                 }
                             }
-                            None
+                            maybe_fetch_selected_partition_count(s)
                         }
                         KeyCode::PageUp | KeyCode::Char('u') | KeyCode::Char('b')
                             if code == KeyCode::PageUp || is_ctrl =>
@@ -308,13 +308,13 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             if let Some(dd) = s.drilldown.as_mut() {
                                 dd.selected = dd.selected.saturating_sub(15);
                             }
-                            None
+                            maybe_fetch_selected_partition_count(s)
                         }
                         KeyCode::Char('g') | KeyCode::Home | KeyCode::Char('0') => {
                             if let Some(dd) = s.drilldown.as_mut() {
                                 dd.selected = 0;
                             }
-                            None
+                            maybe_fetch_selected_partition_count(s)
                         }
                         KeyCode::Char('G') | KeyCode::End | KeyCode::Char('$') => {
                             if let Some(dd) = s.drilldown.as_mut() {
@@ -323,7 +323,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                     dd.selected = items.len().saturating_sub(1);
                                 }
                             }
-                            None
+                            maybe_fetch_selected_partition_count(s)
                         }
                         KeyCode::Char('>') | KeyCode::Enter | KeyCode::Right => {
                             drilldown_drill_into_selected(s, &safe_columns)
@@ -558,6 +558,25 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                 }
             }
         }
+    } else {
+        None
+    }
+}
+
+pub fn maybe_fetch_selected_partition_count(s: &ActionState) -> Option<Command> {
+    let dd = s.drilldown.as_ref()?;
+    let col = dd.next_column()?;
+    let items = dd.levels_cache.get(dd.depth())?;
+    let val = items.get(dd.selected)?;
+    let mut f = dd.path.clone();
+    f.push((col.to_string(), val.clone()));
+    if !dd.counts_cache.contains_key(&f) {
+        Some(Command::FetchPartitionCount {
+            catalog: s.catalog.clone(),
+            schema: s.schema.clone(),
+            table: s.table.clone(),
+            filters: f,
+        })
     } else {
         None
     }

@@ -185,6 +185,26 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                             res.last_selected_col.set(col_idx);
                             app.clear_mouse_selection();
                         }
+                    } else if let Screen::Actions(ref mut a) = app.screen
+                        && let Some(ref mut dd) = a.drilldown
+                        && a.results.is_none()
+                    {
+                        let preview_inner_y = 3 + 3 + 1;
+                        let list_start_y = if dd.truncated {
+                            preview_inner_y + 1
+                        } else {
+                            preview_inner_y
+                        };
+                        if mouse.row >= list_start_y {
+                            let idx = (mouse.row - list_start_y) as usize;
+                            let depth = dd.depth();
+                            if let Some(items) = dd.levels_cache.get(depth)
+                                && idx < items.len()
+                            {
+                                dd.selected = idx;
+                                return crate::tui::handler::navigation::actions::maybe_fetch_selected_partition_count(a);
+                            }
+                        }
                     }
                 }
             }
@@ -333,6 +353,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     {
                         dd.selected = (dd.selected + 3).min(items.len().saturating_sub(1));
                     }
+                    return crate::tui::handler::navigation::actions::maybe_fetch_selected_partition_count(a);
                 } else if let Screen::Actions(ref mut a) = app.screen
                     && let Some(ref mut res) = a.results
                 {
@@ -411,6 +432,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     && a.results.is_none()
                 {
                     dd.selected = dd.selected.saturating_sub(3);
+                    return crate::tui::handler::navigation::actions::maybe_fetch_selected_partition_count(a);
                 } else if let Screen::Actions(ref mut a) = app.screen
                     && let Some(ref mut res) = a.results
                 {
@@ -493,18 +515,19 @@ pub fn results_table_inner_rect(
         3
     };
 
-    if query_height >= bottom_y {
+    let top_offset = query_height + 3;
+    if top_offset >= bottom_y {
         return None;
     }
 
-    let preview_height = bottom_y.saturating_sub(query_height);
+    let preview_height = bottom_y.saturating_sub(top_offset);
     if preview_width < 2 || preview_height < 2 {
         return None;
     }
 
     Some(Rect {
         x: border_x + 1,
-        y: query_height + 1,
+        y: top_offset + 1,
         width: preview_width.saturating_sub(2),
         height: preview_height.saturating_sub(2),
     })
@@ -561,7 +584,7 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
         };
 
         if min_col < border_x {
-            let inner_y = search_height + 1;
+            let inner_y = search_height + 3 + 1;
             match &app.screen {
                 Screen::Catalog(s) => {
                     let mut lines = Vec::new();
@@ -645,7 +668,7 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
         }
 
         // Right Main Viewer Pane
-        let preview_inner_y = query_height + 1;
+        let preview_inner_y = query_height + 3 + 1;
 
         if matches!(
             ACTIONS.get(state.selected).map(|(_, _, a)| a),
@@ -983,7 +1006,7 @@ mod tests {
             selected: 0,
         });
 
-        let text = extract_selected_text(&app, (5, 4), (5, 5));
+        let text = extract_selected_text(&app, (5, 7), (5, 8));
         assert_eq!(text, "iceberg\ntpch");
     }
 
@@ -1047,8 +1070,8 @@ mod tests {
         let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0;
         let menu_x = term_width / 2; // Right side
 
-        // Header line (preview_inner_y = 4) and first row (preview_inner_y + 2 = 6)
-        let text = extract_selected_text(&app, (menu_x, 4), (menu_x, 6));
+        // Header line (inner.y = 7) and first row (inner.y + 2 = 9)
+        let text = extract_selected_text(&app, (menu_x, 7), (menu_x, 9));
         assert_eq!(text, "id\tstatus\n1\tOK");
     }
 
@@ -1078,7 +1101,7 @@ mod tests {
         let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0;
         let right_x = term_width / 2;
 
-        let text = extract_selected_text(&app, (right_x, 4), (right_x, 6));
+        let text = extract_selected_text(&app, (right_x, 7), (right_x, 9));
         assert_eq!(
             text,
             " s3a://local-minio-bucket/lakehouse/\n ├── date=2024-01-01/\n └── date=2024-01-02/"

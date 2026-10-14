@@ -474,6 +474,29 @@ pub fn dispatch_command(
                 }
             }
         }
+        Command::FetchPartitionCount {
+            catalog,
+            schema,
+            table,
+            filters,
+        } => {
+            let count_query = queries::filtered_count(&catalog, &schema, &table, &filters);
+            let count_log_id = app.add_query_log(count_query.clone());
+            if let Some(client) = app.trino_client.clone() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let res = client.execute(&count_query).await;
+                    let _ = tx.send(AsyncResult::FetchPartitionCount {
+                        log_id: count_log_id,
+                        catalog,
+                        schema,
+                        table,
+                        filters,
+                        result: res,
+                    });
+                });
+            }
+        }
     }
 }
 

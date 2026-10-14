@@ -172,6 +172,10 @@ pub fn render(
         return;
     }
 
+    let max_val_len = values.iter().map(|v| v.len()).max().unwrap_or(10);
+    let fixed_gap = 4;
+    let name_col_width = max_val_len + fixed_gap;
+
     let items: Vec<ListItem> = values
         .iter()
         .enumerate()
@@ -182,14 +186,49 @@ pub fn render(
                 is_active && app.is_area_mouse_selected(items_area.x, items_area.width, item_y);
             let is_selected = i == dd.selected;
             let prefix = if is_selected { "▸ " } else { "  " };
-            let text = format!("{prefix}{val}");
-            let line = if is_mouse_sel {
-                Line::styled(text, theme::selection_style())
+
+            let mut item_filter = dd.path.clone();
+            if let Some(next_col) = dd.next_column() {
+                item_filter.push((next_col.to_string(), val.clone()));
+            }
+
+            let count_text = if let Some(cnt) = dd.counts_cache.get(&item_filter) {
+                format!("{} records", crate::app::format_count(*cnt))
             } else if is_selected {
-                Line::styled(text, theme::selection_style_for(is_active))
+                "counting records...".to_string()
             } else {
-                Line::styled(text, theme::text_style())
+                String::new()
             };
+
+            let name_text = format!("{prefix}{val}");
+            let pad_len = (name_col_width + 2).saturating_sub(name_text.len());
+            let padding = " ".repeat(pad_len);
+
+            let name_style = if is_mouse_sel {
+                theme::selection_style()
+            } else if is_selected {
+                theme::selection_style_for(is_active)
+            } else {
+                theme::text_style()
+            };
+
+            let count_style = if is_mouse_sel || is_selected {
+                theme::style(ratatui::style::Color::Cyan)
+                    .add_modifier(ratatui::style::Modifier::ITALIC)
+            } else {
+                theme::muted_style().add_modifier(ratatui::style::Modifier::ITALIC)
+            };
+
+            let line = if count_text.is_empty() {
+                Line::from(vec![Span::styled(name_text, name_style)])
+            } else {
+                Line::from(vec![
+                    Span::styled(name_text, name_style),
+                    Span::raw(padding),
+                    Span::styled(count_text, count_style),
+                ])
+            };
+
             ListItem::new(line)
         })
         .collect();
