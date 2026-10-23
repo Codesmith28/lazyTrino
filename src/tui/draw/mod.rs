@@ -878,6 +878,77 @@ mod selection_overlay_tests {
     use crate::app::{ActionState, DrillDownState};
     use ratatui::{Terminal, backend::TestBackend, style::Modifier};
 
+    /// Regression: with results on screen, a drag inside the Dataset Records
+    /// box was treated as a grid selection (its extractor always returned the
+    /// header), so nothing was painted and the wrong text was copied.
+    #[test]
+    fn dataset_records_selection_is_visible_and_copies_its_text() {
+        let res = crate::app::ResultsState {
+            columns: vec!["id".into(), "status".into()],
+            rows: vec![
+                vec!["1".into(), "OK".into()],
+                vec!["2".into(), "BAD".into()],
+            ],
+            catalog: "c".into(),
+            schema: "s".into(),
+            table: "t".into(),
+            ..Default::default()
+        };
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.active_panel = ActivePanel::MainViewer;
+        app.screen = Screen::Actions(ActionState {
+            catalog: "c".into(),
+            schema: "s".into(),
+            table: "t".into(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        });
+
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| ui(f, &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let row_text = |y: u16| -> String {
+            (0..80)
+                .map(|x| buf.cell((x, y)).unwrap().symbol())
+                .collect()
+        };
+        let y = (0..24u16)
+            .find(|&y| row_text(y).contains("Dataset Records"))
+            .expect("Dataset Records title")
+            + 1;
+        // columns, not bytes: the border glyphs are multi-byte
+        let text = row_text(y);
+        let x = text
+            .find("rows loaded")
+            .map(|b| text[..b].chars().count())
+            .expect("count text") as u16;
+
+        app.last_frame = buf.clone(); // what run_loop stores after each draw
+        app.mouse_selection_anchor = Some((x, y));
+        app.mouse_selection_current = Some((x + 10, y));
+        app.mouse_selection_committed = true;
+        assert!(crate::tui::handler::selection_uses_screen_text(
+            &app,
+            (x, y),
+            (x + 10, y)
+        ));
+        let copied = crate::tui::handler::extract_selected_text(&app, (x, y), (x + 10, y));
+        assert!(copied.starts_with("rows loaded"), "{copied:?}");
+
+        term.draw(|f| ui(f, &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        for dx in 0..=10 {
+            assert!(
+                buf.cell((x + dx, y))
+                    .unwrap()
+                    .modifier
+                    .contains(Modifier::REVERSED),
+                "cell +{dx} of the Dataset Records selection is not highlighted"
+            );
+        }
+    }
+
     #[test]
     fn selected_screen_text_without_a_widget_highlight_is_painted_in_terminal_colors() {
         let dd = DrillDownState {

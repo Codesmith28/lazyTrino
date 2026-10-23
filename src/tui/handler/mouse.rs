@@ -1020,7 +1020,11 @@ fn extract_structured_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -
         } else if let Some(ref res) = state.results {
             // Results table view
             let mut lines = Vec::new();
-            if let Some(inner) = results_table_inner_rect(app, term_width, term_height) {
+            if let Some(inner) = results_table_inner_rect(app, term_width, term_height)
+                // A drag that stays above the table (query bar, Dataset
+                // Records box) is plain screen text, not a grid selection.
+                && end_row >= inner.y
+            {
                 let available_width = inner.width.saturating_sub(4) as usize;
                 let (visible_cols, col_width_sizes, _) =
                     crate::tui::screens::results::visible_columns_layout(res, available_width);
@@ -1480,6 +1484,18 @@ mod tests {
         // Header line (inner.y = 7) and first row (inner.y + 2 = 9)
         let text = extract_selected_text(&app, (menu_x, 7), (menu_x, 9));
         assert_eq!(text, "id,status\n1,OK");
+
+        // A drag inside the Dataset Records box (above the table) is not a
+        // grid selection: it must be painted and copied as plain screen text.
+        assert!(selection_uses_screen_text(
+            &app,
+            (menu_x, 4),
+            (menu_x + 8, 4)
+        ));
+        assert_eq!(
+            extract_structured_text(&app, (menu_x, 4), (menu_x + 8, 4)),
+            ""
+        );
 
         // Dragging over data rows only still copies the header
         let text = extract_selected_text(&app, (menu_x, 9), (menu_x, 10));
