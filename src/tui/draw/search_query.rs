@@ -218,31 +218,13 @@ pub fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         let chunks = chunk_query_buffer(buf, line0_cap, inner_w);
         let mut lines = Vec::new();
-        for (line_idx, (start, end, chunk_str)) in chunks.iter().enumerate() {
+        for (line_idx, (start, end, _)) in chunks.iter().enumerate() {
             let mut spans = Vec::new();
             if line_idx == 0 {
                 spans.push(Span::styled(" SQL > ", theme::warning_style()));
             }
-            if is_editing && let Some((sel_start, sel_end)) = sel_range {
-                let s_start = sel_start.clamp(*start, *end);
-                let s_end = sel_end.clamp(*start, *end);
-                if s_start < s_end {
-                    let before = &buf[*start..s_start];
-                    let selected = &buf[s_start..s_end];
-                    let after = &buf[s_end..*end];
-                    if !before.is_empty() {
-                        spans.push(Span::styled(before, theme::bold_text_style()));
-                    }
-                    spans.push(Span::styled(selected, theme::query_selection_style()));
-                    if !after.is_empty() {
-                        spans.push(Span::styled(after, theme::bold_text_style()));
-                    }
-                } else {
-                    spans.push(Span::styled(*chunk_str, theme::bold_text_style()));
-                }
-            } else {
-                spans.push(Span::styled(*chunk_str, theme::bold_text_style()));
-            }
+            let selection = if is_editing { sel_range } else { None };
+            spans.extend(super::sql_highlight::spans(buf, *start, *end, selection));
             lines.push(Line::from(spans));
         }
         let (cline, ccol) = cursor_line_and_col(buf, cursor, line0_cap, inner_w, 7);

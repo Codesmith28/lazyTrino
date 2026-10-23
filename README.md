@@ -127,6 +127,7 @@ lazyTrino --profile prod
 - 👁️ **Column Visibility Manager (`C`)**: Hide or display specific columns in wide tables.
 - ✍️ **Interactive SQL Query Bar (`q` / `:`)**: Buffer editing with text selection, clipboard support, and instant query execution.
 - 🖱️ **Mouse & Resizable Split**: Click-to-select, wheel scrolling, and draggable vertical pane divider.
+- 🎨 **Terminal-Native Colors**: Uses only your terminal's own colors (default text plus its 16 ANSI colors), so it follows your light or dark profile. Catalogs, schemas and tables get their own colors; grid values are tinted by type (numbers, booleans, dates, NULL); the SQL bar is syntax-highlighted; footer keys stand out.
 - 📊 **Audit Logs & Status Bar**: Real-time query execution monitoring, latency (ms), row counts, and traceback errors.
 
 ---

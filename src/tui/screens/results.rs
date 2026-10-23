@@ -779,7 +779,6 @@ pub fn render(
         return;
     }
 
-    let cell_style = theme::text_style();
     let header_style = theme::warning_bold_style();
 
     let available_width = inner.width.saturating_sub(4) as usize;
@@ -966,7 +965,7 @@ pub fn render(
                         theme::muted_style()
                     }
                 } else {
-                    cell_style
+                    theme::value_style(display_val)
                 };
 
                 let cell_content = if is_highlighted {

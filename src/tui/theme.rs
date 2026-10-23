@@ -14,11 +14,14 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
-/// The single palette lazyTrino draws with. It is readable on light *and*
-/// dark terminals: body text uses the terminal's own default foreground,
-/// accents are mid-tone fixed colors from the 256-color cube (terminal
-/// profiles do not remap those, so their contrast is predictable), and every
-/// highlight / bar sets an explicit foreground *and* background.
+/// The single palette lazyTrino draws with. Everything is expressed in the
+/// terminal's own colors — the default foreground/background plus the 16 ANSI
+/// colors — so the terminal profile decides the actual shades: bright ones in
+/// a dark profile, dark ones in a light profile. Nothing is hard-coded RGB or
+/// from the 256-color cube.
+///
+/// Dark ANSI blue is unreadable as text on most dark profiles, so blue is used
+/// only as a *background* (cursor row), never as a foreground.
 struct Palette {
     text: Color,
     secondary: Color,
@@ -31,38 +34,48 @@ struct Palette {
     active_border: Color,
     inactive_border: Color,
     accent_border: Color,
-    /// Foreground / background pairs: always set together so a highlight
-    /// never depends on the terminal's own background.
-    on_dark_fg: Color,
+    /// What kind of thing a name is, so catalogs, schemas and tables read
+    /// differently at a glance (lists, borders, counts, breadcrumbs).
+    catalog: Color,
+    schema: Color,
+    table: Color,
+    /// Value types in the results grid.
+    number: Color,
+    boolean: Color,
+    temporal: Color,
+    /// Foreground / background pairs for bars and the keyboard cursor.
+    on_accent_fg: Color,
     selection_bg: Color,
-    inactive_selection_bg: Color,
+    inactive_selection_fg: Color,
     bar_bg: Color,
-    toast_bg: Color,
-    toast_fg: Color,
-    toast_error_fg: Color,
+    toast_ok: Color,
+    toast_error: Color,
 }
 
-// Foregrounds sit between ~3.3:1 and ~6.3:1 against both pure white and
-// pure black (checked by `palette_palette_is_legible_on_light_and_dark`).
 const PALETTE: Palette = Palette {
     text: Color::Reset,
     secondary: Color::Reset,
-    muted: Color::Indexed(243),     // #767676
-    highlight: Color::Indexed(136), // #af8700 golden
-    info: Color::Indexed(31),       // #0087af teal
-    header: Color::Indexed(28),     // #008700 green
-    error: Color::Indexed(196),     // #ff0000
-    detail: Color::Indexed(133),    // #af5faf
-    active_border: Color::Indexed(136),
-    inactive_border: Color::Indexed(243),
-    accent_border: Color::Indexed(31),
-    on_dark_fg: Color::Indexed(231),            // #ffffff
-    selection_bg: Color::Indexed(24),           // #005f87
-    inactive_selection_bg: Color::Indexed(240), // #585858
-    bar_bg: Color::Indexed(240),
-    toast_bg: Color::Indexed(16),        // #000000
-    toast_fg: Color::Indexed(41),        // #00d75f
-    toast_error_fg: Color::Indexed(203), // #ff5f5f
+    muted: Color::DarkGray,
+    highlight: Color::Yellow,
+    info: Color::Cyan,
+    header: Color::Green,
+    error: Color::Red,
+    detail: Color::Magenta,
+    active_border: Color::Yellow,
+    inactive_border: Color::DarkGray,
+    accent_border: Color::Cyan,
+    catalog: Color::Magenta,
+    schema: Color::Cyan,
+    table: Color::Green,
+    number: Color::Cyan,
+    boolean: Color::Magenta,
+    temporal: Color::Green,
+    on_accent_fg: Color::White,
+    selection_bg: Color::Blue,
+    inactive_selection_fg: Color::Cyan,
+    bar_bg: Color::DarkGray,
+    toast_ok: Color::Green,
+    toast_error: Color::LightRed,
 };
 
 fn pal() -> &'static Palette {
@@ -101,6 +114,37 @@ pub fn border_color(is_active: bool) -> Color {
     }
 }
 
+/// Border of a catalog / schema / table list pane: the entity's color when
+/// focused, muted otherwise.
+pub fn entity_border_style(entity: Entity, is_active: bool) -> Style {
+    if is_active {
+        style(entity.color())
+    } else {
+        style(pal().inactive_border)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entity {
+    Catalog,
+    Schema,
+    Table,
+}
+
+impl Entity {
+    pub fn color(self) -> Color {
+        match self {
+            Entity::Catalog => pal().catalog,
+            Entity::Schema => pal().schema,
+            Entity::Table => pal().table,
+        }
+    }
+
+    pub fn style(self) -> Style {
+        style(self.color())
+    }
+}
+
 pub fn border_style(is_active: bool) -> Style {
     style(border_color(is_active))
 }
@@ -119,7 +163,7 @@ pub fn query_bar_border_color(is_editing: bool, is_table_view: bool) -> Color {
 /// a deep background so it reads the same on any terminal background.
 pub fn selection_style() -> Style {
     Style::default()
-        .fg(pal().on_dark_fg)
+        .fg(pal().on_accent_fg)
         .bg(pal().selection_bg)
         .add_modifier(Modifier::BOLD)
 }
@@ -132,9 +176,7 @@ pub fn selection_style() -> Style {
 /// a "current" selection at once, which reads as the selection persisting/
 /// leaking across panes.
 pub fn inactive_selection_style() -> Style {
-    Style::default()
-        .fg(pal().on_dark_fg)
-        .bg(pal().inactive_selection_bg)
+    bold_style(pal().inactive_selection_fg)
 }
 
 /// Picks the appropriate selection highlight for a row's keyboard-cursor
@@ -184,7 +226,99 @@ pub fn secondary_style() -> Style {
 }
 
 pub fn footer_style() -> Style {
-    Style::default().fg(pal().on_dark_fg).bg(pal().bar_bg)
+    style(pal().text)
+}
+
+/// The key part of a footer / menu hint (`Esc` in `Esc:close`).
+pub fn key_style() -> Style {
+    bold_style(pal().highlight)
+}
+
+pub fn catalog_style() -> Style {
+    style(pal().catalog)
+}
+
+pub fn schema_style() -> Style {
+    style(pal().schema)
+}
+
+pub fn table_style() -> Style {
+    style(pal().table)
+}
+
+pub fn catalog_bold_style() -> Style {
+    bold_style(pal().catalog)
+}
+
+pub fn schema_bold_style() -> Style {
+    bold_style(pal().schema)
+}
+
+pub fn table_bold_style() -> Style {
+    bold_style(pal().table)
+}
+
+pub fn sql_keyword_style() -> Style {
+    bold_style(pal().detail)
+}
+
+pub fn sql_string_style() -> Style {
+    bold_style(pal().header)
+}
+
+pub fn sql_comment_style() -> Style {
+    muted_style().add_modifier(Modifier::ITALIC)
+}
+
+pub fn number_style() -> Style {
+    style(pal().number)
+}
+
+pub fn number_bold_style() -> Style {
+    bold_style(pal().number)
+}
+
+/// Syntax-highlight-style color for a results-grid value, by what it looks like.
+pub fn value_style(value: &str) -> Style {
+    let v = value.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("null") || v.eq_ignore_ascii_case("none") {
+        muted_style().add_modifier(Modifier::ITALIC)
+    } else if v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false") {
+        style(pal().boolean)
+    } else if is_temporal(v) {
+        style(pal().temporal)
+    } else if is_number(v) {
+        style(pal().number)
+    } else {
+        style(pal().text)
+    }
+}
+
+fn is_number(v: &str) -> bool {
+    let digits = v.strip_prefix(['-', '+']).unwrap_or(v);
+    !digits.is_empty()
+        && digits.chars().any(|c| c.is_ascii_digit())
+        && digits
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '_' | 'e' | 'E' | '-' | '+'))
+        && digits.starts_with(|c: char| c.is_ascii_digit() || c == '.')
+}
+
+/// `2026-08-06`, `2026-08-06 12:30:00.123`, `2026-08-06T12:30:00Z`, `12:30:00`.
+fn is_temporal(v: &str) -> bool {
+    let b = v.as_bytes();
+    let date = b.len() >= 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[8..10].iter().all(u8::is_ascii_digit);
+    let time = b.len() >= 8
+        && b[2] == b':'
+        && b[5] == b':'
+        && b[..2].iter().all(u8::is_ascii_digit)
+        && b[3..5].iter().all(u8::is_ascii_digit);
+    date || time
 }
 
 pub fn error_style() -> Style {
@@ -219,22 +353,20 @@ pub fn success_bold_style() -> Style {
     bold_style(pal().header)
 }
 
-/// Solid-background style for toast/notification popups. Unlike
-/// `success_bold_style`, this sets an explicit background so the toast box
-/// fully opaquely overwrites whatever was rendered underneath it, with no
-/// gaps of terminal-default background showing through.
+/// Accent (border / title) of a success toast. The toast itself is a cleared
+/// card: accent border and title, message in the terminal's own text color.
 pub fn toast_style() -> Style {
-    Style::default()
-        .fg(pal().toast_fg)
-        .bg(pal().toast_bg)
-        .add_modifier(Modifier::BOLD)
+    bold_style(pal().toast_ok)
 }
 
 pub fn error_toast_style() -> Style {
-    Style::default()
-        .fg(pal().toast_error_fg)
-        .bg(pal().toast_bg)
-        .add_modifier(Modifier::BOLD)
+    bold_style(pal().toast_error)
+}
+
+/// Message text inside a toast: the terminal's own foreground, so it reads
+/// on any profile while the border and title carry the accent color.
+pub fn toast_text_style() -> Style {
+    text_style()
 }
 
 pub fn detail_style() -> Style {
@@ -243,132 +375,158 @@ pub fn detail_style() -> Style {
 
 pub fn input_field_style(is_focused: bool) -> Style {
     if is_focused {
-        Style::default().fg(pal().on_dark_fg).bg(pal().bar_bg)
+        Style::default()
+            .fg(pal().on_accent_fg)
+            .bg(pal().bar_bg)
+            .add_modifier(Modifier::BOLD)
     } else {
         secondary_style()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// xterm 256-color cube / gray ramp (fixed values, never remapped).
-    fn rgb(color: Color) -> (u8, u8, u8) {
-        match color {
-            Color::Indexed(i @ 16..=231) => {
-                let n = i - 16;
-                let lv = [0u8, 95, 135, 175, 215, 255];
-                (
-                    lv[(n / 36) as usize],
-                    lv[((n / 6) % 6) as usize],
-                    lv[(n % 6) as usize],
-                )
-            }
-            Color::Indexed(i @ 232..=255) => {
-                let v = 8 + 10 * (i - 232);
-                (v, v, v)
-            }
-            other => panic!("{other:?} is not a fixed-RGB color"),
-        }
-    }
-
-    fn luminance(c: Color) -> f64 {
-        let f = |v: u8| {
-            let v = f64::from(v) / 255.0;
-            if v <= 0.04045 {
-                v / 12.92
-            } else {
-                ((v + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        let (r, g, b) = rgb(c);
-        0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
-    }
-
-    fn contrast(a: Color, b: Color) -> f64 {
-        let (la, lb) = (luminance(a), luminance(b));
-        (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
-    }
-
-    const WHITE: Color = Color::Indexed(231);
-    const BLACK: Color = Color::Indexed(16);
-
     #[test]
-    fn palette_palette_is_legible_on_light_and_dark() {
+    fn only_terminal_native_colors_are_used() {
+        // Default fg/bg or one of the 16 ANSI colors — never RGB / 256-color
+        // values, which terminal profiles cannot remap.
         let p = &PALETTE;
-        for (name, c) in [
-            ("muted", p.muted),
-            ("highlight", p.highlight),
-            ("info", p.info),
-            ("header", p.header),
-            ("error", p.error),
-            ("detail", p.detail),
-            ("active_border", p.active_border),
-            ("inactive_border", p.inactive_border),
-            ("accent_border", p.accent_border),
+        for c in [
+            p.text,
+            p.secondary,
+            p.muted,
+            p.highlight,
+            p.info,
+            p.header,
+            p.error,
+            p.detail,
+            p.active_border,
+            p.inactive_border,
+            p.accent_border,
+            p.catalog,
+            p.schema,
+            p.table,
+            p.number,
+            p.boolean,
+            p.temporal,
+            p.on_accent_fg,
+            p.selection_bg,
+            p.inactive_selection_fg,
+            p.bar_bg,
+            p.toast_ok,
+            p.toast_error,
         ] {
-            let (on_white, on_black) = (contrast(c, WHITE), contrast(c, BLACK));
             assert!(
-                on_white >= 3.3,
-                "{name} too faint on a light terminal: {on_white:.2}"
-            );
-            assert!(
-                on_black >= 4.4,
-                "{name} too dim on a dark terminal: {on_black:.2}"
+                !matches!(c, Color::Rgb(..) | Color::Indexed(_)),
+                "{c:?} is not a terminal-native color"
             );
         }
     }
 
     #[test]
-    fn palette_text_uses_the_terminal_default_foreground() {
-        // Hard-coded White/Black text is what made light terminals unreadable.
-        assert_eq!(PALETTE.text, Color::Reset);
-        assert_eq!(PALETTE.secondary, Color::Reset);
-    }
-
-    #[test]
-    fn palette_highlights_set_both_colors_with_strong_contrast() {
+    fn ansi_blue_is_never_used_as_text() {
+        // Dark-profile ANSI blue is unreadable on a dark background.
         let p = &PALETTE;
-        for (name, bg) in [
-            ("selection", p.selection_bg),
-            ("inactive selection", p.inactive_selection_bg),
-            ("bars / focused input", p.bar_bg),
-            ("toast", p.toast_bg),
+        for c in [
+            p.muted,
+            p.highlight,
+            p.info,
+            p.header,
+            p.error,
+            p.detail,
+            p.catalog,
+            p.schema,
+            p.table,
+            p.number,
+            p.boolean,
+            p.temporal,
         ] {
-            let fg = if name == "toast" {
-                p.toast_fg
-            } else {
-                p.on_dark_fg
-            };
-            assert!(contrast(fg, bg) >= 4.5, "{name}: {:.2}", contrast(fg, bg));
+            assert_ne!(c, Color::Blue);
         }
-        assert!(contrast(p.toast_error_fg, p.toast_bg) >= 4.5);
-
-        // and the style helpers really use them, never an unset color
-        for style in [
-            selection_style(),
-            inactive_selection_style(),
-            footer_style(),
-        ] {
-            assert!(style.fg.is_some() && style.bg.is_some());
-        }
-        assert!(input_field_style(true).bg.is_some());
     }
 
     #[test]
-    fn keyboard_cursor_never_matches_text_selection() {
+    fn entities_and_value_types_are_told_apart() {
+        assert_ne!(Entity::Catalog.color(), Entity::Schema.color());
+        assert_ne!(Entity::Schema.color(), Entity::Table.color());
+        assert_ne!(Entity::Catalog.color(), Entity::Table.color());
+
+        let text = value_style("hello");
+        let number = value_style("-12,345.6");
+        let boolean = value_style("TRUE");
+        let date = value_style("2026-08-06");
+        let ts = value_style("2026-08-06 12:30:00.123");
+        let null = value_style("NULL");
+        assert_eq!(text.fg, Some(Color::Reset));
+        assert_eq!(number.fg, Some(PALETTE.number));
+        assert_eq!(boolean.fg, Some(PALETTE.boolean));
+        assert_eq!(date.fg, Some(PALETTE.temporal));
+        assert_eq!(ts.fg, Some(PALETTE.temporal));
+        assert_eq!(null.fg, Some(PALETTE.muted));
+        assert!(null.add_modifier.contains(Modifier::ITALIC));
+        let kinds = [text.fg, number.fg, boolean.fg, date.fg, null.fg];
+        for (i, a) in kinds.iter().enumerate() {
+            for b in &kinds[i + 1..] {
+                if a != b {
+                    continue;
+                }
+                // number/boolean/temporal each get their own color
+                assert!(
+                    [number.fg, boolean.fg, date.fg]
+                        .iter()
+                        .filter(|c| *c == a)
+                        .count()
+                        <= 1,
+                    "value kinds share a color"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn values_that_only_look_numeric_stay_plain() {
+        for v in ["abc", "12abc", "-", "e", "1-2-3x", "2026", "0x1F", "v1.2"] {
+            let fg = value_style(v).fg;
+            assert!(
+                fg == Some(Color::Reset) || fg == Some(PALETTE.number) && v == "2026",
+                "{v}: {fg:?}"
+            );
+        }
+        assert_eq!(value_style("2026").fg, Some(PALETTE.number));
+        assert_eq!(value_style("3.14").fg, Some(PALETTE.number));
+        assert_eq!(value_style("1e-9").fg, Some(PALETTE.number));
+    }
+
+    #[test]
+    fn keyboard_cursor_sets_both_colors_and_never_matches_text_selection() {
+        assert!(selection_style().fg.is_some() && selection_style().bg.is_some());
         assert_ne!(selection_style().bg, text_selection_style().bg);
         assert_ne!(selection_style_for(true), selection_style_for(false));
+        assert!(input_field_style(true).bg.is_some());
     }
 
     #[test]
     fn test_text_selection_uses_terminal_colors_via_reverse_video() {
         let style = text_selection_style();
-        // No theme colors: default fg/bg, swapped by the terminal itself.
         assert_eq!(style.fg, Some(Color::Reset));
         assert_eq!(style.bg, Some(Color::Reset));
         assert!(style.add_modifier.contains(Modifier::REVERSED));
         assert_eq!(query_selection_style(), text_selection_style());
+    }
+
+    #[test]
+    fn toasts_accent_the_border_and_keep_the_text_readable() {
+        for (style, accent) in [
+            (toast_style(), PALETTE.toast_ok),
+            (error_toast_style(), PALETTE.toast_error),
+        ] {
+            assert_eq!(style.fg, Some(accent));
+            assert!(style.add_modifier.contains(Modifier::BOLD));
+            assert!(!style.add_modifier.contains(Modifier::REVERSED));
+        }
+        assert_ne!(toast_style().fg, error_toast_style().fg);
+        // message text is the terminal default, never an accent
+        assert_eq!(toast_text_style().fg, Some(Color::Reset));
     }
 }

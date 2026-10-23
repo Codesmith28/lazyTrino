@@ -15,7 +15,7 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
 };
 
@@ -116,11 +116,11 @@ pub fn render_notice_toast(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let max_w = area.width.saturating_sub(2).min(110);
-    let icon = match notice.kind {
-        crate::app::NoticeKind::Success => "✔",
-        crate::app::NoticeKind::Error => "✖",
+    let (icon, label, accent) = match notice.kind {
+        crate::app::NoticeKind::Success => ("✔", "Done", theme::toast_style()),
+        crate::app::NoticeKind::Error => ("✖", "Error", theme::error_toast_style()),
     };
-    let text = format!(" {icon} {} ", sanitize_toast_text(&notice.text));
+    let text = format!(" {} ", sanitize_toast_text(&notice.text));
     let toast_w = (text.chars().count() as u16 + 2).clamp(TOAST_MIN_W, max_w);
     let toast_area = Rect {
         x: area.x + area.width - toast_w - 1,
@@ -128,22 +128,38 @@ pub fn render_notice_toast(frame: &mut Frame, area: Rect, app: &App) {
         width: toast_w,
         height: TOAST_H,
     };
-    let style = match notice.kind {
-        crate::app::NoticeKind::Success => theme::toast_style(),
-        crate::app::NoticeKind::Error => theme::error_toast_style(),
-    };
+    render_toast_card(
+        frame,
+        toast_area,
+        &format!(" {icon} {label} "),
+        accent,
+        &truncate_middle(&text, toast_w.saturating_sub(2) as usize),
+    );
+}
 
-    frame.render_widget(ratatui::widgets::Clear, toast_area);
+/// A toast is a card: accent-colored border and title, message in the
+/// terminal's own text color, on a cleared (opaque) area.
+fn render_toast_card(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    accent: ratatui::style::Style,
+    text: &str,
+) {
+    frame.render_widget(ratatui::widgets::Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .style(style);
-    let inner = block.inner(toast_area);
-    frame.render_widget(block, toast_area);
+        .border_style(accent)
+        .title(Span::styled(title.to_string(), accent));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
     frame.render_widget(
-        Paragraph::new(Line::from(truncate_middle(&text, inner.width as usize)))
-            .style(style)
-            .alignment(Alignment::Center),
+        Paragraph::new(Line::from(Span::styled(
+            text.to_string(),
+            theme::toast_text_style(),
+        )))
+        .alignment(Alignment::Center),
         inner,
     );
 }
@@ -189,6 +205,26 @@ pub fn truncate_hint(hint: &str, width: usize) -> String {
     truncated
 }
 
+/// Colors a ` key:action  key:action ` hint string: keys stand out, the
+/// separators and actions stay quiet.
+pub fn hint_line(hint: &str) -> Line<'static> {
+    let mut spans = vec![Span::raw(" ")];
+    for (i, token) in hint.trim().split("  ").enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        match token.split_once(':') {
+            Some((key, action)) if !key.is_empty() => {
+                spans.push(Span::styled(key.to_string(), theme::key_style()));
+                spans.push(Span::styled(":", theme::muted_style()));
+                spans.push(Span::styled(action.to_string(), theme::footer_style()));
+            }
+            _ => spans.push(Span::styled(token.to_string(), theme::footer_style())),
+        }
+    }
+    Line::from(spans)
+}
+
 pub fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -198,7 +234,7 @@ pub fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
-    let footer = Paragraph::new(Line::from(truncate_hint(hint, area.width as usize)))
+    let footer = Paragraph::new(hint_line(&truncate_hint(hint, area.width as usize)))
         .style(theme::footer_style())
         .wrap(ratatui::widgets::Wrap { trim: true });
     frame.render_widget(footer, area);
@@ -232,7 +268,7 @@ pub fn render_copied_toast(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let text = format!(" Copied: \"{}\" ", sanitize_toast_text(msg));
+    let text = format!(" \"{}\" ", sanitize_toast_text(msg));
     let content_w = text.chars().count() as u16 + 2;
     let toast_w = content_w.clamp(TOAST_MIN_W, TOAST_MAX_W);
     let toast_area = Rect {
@@ -241,18 +277,11 @@ pub fn render_copied_toast(frame: &mut Frame, area: Rect, app: &App) {
         width: toast_w,
         height: envelope.height,
     };
-
-    frame.render_widget(ratatui::widgets::Clear, toast_area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .style(theme::toast_style());
-    let inner = block.inner(toast_area);
-    frame.render_widget(block, toast_area);
-
-    let toast_text = Paragraph::new(Line::from(truncate_hint(&text, inner.width as usize)))
-        .style(theme::toast_style())
-        .alignment(Alignment::Center);
-    frame.render_widget(toast_text, inner);
+    render_toast_card(
+        frame,
+        toast_area,
+        " ✔ Copied ",
+        theme::toast_style(),
+        &truncate_hint(&text, toast_w.saturating_sub(2) as usize),
+    );
 }

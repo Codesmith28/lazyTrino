@@ -15,7 +15,7 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    text::Line,
+    text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, List, ListItem, ListState, Scrollbar, ScrollbarOrientation,
         ScrollbarState,
@@ -39,6 +39,7 @@ pub fn render(
         frame,
         area,
         " Catalogs ",
+        theme::Entity::Catalog,
         &state.items,
         state.selected,
         search,
@@ -52,6 +53,7 @@ pub(crate) fn render_selectable_list(
     frame: &mut Frame,
     area: Rect,
     title: &str,
+    entity: theme::Entity,
     items: &[String],
     selected: usize,
     search: &str,
@@ -72,7 +74,12 @@ pub(crate) fn render_selectable_list(
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(theme::border_style(is_active));
+        .border_style(theme::entity_border_style(entity, is_active))
+        .title_style(if is_active {
+            theme::bold_style(entity.color())
+        } else {
+            theme::muted_style()
+        });
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -119,7 +126,10 @@ pub(crate) fn render_selectable_list(
                     theme::selection_style_for(is_active),
                 )
             } else {
-                Line::styled(format!("{prefix}{name}"), theme::text_style())
+                Line::from(vec![
+                    Span::styled(prefix, theme::muted_style()),
+                    Span::styled(name.as_str(), entity.style()),
+                ])
             };
             ListItem::new(line)
         })

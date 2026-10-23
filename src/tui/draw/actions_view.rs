@@ -54,13 +54,13 @@ fn render_results_count_spans(
     let loaded_str = crate::app::format_count(res_state.rows.len());
 
     if !res_state.is_paginated {
-        spans.push(Span::styled(loaded_str, theme::bold_text_style()));
+        spans.push(Span::styled(loaded_str, theme::number_bold_style()));
         spans.push(Span::styled(" sample rows loaded", theme::text_style()));
         if let Some(tot) = res_state.table_count.or(res_state.total_count) {
             spans.push(Span::styled(" of ", theme::secondary_style()));
             spans.push(Span::styled(
                 crate::app::format_count(tot),
-                theme::bold_text_style(),
+                theme::number_bold_style(),
             ));
             spans.push(Span::styled(" table total", theme::text_style()));
         }
@@ -68,7 +68,7 @@ fn render_results_count_spans(
         if !res_state.has_more_rows {
             spans.push(Span::styled("All ", theme::text_style()));
         }
-        spans.push(Span::styled(loaded_str, theme::bold_text_style()));
+        spans.push(Span::styled(loaded_str, theme::number_bold_style()));
         spans.push(Span::styled(" rows loaded", theme::text_style()));
 
         // Increasing order of hierarchy:
@@ -80,7 +80,7 @@ fn render_results_count_spans(
                 spans.push(Span::styled(" of ", theme::secondary_style()));
                 spans.push(Span::styled(
                     crate::app::format_count(tot),
-                    theme::bold_text_style(),
+                    theme::number_bold_style(),
                 ));
                 spans.push(Span::styled(" partition records", theme::text_style()));
             } else if res_state.total_count_loading {
@@ -95,7 +95,7 @@ fn render_results_count_spans(
                 spans.push(Span::styled(" of ", theme::secondary_style()));
                 spans.push(Span::styled(
                     crate::app::format_count(tbl),
-                    theme::bold_text_style(),
+                    theme::number_bold_style(),
                 ));
                 spans.push(Span::styled(" table total", theme::text_style()));
             }
@@ -105,7 +105,7 @@ fn render_results_count_spans(
                 spans.push(Span::styled(" of ", theme::secondary_style()));
                 spans.push(Span::styled(
                     crate::app::format_count(tot),
-                    theme::bold_text_style(),
+                    theme::number_bold_style(),
                 ));
                 spans.push(Span::styled(" total", theme::text_style()));
             } else if res_state.total_count_loading {
@@ -175,6 +175,15 @@ fn render_results_count_spans(
 
 pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state: &ActionState) {
     let title = if !state.table.is_empty() {
+        let sep = || Span::styled(" › ", theme::muted_style());
+        let mut t = vec![
+            Span::raw(" Dataset Records — "),
+            Span::styled(state.catalog.clone(), theme::catalog_bold_style()),
+            sep(),
+            Span::styled(state.schema.clone(), theme::schema_bold_style()),
+            sep(),
+            Span::styled(state.table.clone(), theme::table_bold_style()),
+        ];
         if let Some(ref dd) = state.drilldown
             && !dd.path.is_empty()
         {
@@ -184,18 +193,13 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
                 .map(|(c, v)| format!("{c}={v}"))
                 .collect::<Vec<_>>()
                 .join(" › ");
-            format!(
-                " Dataset Records — {} › {} › {} › {} ",
-                state.catalog, state.schema, state.table, p_str
-            )
-        } else {
-            format!(
-                " Dataset Records — {} › {} › {} ",
-                state.catalog, state.schema, state.table
-            )
+            t.push(sep());
+            t.push(Span::styled(p_str, theme::warning_bold_style()));
         }
+        t.push(Span::raw(" "));
+        Line::from(t)
     } else {
-        " Dataset Records ".to_string()
+        Line::from(" Dataset Records ")
     };
 
     let block = Block::default()
@@ -235,7 +239,7 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
                     if let Some(cnt) = dd.counts_cache.get(&candidate_filter) {
                         spans.push(Span::styled(
                             crate::app::format_count(*cnt),
-                            theme::bold_text_style(),
+                            theme::number_bold_style(),
                         ));
                         spans.push(Span::styled(
                             format!(" records in {next_col}={val}"),
@@ -257,7 +261,7 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
                     spans.push(Span::styled(" of ", theme::secondary_style()));
                     spans.push(Span::styled(
                         crate::app::format_count(*parent_cnt),
-                        theme::bold_text_style(),
+                        theme::number_bold_style(),
                     ));
                     spans.push(Span::styled(
                         " parent partition records",
@@ -269,7 +273,7 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
                     spans.push(Span::styled(" of ", theme::secondary_style()));
                     spans.push(Span::styled(
                         crate::app::format_count(tot),
-                        theme::bold_text_style(),
+                        theme::number_bold_style(),
                     ));
                     spans.push(Span::styled(" table total", theme::text_style()));
                 } else if dd.table_count_loading {
@@ -297,7 +301,7 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
                     spans.push(Span::styled(" of ", theme::secondary_style()));
                     spans.push(Span::styled(
                         crate::app::format_count(tot),
-                        theme::bold_text_style(),
+                        theme::number_bold_style(),
                     ));
                     spans.push(Span::styled(" table total", theme::text_style()));
                 }
@@ -317,19 +321,19 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
                 });
             spans.push(Span::styled(
                 crate::app::format_count(levels),
-                theme::bold_text_style(),
+                theme::number_bold_style(),
             ));
             spans.push(Span::styled(" partition levels", theme::text_style()));
             if let Some(tot) = table_total {
                 spans.push(Span::styled(" of ", theme::secondary_style()));
                 spans.push(Span::styled(
                     crate::app::format_count(tot),
-                    theme::bold_text_style(),
+                    theme::number_bold_style(),
                 ));
                 spans.push(Span::styled(" table records", theme::text_style()));
             }
             spans.push(Span::styled(" in table ", theme::secondary_style()));
-            spans.push(Span::styled(&state.table, theme::bold_text_style()));
+            spans.push(Span::styled(&state.table, theme::table_bold_style()));
         }
         Some(crate::app::Action::Schema) => {
             let cols = app.vertical_schema_cols.len();
@@ -345,19 +349,19 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
                 });
             spans.push(Span::styled(
                 crate::app::format_count(cols),
-                theme::bold_text_style(),
+                theme::number_bold_style(),
             ));
             spans.push(Span::styled(" columns", theme::text_style()));
             if let Some(tot) = table_total {
                 spans.push(Span::styled(" of ", theme::secondary_style()));
                 spans.push(Span::styled(
                     crate::app::format_count(tot),
-                    theme::bold_text_style(),
+                    theme::number_bold_style(),
                 ));
                 spans.push(Span::styled(" table records", theme::text_style()));
             }
             spans.push(Span::styled(" in table ", theme::secondary_style()));
-            spans.push(Span::styled(&state.table, theme::bold_text_style()));
+            spans.push(Span::styled(&state.table, theme::table_bold_style()));
         }
         Some(crate::app::Action::TableDDL) => {
             let lines = state
@@ -367,13 +371,13 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
                 .unwrap_or(0);
             spans.push(Span::styled(
                 crate::app::format_count(lines),
-                theme::bold_text_style(),
+                theme::number_bold_style(),
             ));
             spans.push(Span::styled(
                 " lines of DDL definition for table ",
                 theme::text_style(),
             ));
-            spans.push(Span::styled(&state.table, theme::bold_text_style()));
+            spans.push(Span::styled(&state.table, theme::table_bold_style()));
         }
         _ => {
             if let Some(ref res_state) = state.results {
@@ -398,7 +402,7 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
                     spans.push(Span::styled(" of ", theme::secondary_style()));
                     spans.push(Span::styled(
                         crate::app::format_count(tot),
-                        theme::bold_text_style(),
+                        theme::number_bold_style(),
                     ));
                     spans.push(Span::styled(" table records", theme::text_style()));
                 }
@@ -437,18 +441,18 @@ pub fn render_phase1_count_box(frame: &mut Frame, area: Rect, screen: &Screen, s
             if filtered == total {
                 spans.push(Span::styled(
                     crate::app::format_count(total),
-                    theme::bold_text_style(),
+                    theme::number_bold_style(),
                 ));
                 spans.push(Span::styled(" catalogs total", theme::text_style()));
             } else {
                 spans.push(Span::styled(
                     crate::app::format_count(filtered),
-                    theme::bold_text_style(),
+                    theme::number_bold_style(),
                 ));
                 spans.push(Span::styled(" of ", theme::secondary_style()));
                 spans.push(Span::styled(
                     crate::app::format_count(total),
-                    theme::bold_text_style(),
+                    theme::number_bold_style(),
                 ));
                 spans.push(Span::styled(" catalogs total", theme::text_style()));
             }
@@ -467,7 +471,7 @@ pub fn render_phase1_count_box(frame: &mut Frame, area: Rect, screen: &Screen, s
             if filtered == total {
                 spans.push(Span::styled(
                     crate::app::format_count(total),
-                    theme::bold_text_style(),
+                    theme::number_bold_style(),
                 ));
             } else {
                 spans.push(Span::styled(
@@ -476,11 +480,11 @@ pub fn render_phase1_count_box(frame: &mut Frame, area: Rect, screen: &Screen, s
                         crate::app::format_count(filtered),
                         crate::app::format_count(total)
                     ),
-                    theme::bold_text_style(),
+                    theme::number_bold_style(),
                 ));
             }
             spans.push(Span::styled(" schemas of catalog ", theme::text_style()));
-            spans.push(Span::styled(&state.catalog, theme::bold_text_style()));
+            spans.push(Span::styled(&state.catalog, theme::catalog_bold_style()));
         }
         Screen::Table(state) => {
             let total = state.items.len();
@@ -496,7 +500,7 @@ pub fn render_phase1_count_box(frame: &mut Frame, area: Rect, screen: &Screen, s
             if filtered == total {
                 spans.push(Span::styled(
                     crate::app::format_count(total),
-                    theme::bold_text_style(),
+                    theme::number_bold_style(),
                 ));
             } else {
                 spans.push(Span::styled(
@@ -505,13 +509,13 @@ pub fn render_phase1_count_box(frame: &mut Frame, area: Rect, screen: &Screen, s
                         crate::app::format_count(filtered),
                         crate::app::format_count(total)
                     ),
-                    theme::bold_text_style(),
+                    theme::number_bold_style(),
                 ));
             }
             spans.push(Span::styled(" tables of schema ", theme::text_style()));
-            spans.push(Span::styled(&state.schema, theme::bold_text_style()));
+            spans.push(Span::styled(&state.schema, theme::schema_bold_style()));
             spans.push(Span::styled(" of catalog ", theme::secondary_style()));
-            spans.push(Span::styled(&state.catalog, theme::bold_text_style()));
+            spans.push(Span::styled(&state.catalog, theme::catalog_bold_style()));
         }
         _ => return,
     }

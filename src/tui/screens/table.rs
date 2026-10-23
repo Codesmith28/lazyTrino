@@ -31,6 +31,7 @@ pub fn render(
         frame,
         area,
         &title,
+        crate::tui::theme::Entity::Table,
         &state.items,
         state.selected,
         search,

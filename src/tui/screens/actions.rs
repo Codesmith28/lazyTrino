@@ -15,7 +15,7 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem, ListState},
 };
 
@@ -66,7 +66,7 @@ pub fn render(
                     } else if is_selected {
                         Line::styled(t, theme::selection_style_for(is_active))
                     } else {
-                        Line::styled(t, theme::text_style())
+                        menu_item_line(&t)
                     }
                 })
                 .collect();
@@ -91,6 +91,27 @@ pub fn render(
             inner,
             &mut scrollbar_state,
         );
+    }
+}
+
+/// ` [k] Label`: the hotkey in the key color, the label in plain text.
+fn menu_item_line(text: &str) -> Line<'static> {
+    match (text.find('['), text.find(']')) {
+        (Some(open), Some(close))
+            if open < close
+                && text[..open]
+                    .trim()
+                    .trim_start_matches('▸')
+                    .trim()
+                    .is_empty() =>
+        {
+            Line::from(vec![
+                Span::styled(text[..open].to_string(), theme::text_style()),
+                Span::styled(text[open..=close].to_string(), theme::key_style()),
+                Span::styled(text[close + 1..].to_string(), theme::text_style()),
+            ])
+        }
+        _ => Line::styled(text.to_string(), theme::text_style()),
     }
 }
 

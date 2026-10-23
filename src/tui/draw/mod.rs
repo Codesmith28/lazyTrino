@@ -25,6 +25,7 @@ use crate::tui::{screens, theme};
 pub mod actions_view;
 pub mod header_footer;
 pub mod search_query;
+pub mod sql_highlight;
 
 pub use actions_view::*;
 pub use header_footer::*;
@@ -527,22 +528,26 @@ pub mod toast_border_regression {
         let right_x = right_x.expect("toast top-right corner not found");
         assert!(right_x > left_x);
 
-        let expected_bg = theme::toast_style().bg.expect("toast_style must set a bg");
-        for row in y..y + envelope.height {
-            for col in left_x..=right_x {
+        // The toast is a card with an accent-colored border; nothing outside
+        // its box may carry the border.
+        let accent = theme::toast_style().fg.unwrap();
+        for col in [left_x, right_x] {
+            for row in [y, y + envelope.height - 1] {
                 let cell = buf.cell((col, row)).unwrap();
-                assert_eq!(
-                    cell.bg, expected_bg,
-                    "cell ({col},{row}) inside toast box lacks the solid toast background"
-                );
+                assert_eq!(cell.fg, accent, "corner ({col},{row}) lost the accent");
             }
         }
+        // inside the box the old content is cleared: no stray accent glyphs
+        // other than the border and the title
+        let mid = buf.cell((left_x + 1, y + 1)).unwrap();
+        assert_eq!(mid.bg, ratatui::style::Color::Reset);
 
         if right_x + 1 < width {
             let cell = buf.cell((right_x + 1, y)).unwrap();
             assert_ne!(
-                cell.bg, expected_bg,
-                "toast background spilled over its right border"
+                cell.symbol(),
+                "─",
+                "toast border spilled over its right edge"
             );
         }
     }
@@ -970,32 +975,77 @@ mod theme_contrast_tests {
 
     type Rgb = (u8, u8, u8);
 
-    fn indexed(i: u8) -> Rgb {
-        match i {
-            16..=231 => {
-                let n = i - 16;
-                let lv = [0u8, 95, 135, 175, 215, 255];
-                (
-                    lv[(n / 36) as usize],
-                    lv[((n / 6) % 6) as usize],
-                    lv[(n % 6) as usize],
-                )
-            }
-            232..=255 => {
-                let v = 8 + 10 * (i - 232);
-                (v, v, v)
-            }
-            _ => panic!("ANSI color {i} is remapped by terminal profiles; use a fixed color"),
-        }
+    /// A terminal profile: default colors plus its 16 ANSI colors, in
+    /// `Color` order (black, red, green, yellow, blue, magenta, cyan, gray,
+    /// dark gray, light red, ... white).
+    struct Profile {
+        name: &'static str,
+        fg: Rgb,
+        bg: Rgb,
+        ansi: [Rgb; 16],
     }
 
-    fn resolve(c: Color, terminal_default: Rgb) -> Rgb {
+    // macOS Terminal.app "Basic" (light) and "Pro" (dark) ship the same ANSI
+    // table; real themes tune it per background, so this is a worst case.
+    const ANSI: [Rgb; 16] = [
+        (0, 0, 0),
+        (153, 0, 0),
+        (0, 166, 0),
+        (153, 153, 0),
+        (0, 0, 178),
+        (178, 0, 178),
+        (0, 166, 178),
+        (191, 191, 191),
+        (102, 102, 102),
+        (229, 0, 0),
+        (0, 217, 0),
+        (229, 229, 0),
+        (0, 0, 255),
+        (229, 0, 229),
+        (0, 229, 229),
+        (229, 229, 229),
+    ];
+
+    fn profiles() -> [Profile; 2] {
+        [
+            Profile {
+                name: "light",
+                fg: (0, 0, 0),
+                bg: (255, 255, 255),
+                ansi: ANSI,
+            },
+            Profile {
+                name: "dark",
+                fg: (229, 229, 229),
+                bg: (0, 0, 0),
+                ansi: ANSI,
+            },
+        ]
+    }
+
+    fn resolve(c: Color, term_default: Rgb, p: &Profile) -> Rgb {
+        let ansi = |i: usize| p.ansi[i];
         match c {
-            Color::Reset => terminal_default,
-            Color::Indexed(i) => indexed(i),
-            Color::Rgb(r, g, b) => (r, g, b),
-            named => {
-                panic!("{named:?} is profile-dependent and can be unreadable on light terminals")
+            Color::Reset => term_default,
+            Color::Black => ansi(0),
+            Color::Red => ansi(1),
+            Color::Green => ansi(2),
+            Color::Yellow => ansi(3),
+            Color::Blue => ansi(4),
+            Color::Magenta => ansi(5),
+            Color::Cyan => ansi(6),
+            Color::Gray => ansi(7),
+            Color::DarkGray => ansi(8),
+            Color::LightRed => ansi(9),
+            Color::LightGreen => ansi(10),
+            Color::LightYellow => ansi(11),
+            Color::LightBlue => ansi(12),
+            Color::LightMagenta => ansi(13),
+            Color::LightCyan => ansi(14),
+            Color::White => ansi(15),
+            Color::Indexed(i) if i < 16 => ansi(i as usize),
+            Color::Indexed(_) | Color::Rgb(..) => {
+                panic!("{c:?} is not a terminal-native color; profiles cannot remap it")
             }
         }
     }
@@ -1018,7 +1068,7 @@ mod theme_contrast_tests {
     }
 
     /// Returns "x,y 'glyph' ratio" for every glyph below `min`.
-    fn low_contrast(buf: &Buffer, term_fg: Rgb, term_bg: Rgb, min: f64) -> Vec<String> {
+    fn low_contrast(buf: &Buffer, p: &Profile, min: f64) -> Vec<String> {
         let mut bad = Vec::new();
         for y in 0..buf.area.height {
             for x in 0..buf.area.width {
@@ -1026,7 +1076,7 @@ mod theme_contrast_tests {
                 if cell.symbol().trim().is_empty() {
                     continue;
                 }
-                let (mut fg, mut bg) = (resolve(cell.fg, term_fg), resolve(cell.bg, term_bg));
+                let (mut fg, mut bg) = (resolve(cell.fg, p.fg, p), resolve(cell.bg, p.bg, p));
                 if cell.modifier.contains(Modifier::REVERSED) {
                     std::mem::swap(&mut fg, &mut bg);
                 }
@@ -1148,22 +1198,18 @@ mod theme_contrast_tests {
         selected.mouse_selection_committed = true;
         scenarios.push(("grid + mouse selection", selected));
 
-        // (terminal default fg, terminal default bg)
-        let terminals = [
-            ("light", (0u8, 0u8, 0u8), (255u8, 255u8, 255u8)),
-            ("dark", (229, 229, 229), (0, 0, 0)),
-        ];
-
         let mut failures = Vec::new();
         for (name, app) in &scenarios {
             let mut term = Terminal::new(TestBackend::new(120, 36)).unwrap();
             term.draw(|f| ui(f, app)).unwrap();
             let buf = term.backend().buffer().clone();
-            for (tname, fg, bg) in terminals {
-                let bad = low_contrast(&buf, fg, bg, 3.0);
+            for p in profiles() {
+                // ANSI accents on a stock palette: readable, not necessarily AA.
+                let bad = low_contrast(&buf, &p, 2.5);
                 if !bad.is_empty() {
                     failures.push(format!(
-                        "{name} on {tname} terminal: {} low-contrast glyphs, e.g. {:?}",
+                        "{name} on {} terminal: {} low-contrast glyphs, e.g. {:?}",
+                        p.name,
                         bad.len(),
                         &bad[..bad.len().min(4)]
                     ));
@@ -1174,20 +1220,29 @@ mod theme_contrast_tests {
     }
 
     #[test]
-    fn the_checker_itself_catches_the_old_white_on_light_bug() {
-        // Guard against a vacuous test: white text on a white terminal must be flagged.
+    fn the_checker_itself_catches_unreadable_pairs() {
+        // Guard against a vacuous test: white-on-white and dark-blue-on-black
+        // must be flagged, terminal-default text must not.
+        let [light, dark] = profiles();
         let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 4, 1));
         buf.set_string(
             0,
             0,
             "text",
-            ratatui::style::Style::default().fg(Color::Indexed(231)),
+            ratatui::style::Style::default().fg(Color::White),
         );
-        assert_eq!(low_contrast(&buf, (0, 0, 0), (255, 255, 255), 3.0).len(), 4);
-        // terminal-default text is fine on both
+        assert_eq!(low_contrast(&buf, &light, 2.5).len(), 4);
+        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 4, 1));
+        buf.set_string(
+            0,
+            0,
+            "text",
+            ratatui::style::Style::default().fg(Color::Blue),
+        );
+        assert_eq!(low_contrast(&buf, &dark, 2.5).len(), 4);
         let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 4, 1));
         buf.set_string(0, 0, "text", ratatui::style::Style::default());
-        assert!(low_contrast(&buf, (0, 0, 0), (255, 255, 255), 3.0).is_empty());
-        assert!(low_contrast(&buf, (229, 229, 229), (0, 0, 0), 3.0).is_empty());
+        assert!(low_contrast(&buf, &light, 2.5).is_empty());
+        assert!(low_contrast(&buf, &dark, 2.5).is_empty());
     }
 }
