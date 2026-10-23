@@ -73,6 +73,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
             "  V                              Visual line: select whole rows (lists, partition values, grid)",
             "  v / Ctrl+V                     Visual / block: select a range (grid: cell block)",
             "  y                              Copy the selection (and leave visual mode)",
+            "                                 Grid selections (cells, rows, drags) are copied as CSV with the column header",
             "  Esc                            Deselect (only when a selection exists; otherwise its usual meaning)",
             "  Cmd+C / Ctrl+Shift+C           Copy selection, else the focused cell / row (needs a terminal",
             "                                 that forwards the key; otherwise use y or drag-select)",

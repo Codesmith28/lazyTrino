@@ -1090,14 +1090,13 @@ fn extract_structured_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -
                     res.rows.len(),
                 );
 
-                if start_row <= inner.y + 1 && end_row >= inner.y {
-                    let header = format_csv_row(
-                        sel_cols
-                            .iter()
-                            .map(|&i| res.columns.get(i).map(|s| s.as_str()).unwrap_or("")),
-                    );
-                    lines.push(header);
-                }
+                // The header always travels with copied cells, wherever the drag started.
+                let header = format_csv_row(
+                    sel_cols
+                        .iter()
+                        .map(|&i| res.columns.get(i).map(|s| s.as_str()).unwrap_or("")),
+                );
+                lines.push(header);
 
                 let mut cur_y = inner.y + 2;
                 for (row_idx, row) in res.rows.iter().enumerate().skip(effective_scroll_v) {
@@ -1480,6 +1479,10 @@ mod tests {
         // Header line (inner.y = 7) and first row (inner.y + 2 = 9)
         let text = extract_selected_text(&app, (menu_x, 7), (menu_x, 9));
         assert_eq!(text, "id,status\n1,OK");
+
+        // Dragging over data rows only still copies the header
+        let text = extract_selected_text(&app, (menu_x, 9), (menu_x, 10));
+        assert!(text.starts_with("id,status\n"), "{text}");
     }
 
     #[test]
@@ -2116,7 +2119,7 @@ mod tests {
         };
         handle_mouse_sync(&mut app, right_click);
         let toast = app.copied_toast.as_ref().unwrap().0.clone();
-        assert!(toast.contains("cell block (CSV)"));
+        assert!(toast.contains("cell block with header (CSV)"));
     }
 
     #[test]

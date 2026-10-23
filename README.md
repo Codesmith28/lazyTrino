@@ -193,7 +193,7 @@ Works in the catalog / schema / table lists, partition drill-down, and the resul
 | `v` / `Ctrl+V` | **Visual / Visual Block**: select a range (grid: rectangular cell block) |
 | `Shift + Arrow keys` | Start and extend a selection (grid: one cell per press; `Ctrl/Alt + ←/→` or `H`/`L` jump 5 columns) |
 | `o` / `O` | Swap cursor and anchor end (grid) |
-| `y` | Copy selection (CSV for multi-cell/row grid selections) and leave visual mode |
+| `y` | Copy selection (grid selections are CSV and always include the column header) and leave visual mode |
 | `Y` | Copy the active grid row(s) as CSV |
 | `Cmd+C` / `Ctrl+Shift+C` | Copy selection, else the focused cell / row. Only reaches lazyTrino if your terminal forwards it (kitty protocol terminals: kitty, WezTerm, Ghostty, foot, recent iTerm2/Alacritty) |
 | `Shift`/`Option` + drag | Your terminal's native selection, with its native copy shortcut |
