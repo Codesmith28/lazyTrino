@@ -20,8 +20,10 @@ use ratatui::style::{Color, Modifier, Style};
 /// a dark profile, dark ones in a light profile. Nothing is hard-coded RGB or
 /// from the 256-color cube.
 ///
-/// Dark ANSI blue is unreadable as text on most dark profiles, so blue is used
-/// only as a *background* (cursor row), never as a foreground.
+/// Cyan is the pane-border / structure color, so syntax-style highlighting
+/// (numbers, quoted identifiers) uses *bright* blue instead — it stays
+/// distinct from the borders. Plain ANSI blue is too dark to read as text on
+/// most dark profiles, so it is only used as a *background* (cursor row).
 struct Palette {
     text: Color,
     secondary: Color,
@@ -67,7 +69,7 @@ const PALETTE: Palette = Palette {
     catalog: Color::Magenta,
     schema: Color::Cyan,
     table: Color::Green,
-    number: Color::Cyan,
+    number: Color::LightBlue,
     boolean: Color::Magenta,
     temporal: Color::Green,
     on_accent_fg: Color::White,
@@ -281,6 +283,11 @@ pub fn sql_string_style() -> Style {
     bold_style(pal().header)
 }
 
+/// Quoted identifiers in SQL (`"my column"`), in the syntax blue.
+pub fn sql_ident_style() -> Style {
+    bold_style(pal().number)
+}
+
 pub fn sql_comment_style() -> Style {
     muted_style().add_modifier(Modifier::ITALIC)
 }
@@ -440,8 +447,10 @@ mod tests {
     }
 
     #[test]
-    fn ansi_blue_is_never_used_as_text() {
-        // Dark-profile ANSI blue is unreadable on a dark background.
+    fn plain_ansi_blue_is_never_used_as_text() {
+        // Dark-profile ANSI blue is unreadable on a dark background; the
+        // syntax blue is the bright variant.
+        assert_eq!(PALETTE.number, Color::LightBlue);
         let p = &PALETTE;
         for c in [
             p.muted,
@@ -458,6 +467,26 @@ mod tests {
             p.temporal,
         ] {
             assert_ne!(c, Color::Blue);
+        }
+    }
+
+    #[test]
+    fn syntax_colors_never_reuse_the_border_color() {
+        // Cyan frames the panes, so syntax highlighting must not use it.
+        let p = &PALETTE;
+        for syntax in [p.number, p.boolean, p.temporal] {
+            assert_ne!(syntax, p.accent_border);
+            assert_ne!(syntax, p.schema);
+        }
+        assert_eq!(sql_ident_style().fg, Some(p.number));
+        for style in [
+            sql_keyword_style(),
+            sql_string_style(),
+            sql_ident_style(),
+            number_style(),
+            value_style("42"),
+        ] {
+            assert_ne!(style.fg, Some(p.accent_border));
         }
     }
 

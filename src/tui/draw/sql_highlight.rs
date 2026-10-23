@@ -37,7 +37,7 @@ impl Class {
             Class::Str => theme::sql_string_style(),
             Class::Number => theme::number_bold_style(),
             Class::Comment => theme::sql_comment_style(),
-            Class::QuotedIdent => theme::info_bold_style(),
+            Class::QuotedIdent => theme::sql_ident_style(),
         }
     }
 }

@@ -986,7 +986,8 @@ mod theme_contrast_tests {
     }
 
     // macOS Terminal.app "Basic" (light) and "Pro" (dark) ship the same ANSI
-    // table; real themes tune it per background, so this is a worst case.
+    // table (except bright blue, taken from xterm's #5c5cff: the stock
+    // #0000ff is unreadable on black); real themes tune it per background.
     const ANSI: [Rgb; 16] = [
         (0, 0, 0),
         (153, 0, 0),
@@ -1000,7 +1001,7 @@ mod theme_contrast_tests {
         (229, 0, 0),
         (0, 217, 0),
         (229, 229, 0),
-        (0, 0, 255),
+        (92, 92, 255),
         (229, 0, 229),
         (0, 229, 229),
         (229, 229, 229),
