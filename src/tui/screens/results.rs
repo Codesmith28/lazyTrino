@@ -951,8 +951,11 @@ pub fn render(
                 let is_cursor_cell =
                     row_idx == state.selected_row && *col_idx == state.selected_col;
                 let is_vim_sel = state.is_cell_selected(row_idx, *col_idx);
-                let is_highlighted = is_mouse_sel || is_vim_sel || is_cursor_cell;
-                let style = if is_highlighted {
+                let is_selected_text = is_mouse_sel || is_vim_sel;
+                let is_highlighted = is_selected_text || is_cursor_cell;
+                let style = if is_selected_text {
+                    theme::text_selection_style()
+                } else if is_cursor_cell {
                     theme::selection_style_for(is_active)
                 } else if is_summary {
                     if *col_idx == 0 {

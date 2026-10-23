@@ -42,7 +42,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(theme::style(theme::INACTIVE_BORDER));
+        .border_style(theme::style(theme::inactive_border_color()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -94,7 +94,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             let mut lines = Vec::new();
             if let Some(first_line) = wrapped_sql.first() {
                 let sql_style = if is_mouse_sel {
-                    theme::selection_style()
+                    theme::text_selection_style()
                 } else {
                     theme::text_style()
                 };
@@ -107,7 +107,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             let indent = " ".repeat(header_len);
             for remaining in wrapped_sql.iter().skip(1) {
                 let sql_style = if is_mouse_sel {
-                    theme::selection_style()
+                    theme::text_selection_style()
                 } else {
                     theme::text_style()
                 };

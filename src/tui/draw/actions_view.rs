@@ -29,7 +29,7 @@ pub fn render_count_box(frame: &mut Frame, area: Rect, res_state: &ResultsState)
         .title(" Dataset Records ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(theme::style(theme::ACCENT_BORDER));
+        .border_style(theme::style(theme::accent_border_color()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -202,7 +202,7 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(theme::style(theme::ACCENT_BORDER));
+        .border_style(theme::style(theme::accent_border_color()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -415,7 +415,7 @@ pub fn render_phase1_count_box(frame: &mut Frame, area: Rect, screen: &Screen, s
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(theme::style(theme::ACCENT_BORDER));
+        .border_style(theme::style(theme::accent_border_color()));
 
     let mut spans = vec![
         Span::raw("  "),
@@ -766,8 +766,6 @@ mod tests {
 
     #[test]
     fn test_render_count_box_shows_active_column_and_warning_filter_color() {
-        use ratatui::style::Color;
-
         let state = ResultsState {
             rows: vec![vec!["1".to_string(), "active".to_string()]],
             columns: vec!["id".to_string(), "status".to_string()],
@@ -803,7 +801,7 @@ mod tests {
         let mut found_yellow_filter = false;
         for x in 0..100 {
             let cell = buffer.cell((x, 1)).unwrap();
-            if cell.symbol() == "d" && cell.style().fg == Some(Color::Yellow) {
+            if cell.symbol() == "d" && cell.style().fg == theme::warning_style().fg {
                 found_yellow_filter = true;
                 break;
             }

@@ -86,14 +86,8 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &AppliedFiltersModalState) {
             .map(|(idx, item)| {
                 let is_sel = idx == selected;
                 let (badge_text, badge_style) = match item.kind {
-                    AppliedFilterKind::Partition => (
-                        " [Partition] ",
-                        theme::bold_style(ratatui::style::Color::Cyan),
-                    ),
-                    AppliedFilterKind::Column => (
-                        " [Column]    ",
-                        theme::bold_style(ratatui::style::Color::Yellow),
-                    ),
+                    AppliedFilterKind::Partition => (" [Partition] ", theme::info_bold_style()),
+                    AppliedFilterKind::Column => (" [Column]    ", theme::warning_bold_style()),
                 };
 
                 let line_spans = if is_sel {

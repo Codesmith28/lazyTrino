@@ -182,7 +182,7 @@ pub fn render(
             let (branch_part, content_part) = split_tree_line(line_str);
 
             let content_style = if is_mouse_sel {
-                theme::selection_style()
+                theme::text_selection_style()
             } else if content_part.contains("s3://")
                 || content_part.contains("hdfs://")
                 || content_part.starts_with('/')

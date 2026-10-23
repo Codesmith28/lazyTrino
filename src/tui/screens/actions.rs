@@ -62,7 +62,7 @@ pub fn render(
                 .into_iter()
                 .map(|t| {
                     if is_mouse_sel {
-                        Line::styled(t, theme::selection_style())
+                        Line::styled(t, theme::text_selection_style())
                     } else if is_selected {
                         Line::styled(t, theme::selection_style_for(is_active))
                     } else {
