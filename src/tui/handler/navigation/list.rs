@@ -172,6 +172,40 @@ pub fn sync_list_selected_to_app(app: &mut App) {
     }
 }
 
+/// Opens `table` fresh on the table screen with `action_idx` selected; the
+/// action runs once the table metadata it needs has arrived.
+pub fn open_table(
+    app: &mut App,
+    catalog: String,
+    schema: String,
+    table: String,
+    action_idx: usize,
+) -> Command {
+    app.partition_tree_lines.clear();
+    app.vertical_schema_cols.clear();
+    let action_idx = action_idx.min(ACTIONS.len() - 1);
+    let default_query = ACTIONS[action_idx].2.build_query(&catalog, &schema, &table);
+    let query_len = default_query.len();
+    app.screen = Screen::Actions(crate::app::ActionState {
+        catalog: catalog.clone(),
+        schema: schema.clone(),
+        table: table.clone(),
+        selected: action_idx,
+        pending_action: Some(action_idx),
+        query_buffer: default_query,
+        query_cursor: query_len,
+        results: None,
+        ddl_loading: true,
+        metadata_loading: true,
+        ..Default::default()
+    });
+    Command::FetchTableMetadata {
+        catalog,
+        schema,
+        table,
+    }
+}
+
 pub fn select_current_item(app: &mut App) -> Option<Command> {
     match &app.screen {
         Screen::Catalog(s) => {
@@ -238,32 +272,8 @@ pub fn select_current_item(app: &mut App) -> Option<Command> {
                 app.screen = Screen::Actions(cached_state);
                 None
             } else {
-                app.partition_tree_lines.clear();
-                app.vertical_schema_cols.clear();
                 let selected_action = app.last_selected_action.get(&key).copied().unwrap_or(0);
-                let default_query = ACTIONS
-                    .get(selected_action)
-                    .map(|(_, _, a)| a.build_query(&catalog, &schema, &table))
-                    .unwrap_or_else(|| ACTIONS[0].2.build_query(&catalog, &schema, &table));
-                let query_len = default_query.len();
-                app.screen = Screen::Actions(crate::app::ActionState {
-                    catalog: catalog.clone(),
-                    schema: schema.clone(),
-                    table: table.clone(),
-                    selected: selected_action,
-                    pending_action: Some(selected_action),
-                    query_buffer: default_query,
-                    query_cursor: query_len,
-                    results: None,
-                    ddl_loading: true,
-                    metadata_loading: true,
-                    ..Default::default()
-                });
-                Some(Command::FetchTableMetadata {
-                    catalog,
-                    schema,
-                    table,
-                })
+                Some(open_table(app, catalog, schema, table, selected_action))
             }
         }
         Screen::Actions(s) => {

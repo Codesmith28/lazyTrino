@@ -28,6 +28,81 @@ use crate::tui::theme;
 /// from the live DDL response for that specific table, never hardcoded by
 /// table/schema name. Returns an empty `Vec` for `partition_cols` when the
 /// table is unpartitioned (or the clause is absent).
+/// Column names and types from a `SHOW CREATE TABLE` statement, e.g.
+/// `account_id varchar COMMENT ''` → `("account_id", "varchar")`. Handles
+/// quoted names and nested types such as `map(varchar, bigint)`.
+pub fn parse_ddl_column_types(ddl: &str) -> Vec<(String, String)> {
+    // The column list is the first top-level parenthesised group.
+    let mut in_quotes = false;
+    let mut start = None;
+    for (i, c) in ddl.char_indices() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            '(' if !in_quotes => {
+                start = Some(i + 1);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let Some(start) = start else {
+        return Vec::new();
+    };
+
+    let mut defs = Vec::new();
+    let (mut depth, mut in_dq, mut in_sq) = (0usize, false, false);
+    let mut current = String::new();
+    for c in ddl[start..].chars() {
+        match c {
+            '"' if !in_sq => in_dq = !in_dq,
+            '\'' if !in_dq => in_sq = !in_sq,
+            '(' if !in_dq && !in_sq => depth += 1,
+            ')' if !in_dq && !in_sq => {
+                if depth == 0 {
+                    defs.push(std::mem::take(&mut current));
+                    break;
+                }
+                depth -= 1;
+            }
+            ',' if depth == 0 && !in_dq && !in_sq => {
+                defs.push(std::mem::take(&mut current));
+                continue;
+            }
+            _ => {}
+        }
+        current.push(c);
+    }
+
+    defs.iter()
+        .filter_map(|def| {
+            let def = def.trim();
+            let (name, rest) = if let Some(quoted) = def.strip_prefix('"') {
+                let end = quoted.find('"')?;
+                (quoted[..end].to_string(), &quoted[end + 1..])
+            } else {
+                let end = def.find(char::is_whitespace)?;
+                (def[..end].to_string(), &def[end..])
+            };
+            // The type runs until COMMENT / NOT NULL / WITH at depth 0.
+            let mut depth = 0usize;
+            let mut ty = String::new();
+            for word in rest.split_whitespace() {
+                let upper = word.to_ascii_uppercase();
+                if depth == 0 && matches!(upper.as_str(), "COMMENT" | "NOT" | "WITH") {
+                    break;
+                }
+                depth += word.matches('(').count();
+                depth = depth.saturating_sub(word.matches(')').count());
+                if !ty.is_empty() {
+                    ty.push(' ');
+                }
+                ty.push_str(word);
+            }
+            (!name.is_empty() && !ty.is_empty()).then_some((name, ty))
+        })
+        .collect()
+}
+
 pub fn parse_partitioned_by(ddl: &str) -> (Vec<String>, String) {
     let mut location = "s3://warehouse/table_data/".to_string();
     let mut partition_cols: Vec<String> = Vec::new();
@@ -224,6 +299,22 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ddl_column_types_are_parsed() {
+        // Abbreviated from the table in the bug report.
+        let ddl = "CREATE TABLE datalake.\"customers-2_tenant (x)\".events (\n   _hoodie_commit_time varchar COMMENT '',\n   all_event_timestamps array(bigint) COMMENT '',\n   event_evaluation_info map(varchar, bigint) COMMENT 'a, b (c)',\n   \"odd name\" decimal(10, 2) NOT NULL,\n   timestamp bigint COMMENT '',\n   account_id varchar COMMENT ''\n)\nWITH (\n   partitioned_by = ARRAY['date','service','account_id']\n)";
+        let cols = parse_ddl_column_types(ddl);
+        let get = |n: &str| cols.iter().find(|(c, _)| c == n).map(|(_, t)| t.as_str());
+        assert_eq!(get("_hoodie_commit_time"), Some("varchar"));
+        assert_eq!(get("all_event_timestamps"), Some("array(bigint)"));
+        assert_eq!(get("event_evaluation_info"), Some("map(varchar, bigint)"));
+        assert_eq!(get("odd name"), Some("decimal(10, 2)"));
+        assert_eq!(get("timestamp"), Some("bigint"));
+        assert_eq!(get("account_id"), Some("varchar"));
+        assert_eq!(cols.len(), 6);
+        assert!(parse_ddl_column_types("garbage").is_empty());
+    }
 
     #[test]
     fn parse_partitioned_by_extracts_ordered_columns_and_location() {

@@ -31,6 +31,8 @@ pub fn drilldown_drill_into_selected(
     let value = dd.levels_cache.get(depth)?.get(dd.selected)?.clone();
     let column = dd.partition_cols.get(depth)?.clone();
 
+    s.custom_sql = None;
+    let dd = s.drilldown.as_mut()?;
     dd.path_cursors.insert(dd.path.clone(), dd.selected);
     dd.path.push((column, value));
     dd.selected = dd.path_cursors.get(&dd.path).copied().unwrap_or(0);
@@ -39,8 +41,16 @@ pub fn drilldown_drill_into_selected(
     if dd.is_leaf() {
         let filters = dd.path.clone();
         s.results = None;
-        let query =
-            queries::filtered_page_query(&catalog, &schema, &table, &filters, 0, 100, safe_columns);
+        let query = queries::filtered_page_query(
+            &catalog,
+            &schema,
+            &table,
+            &filters,
+            0,
+            100,
+            safe_columns,
+            &s.column_types,
+        );
         let query_len = query.len();
         s.query_buffer = query.clone();
         s.query_cursor = query_len;
@@ -63,6 +73,7 @@ pub fn drilldown_drill_into_selected(
             &filters,
             &next_col,
             crate::tui::handler::commands::DRILLDOWN_LEVEL_LIMIT,
+            &s.column_types,
         );
         let query_len = query.len();
         s.query_buffer = query;
@@ -83,29 +94,48 @@ pub fn drilldown_go_up(s: &mut ActionState) -> Option<Command> {
     if dd.loading {
         return None;
     }
-    if dd.path.is_empty() {
-        return None;
-    }
+    let (_, came_from) = dd.path.pop()?;
+    dd.error = None;
+    dd.truncated = false;
+    s.results = None;
+    s.custom_sql = None;
+    let col = dd.partition_cols.get(dd.depth())?.clone();
+    let query = queries::distinct_partition_values(
+        &s.catalog,
+        &s.schema,
+        &s.table,
+        &dd.path,
+        &col,
+        crate::tui::handler::commands::DRILLDOWN_LEVEL_LIMIT,
+        &s.column_types,
+    );
+    s.query_cursor = query.len();
+    s.query_buffer = query;
 
-    let popped = dd.path.pop();
-    if popped.is_some() {
-        dd.selected = dd.path_cursors.get(&dd.path).copied().unwrap_or(0);
-        dd.error = None;
-        dd.truncated = false;
-        s.results = None;
-        if let Some(col) = dd.partition_cols.get(dd.depth()) {
-            let query = queries::distinct_partition_values(
-                &s.catalog,
-                &s.schema,
-                &s.table,
-                &dd.path,
-                col,
-                crate::tui::handler::commands::DRILLDOWN_LEVEL_LIMIT,
-            );
-            s.query_cursor = query.len();
-            s.query_buffer = query;
+    // An empty entry means this level was never loaded — e.g. a saved view
+    // restored below it. Fetch it and land on the value we came from.
+    let cached = dd.levels_cache.get(dd.depth()).filter(|l| !l.is_empty());
+    match cached {
+        Some(level) => {
+            dd.selected = dd
+                .path_cursors
+                .get(&dd.path)
+                .copied()
+                .or_else(|| level.iter().position(|v| *v == came_from))
+                .unwrap_or(0);
+            super::actions::maybe_fetch_selected_partition_count(s)
         }
-        return super::actions::maybe_fetch_selected_partition_count(s);
+        None => {
+            dd.loading = true;
+            dd.selected = 0;
+            dd.focus_value = Some(came_from);
+            Some(Command::FetchPartitionLevel {
+                catalog: s.catalog.clone(),
+                schema: s.schema.clone(),
+                table: s.table.clone(),
+                filters: dd.path.clone(),
+                column: col,
+            })
+        }
     }
-    None
 }

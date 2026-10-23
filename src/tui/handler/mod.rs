@@ -29,6 +29,7 @@ mod mouse;
 mod navigation;
 mod query;
 pub mod query_vim;
+pub mod restore;
 pub mod saved_views_modal;
 mod screen_text;
 
@@ -63,6 +64,9 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
 }
 
 pub fn handle_mouse_sync(app: &mut App, mouse: crossterm::event::MouseEvent) -> Option<Command> {
+    if app.restore.is_some() && matches!(mouse.kind, crossterm::event::MouseEventKind::Down(_)) {
+        restore::cancel(app);
+    }
     mouse::handle_mouse_sync(app, mouse)
 }
 
@@ -92,6 +96,8 @@ fn preserve_public_api_symbols() {
 }
 
 pub enum Command {
+    /// Several commands to dispatch in order.
+    Batch(Vec<Command>),
     Connect {
         url: String,
         user: String,
@@ -242,6 +248,10 @@ fn is_native_copy_chord(code: KeyCode, mods: KeyModifiers) -> bool {
 pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     preserve_public_api_symbols();
     app.sync_search_scope();
+    // The user took over while a saved view was being rebuilt.
+    if app.restore.is_some() {
+        restore::cancel(app);
+    }
 
     // The painted mouse selection is positional, so any key that could move
     // content invalidates it. Esc (deselect), `y` and the native copy chords

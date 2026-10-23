@@ -72,6 +72,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
             s.pending_action = Some(action_idx);
             s.results = None;
             s.drilldown = None;
+            s.custom_sql = None;
             let query = action.build_query(&s.catalog, &s.schema, &s.table);
             s.query_cursor = query.len();
             s.query_buffer = query;
@@ -87,6 +88,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
             s.pending_action = Some(action_idx);
             s.results = None;
             s.drilldown = None;
+            s.custom_sql = None;
             let query = action.build_query(&s.catalog, &s.schema, &s.table);
             s.query_cursor = query.len();
             s.query_buffer = query;
@@ -110,6 +112,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
             Action::Partitions | Action::Schema => {
                 s.results = None;
                 s.drilldown = None;
+                s.custom_sql = None;
                 let query = action.build_query(&s.catalog, &s.schema, &s.table);
                 s.query_cursor = query.len();
                 s.query_buffer = query;
@@ -122,6 +125,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                 if is_same_table_view {
                     return None;
                 }
+                s.custom_sql = None;
                 s.results = None;
                 s.drilldown = None;
                 let partition_cols = s
@@ -151,6 +155,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                         &[],
                         &first_col,
                         crate::tui::handler::commands::DRILLDOWN_LEVEL_LIMIT,
+                        &s.column_types,
                     );
                     let query_len = query.len();
                     s.query_buffer = query;
@@ -168,6 +173,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                         counts_cache: std::collections::HashMap::new(),
                         current_count_loading: true,
                         path_cursors: std::collections::HashMap::new(),
+                        focus_value: None,
                     });
                     Some(Command::FetchPartitionLevel {
                         catalog: s.catalog.clone(),
@@ -180,6 +186,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
             }
             Action::TableDDL if s.metadata.is_some() => {
                 s.drilldown = None;
+                s.custom_sql = None;
                 populate_table_ddl_results(s);
                 None
             }
@@ -187,6 +194,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                 let query = action.build_query(&s.catalog, &s.schema, &s.table);
                 s.results = None;
                 s.drilldown = None;
+                s.custom_sql = None;
                 let query_len = query.len();
                 s.query_buffer = query.clone();
                 s.query_cursor = query_len;
@@ -353,10 +361,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         KeyCode::Char('>') | KeyCode::Enter | KeyCode::Right => {
                             drilldown_drill_into_selected(s, &safe_columns)
                         }
-                        KeyCode::Char('<') | KeyCode::Left => {
-                            drilldown_go_up(s);
-                            None
-                        }
+                        KeyCode::Char('<') | KeyCode::Left => drilldown_go_up(s),
                         KeyCode::Char('y') => {
                             copy_active_pane_content(app);
                             None
@@ -594,8 +599,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         }
                         KeyCode::Char('<') => {
                             if at_leaf {
-                                drilldown_go_up(s);
-                            } else if let Some(ref mut res) = s.results {
+                                return drilldown_go_up(s);
+                            }
+                            if let Some(ref mut res) = s.results {
                                 for _ in 0..5 {
                                     res.selected_col = res.prev_visible_col();
                                 }

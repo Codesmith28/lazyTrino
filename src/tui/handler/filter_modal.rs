@@ -627,6 +627,7 @@ pub fn reapply_in_memory_filters(app: &mut App) -> Option<Command> {
             &res.column_filters,
             &res.col_distinct_values,
             Some(&expr_map),
+            Some(&action_state.column_types),
         );
 
         res.query_buffer = updated_query.clone();

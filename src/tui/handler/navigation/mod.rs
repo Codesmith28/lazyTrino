@@ -596,6 +596,7 @@ pub mod tests {
             &[("date".to_string(), "2026-08-06".to_string())],
             "service",
             200,
+            &crate::trino::queries::ColumnTypes::default(),
         );
         assert_eq!(s.query_buffer, expected_level_query);
     }
@@ -655,8 +656,15 @@ pub mod tests {
         assert!(dd.path.is_empty());
         assert_eq!(dd.selected, 0);
         assert!(s.results.is_none());
-        let expected_parent_query =
-            queries::distinct_partition_values("datalake", "tenant", "events", &[], "date", 200);
+        let expected_parent_query = queries::distinct_partition_values(
+            "datalake",
+            "tenant",
+            "events",
+            &[],
+            "date",
+            200,
+            &crate::trino::queries::ColumnTypes::default(),
+        );
         assert_eq!(s.query_buffer, expected_parent_query);
     }
 
@@ -2000,6 +2008,7 @@ pub mod tests {
                 counts_cache: std::collections::HashMap::new(),
                 current_count_loading: false,
                 path_cursors: std::collections::HashMap::new(),
+                focus_value: None,
             }),
             ..Default::default()
         };

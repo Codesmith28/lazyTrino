@@ -320,6 +320,7 @@ mod tests {
             counts_cache: counts,
             current_count_loading: false,
             path_cursors: HashMap::new(),
+            focus_value: None,
         };
 
         let app = App::new(crate::config::ConnectionConfig::default(), false);

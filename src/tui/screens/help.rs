@@ -94,7 +94,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
             "  t / m                          Show Stats / Sample (20 rows)",
             "  p                              Partitions Tree",
             "  Ctrl+s                         Save active table view (prompt for view name)",
-            "  Ctrl+o / B                     Browse and restore saved table views",
+            "  Ctrl+o / B                     Browse and restore saved table views (Back / Esc / < work from there)",
             "  Space / a / d (in Saved Views) Toggle selection / select all / delete selected views",
         ],
     },

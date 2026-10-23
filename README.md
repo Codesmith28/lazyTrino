@@ -118,7 +118,7 @@ lazyTrino --profile prod
 
 - 🗂️ **Catalog & Schema Hierarchy**: Drill down from Catalogs $\rightarrow$ Schemas $\rightarrow$ Tables $\rightarrow$ Actions.
 - 🌲 **Partition Drill-Down (`cd`/`ls` style)**: Browse partitioned tables one partition level at a time with instant counts and no split errors.
-- 📑 **Saved Table Views (`Ctrl+S` / `Ctrl+O` / `B`)**: Name and persist custom view states (filters, hidden columns, sort orders) with multi-select and batch deletion.
+- 📑 **Saved Table Views (`Ctrl+S` / `Ctrl+O` / `B`)**: Save *where* you are (catalog › schema › table › action › partition path), your custom SQL if any, and the grid state (filters, hidden columns, sort). Restoring walks there like you would, so Back / Esc / `<` and drilling deeper keep working, and generated queries are rebuilt against the table's current partition layout.
 - 🔍 **Nested JSON & Map Flattening (`C`)**: Interactive column modal with tree-view drilldown that generates unnesting Trino SQL queries.
 - 🎯 **Advanced Vim Visual Modes**: Visual Line (`V`), Visual Block (`Ctrl+V`), cursor/anchor swap (`o`/`O`), and Shift-drag mouse selection.
 - 📋 **Copy Anything, Export Everything**: Select with the mouse or `v`/`V`/`Ctrl+V`/`Shift+arrows` and copy (`y`, `Cmd+C`); `Ctrl+E` copies or exports the *entire* view (to the clipboard, or to `~/Downloads/lazytrino/*.csv`).
@@ -203,10 +203,12 @@ Works in the catalog / schema / table lists, partition drill-down, and the resul
 
 ### Saved Views Modal (`Ctrl+O` / `B`)
 
+Saved views are stored in `saved_views.json` in the lazyTrino config directory. Files from older versions are migrated automatically (the original is kept as `saved_views.v1.json`), and a file that cannot be read is never overwritten. If the table's partition columns changed since saving, the matching prefix of the partition path is restored and the notification says what was dropped.
+
 | Key | Action |
 | --- | --- |
 | `j` / `k` or `↓` / `↑` | Move through saved views |
-| `Enter` | Restore selected saved view (filters, sorting, column visibility) |
+| `Enter` | Restore the selected view: loads the schema and table lists on the way (so every pane before it is navigable), reopens the table, then its partition path, query and grid state. Any key cancels a restore in progress |
 | `Space` | Toggle multi-selection checkbox on active view |
 | `a` | Select all / Deselect all views |
 | `d` | Delete selected view(s) (prompts `y/n` confirmation) |

@@ -205,6 +205,10 @@ pub struct DrillDownState {
     pub counts_cache: HashMap<Vec<(String, String)>, usize>,
     pub current_count_loading: bool,
     pub path_cursors: HashMap<Vec<(String, String)>, usize>,
+    /// Value to put the cursor on once the current level's values arrive
+    /// (set when going up into a level that was never loaded, e.g. after
+    /// restoring a saved view deep in the hierarchy).
+    pub focus_value: Option<String>,
 }
 
 impl DrillDownState {
@@ -277,7 +281,13 @@ pub struct ActionState {
     /// queries resolve. Gates `Partitions` and `Schema`.
     pub metadata_loading: bool,
     pub drilldown: Option<DrillDownState>,
-    pub pending_view_restore: Option<crate::saved_views::SavedView>,
+    /// SQL the user ran from the query bar, when the current view is not
+    /// the one the app generated for this location. Cleared whenever
+    /// navigation regenerates the query.
+    pub custom_sql: Option<String>,
+    /// Column / partition-expression types, so predicate values are written
+    /// as literals of the right type (see `queries::sql_literal`).
+    pub column_types: crate::trino::queries::ColumnTypes,
     pub pending_action: Option<usize>,
 }
 
@@ -1256,6 +1266,25 @@ pub struct SaveViewPromptState {
     pub view: crate::saved_views::SavedView,
 }
 
+/// Which step a saved-view restore is waiting on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreStage {
+    Schemas,
+    Tables,
+    Metadata,
+    Results,
+}
+
+/// A saved view being rebuilt step by step (lists → table → partitions →
+/// results) as the async results arrive. See `tui::handler::restore`.
+#[derive(Clone, Debug)]
+pub struct RestorePlan {
+    pub view: crate::saved_views::SavedView,
+    pub stage: RestoreStage,
+    /// Things that could not be restored exactly, reported when done.
+    pub notes: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SavedViewsModalState {
     pub views: Vec<crate::saved_views::SavedView>,
@@ -1263,24 +1292,31 @@ pub struct SavedViewsModalState {
     pub scroll: usize,
     pub selected_ids: std::collections::HashSet<String>,
     pub pending_delete_ids: Vec<String>,
+    /// Trino URL of the current connection, to flag views saved elsewhere.
+    pub current_url: String,
 }
 
 impl SavedViewsModalState {
     pub fn new() -> Self {
-        let views = crate::saved_views::load_saved_views();
+        let views = crate::saved_views::load_saved_views().unwrap_or_default();
         Self {
             views,
             selected: 0,
             scroll: 0,
             selected_ids: std::collections::HashSet::new(),
             pending_delete_ids: Vec::new(),
+            current_url: String::new(),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Serialized by name (`table_view`, `table_ddl`, …) so saved views do not
+/// depend on the menu order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Action {
     TableView,
+    #[serde(rename = "table_ddl")]
     TableDDL,
     Schema,
     ShowStats,
@@ -1298,6 +1334,15 @@ pub const ACTIONS: &[(char, &str, Action)] = &[
 ];
 
 impl Action {
+    /// Position of this action in the menu (`ACTIONS`).
+    pub fn index(self) -> usize {
+        ACTIONS.iter().position(|(_, _, a)| *a == self).unwrap_or(0)
+    }
+
+    pub fn label(self) -> &'static str {
+        ACTIONS[self.index()].1
+    }
+
     pub fn build_query(&self, catalog: &str, schema: &str, table: &str) -> String {
         match self {
             Action::TableView => crate::trino::queries::page_query(catalog, schema, table, 0, 100),
@@ -1360,6 +1405,7 @@ pub struct App {
     pub help_scroll: usize,
     pub saved_views_modal: Option<SavedViewsModalState>,
     pub save_view_prompt: Option<SaveViewPromptState>,
+    pub restore: Option<RestorePlan>,
     pub applied_filters_modal: Option<AppliedFiltersModalState>,
     pub last_selected_catalog: usize,
     pub last_selected_schema: HashMap<String, usize>,
@@ -1420,6 +1466,7 @@ impl App {
             help_modal: None,
             help_scroll: 0,
             saved_views_modal: None,
+            restore: None,
             save_view_prompt: None,
             applied_filters_modal: None,
             last_selected_catalog: 0,

@@ -395,6 +395,7 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
     let mut copied_text = None;
     let mut exit_mode = false;
     let mut command = None;
+    let mut ran_custom_sql = None;
     let vim_ctx = {
         let (w, h) = crossterm::terminal::size().unwrap_or((120, 40));
         super::query_vim::Ctx {
@@ -462,6 +463,9 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
                 Ok(full_sql) => {
                     state.invalid_query_error = None;
                     state.clear_selection();
+                    // Column filters / hidden columns now build on this SQL.
+                    state.base_query = None;
+                    ran_custom_sql = Some(full_sql.clone());
                     exit_mode = true;
                     command = Some(Command::ExecuteQuery {
                         query: full_sql,
@@ -586,6 +590,9 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
     {
         a.query_buffer = r.query_buffer.clone();
         a.query_cursor = r.query_cursor;
+        if ran_custom_sql.is_some() {
+            a.custom_sql = ran_custom_sql;
+        }
     }
 
     if exit_mode {
