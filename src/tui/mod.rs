@@ -18,9 +18,15 @@ pub mod theme;
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+        supports_keyboard_enhancement,
+    },
 };
 use ratatui::Terminal;
 use std::io::stdout;
@@ -34,6 +40,7 @@ mod screens {
     pub mod column_modal;
     pub mod connect;
     pub mod drilldown;
+    pub mod export_modal;
     pub mod filter_modal;
     pub mod help;
     pub mod modal;
@@ -51,11 +58,26 @@ pub async fn run(app: &mut App) -> Result<()> {
     let mut stderr = stdout();
     execute!(stderr, EnterAlternateScreen, EnableMouseCapture)?;
 
+    // On terminals speaking the kitty keyboard protocol, ask for unambiguous
+    // key reports. Without this Ctrl+Shift+C is indistinguishable from Ctrl+C
+    // (which quits) and Cmd+C is never reported at all. Unsupported terminals
+    // are left untouched.
+    let enhanced_keys = supports_keyboard_enhancement().unwrap_or(false);
+    if enhanced_keys {
+        execute!(
+            stderr,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+    }
+
     let backend = ratatui::backend::CrosstermBackend::new(stderr);
     let mut terminal = Terminal::new(backend)?;
 
     let res = run_loop(&mut terminal, app).await;
 
+    if enhanced_keys {
+        let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    }
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -97,7 +119,8 @@ async fn run_loop(
             }
         }
 
-        terminal.draw(|frame| draw::ui(frame, app))?;
+        let frame = terminal.draw(|frame| draw::ui(frame, app))?;
+        app.last_frame = frame.buffer.clone();
 
         if app.should_quit {
             break Ok(());

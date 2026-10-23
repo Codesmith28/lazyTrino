@@ -21,6 +21,7 @@ pub mod actions;
 pub mod clipboard;
 pub mod connect_help;
 pub mod drilldown;
+pub mod line_select;
 pub mod list;
 
 pub use actions::*;
@@ -1409,9 +1410,9 @@ pub mod tests {
         };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
 
-        // 8. Shift+Right moves 5 columns right
-        let shift_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::SHIFT);
-        actions_keys(&mut app, shift_right);
+        // 8. Ctrl+Right moves 5 columns right
+        let ctrl_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_right);
         let Screen::Actions(state) = &app.screen else {
             panic!()
         };
@@ -1431,9 +1432,9 @@ pub mod tests {
         };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
 
-        // 11. Shift+Left moves 5 columns left
-        let shift_left = KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::SHIFT);
-        actions_keys(&mut app, shift_left);
+        // 11. Ctrl+Left moves 5 columns left
+        let ctrl_left = KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_left);
         let Screen::Actions(state) = &app.screen else {
             panic!()
         };
@@ -1820,6 +1821,39 @@ pub mod tests {
                 anchor_col: 0
             }
         );
+    }
+
+    #[test]
+    fn test_shift_arrows_extend_selection_one_cell_at_a_time() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+        res.rows = vec![
+            vec!["1".into(), "2".into(), "3".into(), "4".into()],
+            vec!["5".into(), "6".into(), "7".into(), "8".into()],
+        ];
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        let shift = crossterm::event::KeyModifiers::SHIFT;
+        actions_keys(&mut app, KeyEvent::new(KeyCode::Right, shift));
+        actions_keys(&mut app, KeyEvent::new(KeyCode::Right, shift));
+        actions_keys(&mut app, KeyEvent::new(KeyCode::Down, shift));
+
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!((res.selected_row, res.selected_col), (1, 2));
+        // anchored where selection began, spanning 2x3 cells
+        assert!(res.is_cell_selected(0, 0) && res.is_cell_selected(1, 2));
+        assert!(!res.is_cell_selected(0, 3));
     }
 
     #[test]

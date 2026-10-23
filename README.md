@@ -121,7 +121,7 @@ lazyTrino --profile prod
 - 📑 **Saved Table Views (`Ctrl+S` / `Ctrl+O` / `B`)**: Name and persist custom view states (filters, hidden columns, sort orders) with multi-select and batch deletion.
 - 🔍 **Nested JSON & Map Flattening (`C`)**: Interactive column modal with tree-view drilldown that generates unnesting Trino SQL queries.
 - 🎯 **Advanced Vim Visual Modes**: Visual Line (`V`), Visual Block (`Ctrl+V`), cursor/anchor swap (`o`/`O`), and Shift-drag mouse selection.
-- 📋 **Context-Aware Clipboard & Export**: Single cell copy, multi-cell/row CSV export (`y`), and full dataset CSV file dump (`Y`).
+- 📋 **Copy Anything, Export Everything**: Select with the mouse or `v`/`V`/`Ctrl+V`/`Shift+arrows` and copy (`y`, `Cmd+C`); `Ctrl+E` copies or exports the *entire* view (to the clipboard, or to `~/Downloads/lazytrino/*.csv`).
 - 🔃 **Column-wise Sorting (`S`)**: Cycle active column sort: Ascending (`▲`) $\rightarrow$ Descending (`▼`) $\rightarrow$ None.
 - 🎛️ **Column Filtering (`F`)**: Numeric comparator filters (`>`, `<`, `>=`, `<=`, `=`, `!=`, `BETWEEN`) and distinct categorical value checklists.
 - 👁️ **Column Visibility Manager (`C`)**: Hide or display specific columns in wide tables.
@@ -179,19 +179,26 @@ When a table is selected in the menu, press the action hotkey:
 | `Ctrl+S` | Save active view state (prompt for view name) |
 | `Ctrl+O` or `B` | Browse and restore saved views |
 | `q` or `:` | Focus Interactive SQL Query Bar |
-| `Esc` | Return focus to Menu Pane / exit drilldown level / close modal |
+| `Esc` | Clear selection if any; otherwise return focus to Menu Pane / exit drilldown level / close modal |
+| `Ctrl+E` | Copy or export the entire current view (clipboard / CSV file) |
 
-### Vim Visual Modes & Clipboard
+### Selection, Copy & Export
+
+Works in the catalog / schema / table lists, partition drill-down, and the results grid. The Partitions tree and Schema views have no row cursor, so use mouse drag there.
 
 | Key | Mode / Action |
 | --- | --- |
-| `V` | Enter **Visual Line** mode (select entire rows) |
-| `Ctrl+V` | Enter **Visual Block** mode (rectangular cell block selection) |
-| `Shift + Arrow keys` | Automatically enter and extend visual selection |
-| `o` / `O` | Swap cursor and anchor end in visual selection |
-| `y` | Yank selection to clipboard (CSV format for multi-cell/multi-row, raw string for single cell) |
-| `Y` | Yank active row to clipboard / export results to CSV file |
-| `Esc` | Cancel visual mode |
+| Mouse drag | Select anything visible (including record counts, DDL, banners); copied on release and kept highlighted (reverse video in your terminal's own colors) until you click, scroll, type or press `Esc` |
+| `V` | **Visual Line**: select whole rows |
+| `v` / `Ctrl+V` | **Visual / Visual Block**: select a range (grid: rectangular cell block) |
+| `Shift + Arrow keys` | Start and extend a selection (grid: one cell per press; `Ctrl/Alt + ←/→` or `H`/`L` jump 5 columns) |
+| `o` / `O` | Swap cursor and anchor end (grid) |
+| `y` | Copy selection (CSV for multi-cell/row grid selections) and leave visual mode |
+| `Y` | Copy the active grid row(s) as CSV |
+| `Cmd+C` / `Ctrl+Shift+C` | Copy selection, else the focused cell / row. Only reaches lazyTrino if your terminal forwards it (kitty protocol terminals: kitty, WezTerm, Ghostty, foot, recent iTerm2/Alacritty) |
+| `Shift`/`Option` + drag | Your terminal's native selection, with its native copy shortcut |
+| `Esc` | Deselect. Only when something is selected; otherwise `Esc` keeps its usual meaning |
+| `Ctrl+E` | **Copy / export entire view**: choose *Copy to clipboard* or *Export to CSV* (`<Downloads>/lazytrino/<name>_<UTC timestamp>.csv`, never overwrites). Large views default to CSV because a big clipboard copy can freeze the UI |
 
 ### Saved Views Modal (`Ctrl+O` / `B`)
 

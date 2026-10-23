@@ -58,6 +58,16 @@ pub(crate) fn render_selectable_list(
     is_active: bool,
     app: &App,
 ) {
+    // See actions.rs for why this must be gated by pane focus.
+    let line_sel = if is_active {
+        crate::tui::handler::live_line_selection(app)
+    } else {
+        None
+    };
+    let title = match line_sel {
+        Some(sel) => format!("{title}-- {} -- ", sel.kind.label()),
+        None => title.to_string(),
+    };
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
@@ -80,6 +90,10 @@ pub(crate) fn render_selectable_list(
 
     let clamped_selected = selected.min(filtered.len().saturating_sub(1));
 
+    // `highlight_style` is patched over each row's own style; on a cursor row
+    // that is part of a selection it would turn the terminal-native highlight
+    // into cyan-on-white, so it is dropped in that case.
+    let mut cursor_in_selection = false;
     let items: Vec<ListItem> = filtered
         .iter()
         .enumerate()
@@ -89,10 +103,16 @@ pub(crate) fn render_selectable_list(
             let is_mouse_sel =
                 is_active && app.is_area_mouse_selected(inner.x, inner.width, item_y);
 
+            let is_line_sel =
+                line_sel.is_some_and(|sel| sel.contains(clamped_selected, display_idx));
+
             let prefix = format!("{:>3} ", display_idx + 1);
             let is_keyboard_sel = display_idx == clamped_selected;
-            let line = if is_mouse_sel {
-                Line::styled(format!("{prefix}{name}"), theme::selection_style())
+            if display_idx == clamped_selected && (is_mouse_sel || is_line_sel) {
+                cursor_in_selection = true;
+            }
+            let line = if is_mouse_sel || is_line_sel {
+                Line::styled(format!("{prefix}{name}"), theme::text_selection_style())
             } else if is_keyboard_sel {
                 Line::styled(
                     format!("{prefix}{name}"),
@@ -106,7 +126,11 @@ pub(crate) fn render_selectable_list(
         .collect();
 
     let mut list_state = ListState::default().with_selected(Some(clamped_selected));
-    let list = List::new(items).highlight_style(theme::selection_style_for(is_active));
+    let list = List::new(items).highlight_style(if cursor_in_selection {
+        ratatui::style::Style::default()
+    } else {
+        theme::selection_style_for(is_active)
+    });
 
     frame.render_stateful_widget(list, inner, &mut list_state);
 

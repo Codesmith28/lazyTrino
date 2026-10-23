@@ -36,6 +36,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
         return None;
     }
 
+    if app.export_modal.is_some() {
+        // Keyboard-only modal: don't let clicks fall through to the view behind it.
+        return None;
+    }
     if app.filter_modal.is_some() {
         return handle_filter_modal_mouse(app, mouse, term_width, term_height);
     }
@@ -70,15 +74,27 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
         );
     }
 
+    // A finished selection stays painted only until the next mouse gesture;
+    // clicking or scrolling moves content out from under it.
+    if matches!(
+        mouse.kind,
+        MouseEventKind::Down(_)
+            | MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight
+    ) {
+        app.mouse_selection_committed = false;
+    }
+
     let bottom_y = term_height.saturating_sub(7);
     let is_in_table = matches!(app.screen, Screen::Actions(_));
-    let is_table_screen = matches!(app.screen, Screen::Table(_));
+    // Only the Actions screen has a pane divider; the Connect / Catalog /
+    // Schema / Table screens are full width.
     let border_pct = if is_in_table {
         app.actions_panel_pct.clamp(10, 60)
-    } else if is_table_screen {
-        100
     } else {
-        app.main_panel_pct.clamp(20, 80)
+        100
     };
     let border_x = ((term_width as u32 * border_pct as u32) / 100) as u16;
 
@@ -120,11 +136,13 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 }
             }
 
+            // A new mouse gesture supersedes any keyboard row selection.
+            app.line_selection = None;
             app.mouse_selection_anchor = Some((mouse.column, mouse.row));
             app.mouse_selection_current = Some((mouse.column, mouse.row));
             app.is_selecting_text = false;
 
-            let is_on_border = !is_table_screen
+            let is_on_border = is_in_table
                 && mouse.row < bottom_y
                 && (mouse.column as i32 - border_x as i32).abs() <= 1;
 
@@ -343,8 +361,6 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 let pct = ((mouse.column as u32 * 100) / term_width as u32) as u16;
                 if is_in_table {
                     app.actions_panel_pct = pct.clamp(10, 60);
-                } else if !is_table_screen {
-                    app.main_panel_pct = pct.clamp(20, 80);
                 }
             }
         }
@@ -389,6 +405,8 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     let text = extract_selected_text(app, anchor, current);
                     if !text.is_empty() {
                         copy_to_clipboard(&text);
+                        // Keep the copied region highlighted after release.
+                        app.mouse_selection_committed = true;
                         app.copied_toast =
                             Some((text.chars().take(30).collect(), std::time::Instant::now()));
                     }
@@ -584,7 +602,6 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
 }
 
 pub(crate) fn phase1_list_inner_rect(app: &App, term_width: u16, term_height: u16) -> Option<Rect> {
-    let is_table_screen = matches!(app.screen, Screen::Table(_));
     let is_phase1 = matches!(
         app.screen,
         Screen::Catalog(_) | Screen::Schema(_) | Screen::Table(_)
@@ -593,12 +610,7 @@ pub(crate) fn phase1_list_inner_rect(app: &App, term_width: u16, term_height: u1
         return None;
     }
     let bottom_y = term_height.saturating_sub(7);
-    let list_width = if is_table_screen {
-        term_width
-    } else {
-        let pct = app.main_panel_pct.clamp(20, 80);
-        ((term_width as u32 * pct as u32) / 100) as u16
-    };
+    let list_width = term_width;
     let inner_w = list_width.saturating_sub(2).max(1) as usize;
     let search_active = matches!(app.mode, Mode::Search) && !matches!(app.screen, Screen::Help);
     let search_height = if search_active {
@@ -820,7 +832,26 @@ pub fn results_table_inner_rect(app: &App, term_width: u16, term_height: u16) ->
     })
 }
 
+/// Text under a mouse selection. Views with a dedicated extractor (lists,
+/// results grid, schema…) yield structured text such as proper CSV; for
+/// everything else (partition counts, DDL, banners, modals) it falls back
+/// to whatever is on screen in the selected rectangle.
 pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -> String {
+    let text = extract_structured_text(app, anchor, current);
+    if text.is_empty() {
+        crate::tui::handler::screen_text::extract(&app.last_frame, anchor, current)
+    } else {
+        text
+    }
+}
+
+/// True when the selection has no dedicated extractor, i.e. its text comes
+/// from the rendered screen and needs a frame-level highlight.
+pub fn selection_uses_screen_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -> bool {
+    extract_structured_text(app, anchor, current).is_empty()
+}
+
+fn extract_structured_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -> String {
     let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
     if term_width == 0 || term_height == 0 {
         return String::new();
@@ -853,13 +884,7 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
 
     if !is_in_table {
         // Phase 1 screens: Catalog, Schema, Table
-        let is_table_screen = matches!(app.screen, Screen::Table(_));
-        let list_pct = if is_table_screen {
-            100
-        } else {
-            app.main_panel_pct.clamp(20, 80)
-        };
-        let border_x = ((term_width as u32 * list_pct as u32) / 100) as u16;
+        let border_x = term_width;
 
         let inner_w = border_x.saturating_sub(2).max(1) as usize;
         let search_active = matches!(app.mode, Mode::Search);
@@ -1342,8 +1367,11 @@ fn handle_help_modal_mouse(
         }
         MouseEventKind::ScrollDown => {
             if let Some(ref mut m) = app.help_modal {
-                let total_lines =
-                    crate::tui::screens::help::build_help_lines(&m.search_query).len();
+                let total_lines = crate::tui::screens::help::wrapped_help_lines(
+                    &m.search_query,
+                    ratatui::layout::Rect::new(0, 0, term_width, term_height),
+                )
+                .len();
                 let content_h = (popup_area.height.saturating_sub(6) as usize).max(1);
                 let max_scroll = total_lines.saturating_sub(content_h);
                 m.scroll = (m.scroll + 3).min(max_scroll);
@@ -2089,6 +2117,114 @@ mod tests {
         handle_mouse_sync(&mut app, right_click);
         let toast = app.copied_toast.as_ref().unwrap().0.clone();
         assert!(toast.contains("cell block (CSV)"));
+    }
+
+    #[test]
+    fn test_drag_selection_stays_highlighted_until_the_next_gesture() {
+        use crate::tui::handler::handle_key_sync;
+        use crossterm::event::{KeyCode, KeyEvent};
+        use ratatui::style::Modifier;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        fn drag_select(app: &mut App, x: u16, y0: u16, y1: u16) {
+            let ev = |kind, row| MouseEvent {
+                kind,
+                column: x,
+                row,
+                modifiers: KeyModifiers::NONE,
+            };
+            handle_mouse_sync(app, ev(MouseEventKind::Down(MouseButton::Left), y0));
+            handle_mouse_sync(app, ev(MouseEventKind::Drag(MouseButton::Left), y1));
+            handle_mouse_sync(app, ev(MouseEventKind::Up(MouseButton::Left), y1));
+        }
+
+        fn catalog_app() -> App {
+            let mut app = sample_app();
+            app.screen = Screen::Catalog(CatalogState {
+                items: vec!["hive".into(), "iceberg".into(), "delta".into()],
+                selected: 0,
+            });
+            app
+        }
+
+        let inner = phase1_list_inner_rect(&catalog_app(), 80, 24).expect("inner rect");
+        let name_x = inner.x + 4; // after the "  1 " number prefix
+        let reversed_rows = |app: &App| -> Vec<bool> {
+            let mut t = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            t.draw(|f| crate::tui::draw::ui(f, app)).unwrap();
+            let buf = t.backend().buffer().clone();
+            (0..3)
+                .map(|i| {
+                    let c = buf.cell((name_x, inner.y + i)).unwrap();
+                    c.modifier.contains(Modifier::REVERSED)
+                })
+                .collect()
+        };
+
+        // Released selection is committed and stays painted: terminal colors, reverse video.
+        let mut app = catalog_app();
+        drag_select(&mut app, name_x, inner.y, inner.y + 1);
+        assert!(app.mouse_selection_committed && !app.is_selecting_text);
+        assert_eq!(reversed_rows(&app), vec![true, true, false]);
+        let cell = {
+            let mut t = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            t.draw(|f| crate::tui::draw::ui(f, &app)).unwrap();
+            t.backend()
+                .buffer()
+                .cell((name_x, inner.y))
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(
+            (cell.fg, cell.bg),
+            (ratatui::style::Color::Reset, ratatui::style::Color::Reset),
+            "selection must use the terminal's own colors"
+        );
+
+        // `y` acts on the selection, so it stays.
+        handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('y')));
+        assert!(app.mouse_selection_committed);
+
+        // Esc deselects without leaving the screen.
+        handle_key_sync(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert!(!app.mouse_selection_committed);
+        assert_eq!(reversed_rows(&app), vec![false, false, false]);
+        assert!(matches!(app.screen, Screen::Catalog(_)));
+
+        // Anything that could move content under it clears the highlight.
+        for clear in ["key", "scroll", "click"] {
+            let mut app = catalog_app();
+            drag_select(&mut app, name_x, inner.y, inner.y + 1);
+            assert!(app.mouse_selection_committed, "{clear}");
+            match clear {
+                "key" => {
+                    handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('j')));
+                }
+                "scroll" => {
+                    handle_mouse_sync(
+                        &mut app,
+                        MouseEvent {
+                            kind: MouseEventKind::ScrollDown,
+                            column: name_x,
+                            row: inner.y,
+                            modifiers: KeyModifiers::NONE,
+                        },
+                    );
+                }
+                _ => {
+                    handle_mouse_sync(
+                        &mut app,
+                        MouseEvent {
+                            kind: MouseEventKind::Down(MouseButton::Left),
+                            column: name_x,
+                            row: inner.y + 2,
+                            modifiers: KeyModifiers::NONE,
+                        },
+                    );
+                }
+            }
+            assert!(!app.mouse_selection_committed, "{clear} should clear it");
+        }
     }
 
     #[test]

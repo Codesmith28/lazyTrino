@@ -40,6 +40,7 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
         Mode::SavedViewsModal => {
             Some(" Space:toggle  a:all/none  Enter:restore  d/Del:delete  j/k:move  Esc:close ")
         }
+        Mode::ExportModal => Some(" c:clipboard  e:CSV file  j/k:move  Enter:confirm  Esc:cancel "),
         Mode::SaveViewPrompt => Some(" Type:name  Bksp:del  Enter:save  Esc:cancel "),
         Mode::Search => Some(" Type:filter  Bksp:del  Enter:close  Esc:clear "),
         Mode::QueryInput => Some(" Enter:run  Esc:cancel  Ctrl+A:all  Ctrl+C:copy  Ctrl+V:paste "),
@@ -51,12 +52,12 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
             };
             match screen {
                 Screen::Connect(_) => Some(" Tab:next field  Enter:connect  ?:help  Ctrl+C:quit "),
-                Screen::Catalog(_) => {
-                    Some(" j/k:move  l/Enter:select  /:search  ?:help  Ctrl+C:quit ")
-                }
-                Screen::Schema(_) | Screen::Table(_) => {
-                    Some(" j/k:move  l/Enter:select  h/Esc:back  /:search  ?:help  Ctrl+C:quit ")
-                }
+                Screen::Catalog(_) => Some(
+                    " j/k:move  l/Enter:select  /:search  V:select  ^E:export  ?:help  Ctrl+C:quit ",
+                ),
+                Screen::Schema(_) | Screen::Table(_) => Some(
+                    " j/k:move  l/Enter:select  h/Esc:back  /:search  V:select  ^E:export  ?:help  Ctrl+C:quit ",
+                ),
                 Screen::Actions(state) => {
                     let selected_action = ACTIONS.get(state.selected).map(|(_, _, action)| *action);
 
@@ -69,31 +70,31 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
                                 if state.results.is_some() && state.drilldown.is_some() =>
                             {
                                 Some(
-                                    " hjkl/←→:cells  <:up  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                    " hjkl/←→:cells  <:up  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
                                 )
                             }
                             Some(Action::TableView) if state.results.is_some() => Some(
-                                " hjkl/←→:cells  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                " hjkl/←→:cells  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
                             ),
                             Some(Action::Partitions) if !app.partition_tree_lines.is_empty() => {
                                 Some(
-                                    " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                    " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
                                 )
                             }
                             Some(Action::Schema) if !app.vertical_schema_cols.is_empty() => Some(
-                                " j/k:scroll  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                " j/k:scroll  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
                             ),
                             _ if state.results.is_some() => Some(
-                                " hjkl/←→:cells  S:sort  C:cols  F:filter  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                " hjkl/←→:cells  S:sort  C:cols  F:filter  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
                             ),
                             Some(Action::TableView) if state.drilldown.is_some() => Some(
-                                " j/k:move  >/Enter:drill  <:up  u:clear sel  q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                " j/k:move  >/Enter:drill  <:up  u:clear sel  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
                             ),
                             Some(Action::TableView) => Some(
-                                " q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                " q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
                             ),
                             _ => Some(
-                                " q/:query  Esc:menu  Tab:pane  v/c/e/t/m/p:action  ?:help  Ctrl+C:quit ",
+                                " q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
                             ),
                         },
                     }
@@ -102,6 +103,67 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
             }
         }
     }
+}
+
+/// Self-describing status toast for copy/export results and failures. Wider
+/// than the plain `Copied:` toast because it can carry a file path.
+pub fn render_notice_toast(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(notice) = app.notice_toast.as_ref().filter(|n| n.is_active()) else {
+        return;
+    };
+    if area.width < TOAST_MIN_W + 2 || area.height < TOAST_H + 1 {
+        return;
+    }
+
+    let max_w = area.width.saturating_sub(2).min(110);
+    let icon = match notice.kind {
+        crate::app::NoticeKind::Success => "✔",
+        crate::app::NoticeKind::Error => "✖",
+    };
+    let text = format!(" {icon} {} ", sanitize_toast_text(&notice.text));
+    let toast_w = (text.chars().count() as u16 + 2).clamp(TOAST_MIN_W, max_w);
+    let toast_area = Rect {
+        x: area.x + area.width - toast_w - 1,
+        y: area.y + 1,
+        width: toast_w,
+        height: TOAST_H,
+    };
+    let style = match notice.kind {
+        crate::app::NoticeKind::Success => theme::toast_style(),
+        crate::app::NoticeKind::Error => theme::error_toast_style(),
+    };
+
+    frame.render_widget(ratatui::widgets::Clear, toast_area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(style);
+    let inner = block.inner(toast_area);
+    frame.render_widget(block, toast_area);
+    frame.render_widget(
+        Paragraph::new(Line::from(truncate_middle(&text, inner.width as usize)))
+            .style(style)
+            .alignment(Alignment::Center),
+        inner,
+    );
+}
+
+/// Keeps both ends (action and file name) when a message is too wide.
+pub(crate) fn truncate_middle(text: &str, width: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= width {
+        return text.to_string();
+    }
+    if width <= 1 {
+        return "…".to_string();
+    }
+    let keep = width - 1;
+    let head = keep / 2 + keep % 2;
+    let tail = keep - head;
+    let mut out: String = chars[..head].iter().collect();
+    out.push('…');
+    out.extend(&chars[chars.len() - tail..]);
+    out
 }
 
 pub(crate) fn sanitize_toast_text(s: &str) -> String {

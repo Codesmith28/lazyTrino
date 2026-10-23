@@ -18,7 +18,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        Wrap,
     },
 };
 
@@ -33,8 +32,9 @@ const HELP_SECTIONS: &[HelpSection] = &[
     HelpSection {
         title: "Active Pane Concept & Layout",
         items: &[
-            "  All Tables View               Left: Catalogs/Schemas/Tables | Right: Help Pane",
+            "  All Tables View               Catalogs / Schemas / Tables list (full width)",
             "  Inside Table View             Left: Menu Pane (15%) | Right: Query & Main Preview (85%)",
+            "  ?                             Open this help (search with /, scroll with j/k)",
             "  Shift+H/L / Shift+←/→ / Tab / Click  Switch focus between Menu Pane (left) and Preview Pane (right)",
             "  Option Selection              Selecting a menu option shifts focus to Preview Pane while option stays highlighted",
         ],
@@ -48,8 +48,8 @@ const HELP_SECTIONS: &[HelpSection] = &[
             "  PgUp / Ctrl+u / Ctrl+b         Scroll page up",
             "  h / ← / [ / ,                  Move cell cursor left / scroll columns left",
             "  l / → / ] / .                  Move cell cursor right / scroll columns right",
-            "  H / Ctrl+← / Shift+←           Jump 5 columns left",
-            "  L / Ctrl+→ / Shift+→           Jump 5 columns right",
+            "  H / Ctrl+← / Alt+←             Jump 5 columns left",
+            "  L / Ctrl+→ / Alt+→             Jump 5 columns right",
             "  Home / 0                       Jump to first column / beginning of list",
             "  End / $                        Jump to last column / end of list",
             "  Mouse Wheel / Drag             Wheel on scrollbar/header or drag scrollbar to scroll columns",
@@ -58,10 +58,30 @@ const HELP_SECTIONS: &[HelpSection] = &[
             "  F / f                          Open filter modal for the current column",
             "  A / a                          Open applied filters modal (view/delete active partition & column filters)",
             "  S                              Toggle column sorting (desc -> asc -> none)",
-            "  y                              Copy loaded result grid as CSV (Y exports to CSV file)",
+            "  y                              Copy selection (or the whole list / loaded grid as CSV when nothing is selected)",
             "  u                              Clear / undo active selection (visual mode or mouse drag)",
-            "  Esc                            Clear selection / switch focus to Menu Pane / Go back",
+            "  Esc                            Clear selection first; with nothing selected: focus Menu Pane / Go back",
             "  Enter                          Select menu option & focus Preview Pane",
+        ],
+    },
+    HelpSection {
+        title: "Selection, Copy & Export",
+        items: &[
+            "  Mouse drag                     Select anything on screen; copied on release and kept highlighted",
+            "                                 (in your terminal's own colors) until you click, scroll, type or press Esc",
+            "  Shift+↑ / ↓ (/ ← →)            Start / extend a selection (in the grid, ← → move one cell)",
+            "  V                              Visual line: select whole rows (lists, partition values, grid)",
+            "  v / Ctrl+V                     Visual / block: select a range (grid: cell block)",
+            "  y                              Copy the selection (and leave visual mode)",
+            "  Esc                            Deselect (only when a selection exists; otherwise its usual meaning)",
+            "  Cmd+C / Ctrl+Shift+C           Copy selection, else the focused cell / row (needs a terminal",
+            "                                 that forwards the key; otherwise use y or drag-select)",
+            "  Shift+drag / Option+drag       Use the terminal's own selection and its native copy shortcut",
+            "  Ctrl+E                         Copy or export the ENTIRE view: pick clipboard or CSV file",
+            "                                 (~/Downloads/lazytrino/<name>_<timestamp>.csv)",
+            "                                 Large views default to CSV export (clipboard copy can freeze the UI)",
+            "  Partition rows                 Copied exactly as shown, with the record count beside the value",
+            "  Partitions tree / Schema       Drag to select; Ctrl+E for the whole view (no row cursor to use v / V)",
         ],
     },
     HelpSection {
@@ -88,7 +108,8 @@ const HELP_SECTIONS: &[HelpSection] = &[
             "  < / ←                          Go up one partition level (no-op at the top level)",
             "                                 In the leaf record grid, < still goes up a level;",
             "                                 h / j / k / l navigates cells across rows and columns",
-            "  Esc                            Always returns to the Menu Pane, regardless of drill-down depth",
+            "  Esc                            Clears a selection if there is one, otherwise returns to the Menu Pane",
+            "                                 (regardless of drill-down depth)",
         ],
     },
     HelpSection {
@@ -155,18 +176,134 @@ pub fn build_help_lines(search_query: &str) -> Vec<Line<'static>> {
     help_text
 }
 
-pub fn render_side_panel(frame: &mut Frame, area: Rect) {
-    let block = Block::default()
-        .title(" Help & Keybindings ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(theme::border_style(false));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+/// Width the help text is wrapped to inside the help modal for a terminal of
+/// size `area`: the modal's inner width minus the scrollbar column.
+pub fn content_width(area: Rect) -> usize {
+    wrap_width(
+        crate::tui::screens::modal::modal_large(area)
+            .width
+            .saturating_sub(2),
+    )
+}
 
-    let help_lines = build_help_lines("");
-    let paragraph = Paragraph::new(help_lines).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, inner);
+fn wrap_width(inner_width: u16) -> usize {
+    (inner_width as usize).saturating_sub(1).max(10)
+}
+
+/// Help lines already wrapped for the modal at terminal size `area`, so
+/// scrolling math (which counts rows) matches what is drawn.
+pub fn wrapped_help_lines(search_query: &str, area: Rect) -> Vec<Line<'static>> {
+    wrap_help_lines(build_help_lines(search_query), content_width(area))
+}
+
+/// Word-wraps help lines to `width` columns. Continuation rows are indented
+/// to the item's description column ("  key      description" keeps its
+/// hanging indent), so wrapped entries stay readable.
+pub fn wrap_help_lines(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
+    let mut out = Vec::with_capacity(lines.len());
+    for line in lines {
+        if line.width() <= width {
+            out.push(line);
+            continue;
+        }
+        let style = line.spans.first().map(|s| s.style).unwrap_or_default();
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        for row in wrap_text(&text, width) {
+            out.push(Line::from(Span::styled(row, style)));
+        }
+    }
+    out
+}
+
+fn text_width(s: &str) -> usize {
+    Span::raw(s).width()
+}
+
+/// Column where an item's description starts: after the key column's run of
+/// 2+ spaces, or the leading indent for continuation / plain lines.
+fn hanging_indent(text: &str, width: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let lead = chars.iter().take_while(|c| **c == ' ').count();
+    let mut indent = lead;
+    if lead < 8 {
+        let mut i = lead;
+        while i + 1 < chars.len() {
+            if chars[i] == ' ' && chars[i + 1] == ' ' {
+                let mut j = i;
+                while j < chars.len() && chars[j] == ' ' {
+                    j += 1;
+                }
+                if j < chars.len() {
+                    indent = j;
+                }
+                break;
+            }
+            i += 1;
+        }
+    }
+    // Never let the indent starve the text of room.
+    if indent + 12 > width {
+        lead.min(width / 4)
+    } else {
+        indent
+    }
+}
+
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let indent = hanging_indent(text, width);
+    let chars: Vec<char> = text.chars().collect();
+    let head: String = chars.iter().take(indent).collect();
+    let body: String = chars.iter().skip(indent).collect();
+    let room = width.saturating_sub(indent).max(1);
+
+    let mut rows: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for word in body.split_whitespace() {
+        let mut word = word.to_string();
+        // hard-split words wider than a whole row
+        while text_width(&word) > room {
+            if !cur.is_empty() {
+                rows.push(std::mem::take(&mut cur));
+            }
+            let mut piece = String::new();
+            let mut rest = String::new();
+            for ch in word.chars() {
+                if rest.is_empty() && text_width(&piece) + text_width(&ch.to_string()) <= room {
+                    piece.push(ch);
+                } else {
+                    rest.push(ch);
+                }
+            }
+            if piece.is_empty() {
+                break;
+            }
+            rows.push(piece);
+            word = rest;
+        }
+        if cur.is_empty() {
+            cur = word;
+        } else if text_width(&cur) + 1 + text_width(&word) <= room {
+            cur.push(' ');
+            cur.push_str(&word);
+        } else {
+            rows.push(std::mem::take(&mut cur));
+            cur = word;
+        }
+    }
+    if !cur.is_empty() || rows.is_empty() {
+        rows.push(cur);
+    }
+
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            if i == 0 {
+                format!("{head}{row}")
+            } else {
+                format!("{}{row}", " ".repeat(indent))
+            }
+        })
+        .collect()
 }
 
 pub fn render_modal(
@@ -236,7 +373,10 @@ pub fn render_modal(
     };
     frame.render_widget(Paragraph::new(search_line), s_inner);
 
-    let help_lines = build_help_lines(search_query);
+    let help_lines = wrap_help_lines(
+        build_help_lines(search_query),
+        wrap_width(content_area.width),
+    );
     let total_lines = help_lines.len();
     let visible_height = content_area.height as usize;
     let max_scroll = total_lines.saturating_sub(visible_height);
@@ -324,14 +464,102 @@ mod tests {
             .unwrap();
     }
 
+    fn plain(lines: &[Line]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
     #[test]
-    fn test_help_render_side_panel() {
-        let backend = TestBackend::new(50, 30);
+    fn wrapped_rows_never_exceed_width_and_lose_no_characters() {
+        for width in [20usize, 30, 45, 60, 100] {
+            let original = build_help_lines("");
+            let wrapped = wrap_help_lines(original.clone(), width);
+            for row in plain(&wrapped) {
+                assert!(
+                    Span::raw(row.as_str()).width() <= width,
+                    "width {width}: row too wide: {row:?}"
+                );
+            }
+            // Overlong tokens may be hard-split, so compare characters, not words.
+            let chars = |ls: &[Line]| -> String {
+                plain(ls)
+                    .concat()
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect()
+            };
+            assert_eq!(
+                chars(&original),
+                chars(&wrapped),
+                "width {width}: text changed"
+            );
+        }
+    }
+
+    #[test]
+    fn wrapped_description_hangs_under_the_description_column() {
+        let line = Line::from(
+            "  Ctrl+E                         Copy or export the ENTIRE view: pick clipboard or CSV file",
+        );
+        let rows = plain(&wrap_help_lines(vec![line], 60));
+        assert!(rows.len() >= 2, "{rows:?}");
+        assert!(rows[0].starts_with("  Ctrl+E"));
+        let indent = rows[0].find("Copy").unwrap();
+        for cont in &rows[1..] {
+            assert!(cont.starts_with(&" ".repeat(indent)), "{cont:?}");
+            assert!(!cont[indent..].starts_with(' '), "{cont:?}");
+        }
+    }
+
+    #[test]
+    fn short_lines_and_blank_lines_are_untouched() {
+        let lines = vec![Line::from(""), Line::from("  j / ↓   Move down")];
+        assert_eq!(plain(&wrap_help_lines(lines.clone(), 80)), plain(&lines));
+    }
+
+    #[test]
+    fn overlong_words_are_hard_split_instead_of_dropped() {
+        let long = format!("  key   {}", "x".repeat(50));
+        let rows = plain(&wrap_help_lines(vec![Line::from(long)], 24));
+        assert!(
+            rows.iter().all(|r| Span::raw(r.as_str()).width() <= 24),
+            "{rows:?}"
+        );
+        assert_eq!(rows.join("").matches('x').count(), 50);
+    }
+
+    #[test]
+    fn modal_on_a_narrow_terminal_shows_wrapped_text_not_cut_off_text() {
+        let backend = TestBackend::new(60, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| {
-                render_side_panel(f, f.area());
-            })
+            .draw(|f| render_modal(f, f.area(), "", false, 0))
             .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let out: String = (0..40)
+            .map(|y| {
+                (0..60)
+                    .map(|x| buf.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // This long entry only fits on one row when truncated; wrapped, its tail
+        // ("pane") must still be visible somewhere in the first screenful.
+        assert!(out.contains("Switch focus"), "{out}");
+        assert!(out.contains("Menu Pane"), "{out}");
+    }
+
+    #[test]
+    fn pagedown_and_mouse_math_agree_with_what_is_drawn() {
+        let area = Rect::new(0, 0, 70, 30);
+        let drawn = wrap_help_lines(build_help_lines(""), content_width(area));
+        assert_eq!(drawn.len(), wrapped_help_lines("", area).len());
+        assert!(
+            drawn.len() > build_help_lines("").len(),
+            "narrow area should wrap"
+        );
     }
 }

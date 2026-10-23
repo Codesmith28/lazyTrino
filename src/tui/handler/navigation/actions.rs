@@ -461,11 +461,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                         crate::app::VisualMode::Block { .. } => {}
                                     }
                                 }
-                                let step = if is_ctrl
-                                    || is_shift
-                                    || is_alt
-                                    || code == KeyCode::Char('H')
-                                {
+                                // Shift+arrow extends a selection one column at a time;
+                                // Ctrl/Alt+arrow and H/L jump.
+                                let step = if is_ctrl || is_alt || code == KeyCode::Char('H') {
                                     5
                                 } else {
                                     1
@@ -492,11 +490,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                         crate::app::VisualMode::Block { .. } => {}
                                     }
                                 }
-                                let step = if is_ctrl
-                                    || is_shift
-                                    || is_alt
-                                    || code == KeyCode::Char('L')
-                                {
+                                // Shift+arrow extends a selection one column at a time;
+                                // Ctrl/Alt+arrow and H/L jump.
+                                let step = if is_ctrl || is_alt || code == KeyCode::Char('L') {
                                     5
                                 } else {
                                     1

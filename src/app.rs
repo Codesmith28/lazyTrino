@@ -227,6 +227,14 @@ impl DrillDownState {
         self.partition_cols.get(self.path.len()).map(|s| s.as_str())
     }
 
+    /// Cached record count for `value` at the level currently displayed.
+    pub fn count_for_value(&self, value: &str) -> Option<usize> {
+        let column = self.next_column()?;
+        let mut key = self.path.clone();
+        key.push((column.to_string(), value.to_string()));
+        self.counts_cache.get(&key).copied()
+    }
+
     /// Gets the cached count for the current partition path (or table count if path is empty).
     pub fn current_count(&self) -> Option<usize> {
         self.counts_cache
@@ -803,6 +811,7 @@ pub enum Mode {
     SavedViewsModal,
     SaveViewPrompt,
     AppliedFiltersModal,
+    ExportModal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1086,6 +1095,103 @@ pub struct HelpModalState {
     pub scroll: usize,
 }
 
+/// Which vim-style visual key started a keyboard selection in a list view.
+/// List rows are single-column, so all three select a contiguous row range;
+/// the kind only drives the `-- VISUAL ... --` indicator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineSelectKind {
+    Line,
+    Char,
+    Block,
+}
+
+impl LineSelectKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            LineSelectKind::Line => "VISUAL LINE",
+            LineSelectKind::Char => "VISUAL",
+            LineSelectKind::Block => "VISUAL BLOCK",
+        }
+    }
+}
+
+/// Keyboard row-range selection for cursor-based list views (catalog /
+/// schema / table lists and the partition drill-down). The selection spans
+/// `anchor..=cursor`, where the cursor is the view's own selected index
+/// (so it keeps following `j`/`k`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LineSelection {
+    pub anchor: usize,
+    pub kind: LineSelectKind,
+    /// Fingerprint of the view (screen, drill-down path, search filter, row
+    /// count) the selection was made in. Async results or a changed filter
+    /// can replace the list under an index-based anchor; a selection whose
+    /// scope no longer matches is discarded instead of highlighting the
+    /// wrong rows.
+    pub scope: u64,
+}
+
+impl LineSelection {
+    pub fn range(self, cursor: usize) -> (usize, usize) {
+        (self.anchor.min(cursor), self.anchor.max(cursor))
+    }
+
+    pub fn contains(self, cursor: usize, idx: usize) -> bool {
+        let (lo, hi) = self.range(cursor);
+        idx >= lo && idx <= hi
+    }
+}
+
+/// Snapshot of whatever view "copy / export entire view" acts on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ViewExport {
+    /// Human-readable name shown in the modal title.
+    pub title: String,
+    /// Base for the exported file name (sanitized, without extension).
+    pub file_stem: String,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    /// Extra caveat shown in the modal (e.g. only loaded rows are included).
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportModalState {
+    pub view: ViewExport,
+    /// 0 = copy to clipboard, 1 = export to CSV file.
+    pub selected: usize,
+    pub size_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoticeKind {
+    Success,
+    Error,
+}
+
+/// A self-describing status message (unlike `copied_toast`, which is always
+/// rendered as `Copied: "..."`), used for copy/export results and failures.
+#[derive(Clone, Debug)]
+pub struct NoticeToast {
+    pub text: String,
+    pub kind: NoticeKind,
+    pub at: std::time::Instant,
+}
+
+impl NoticeToast {
+    /// Errors stay up longer than successes so they can actually be read.
+    pub fn ttl(&self) -> std::time::Duration {
+        match self.kind {
+            NoticeKind::Success => std::time::Duration::from_secs(4),
+            NoticeKind::Error => std::time::Duration::from_secs(7),
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.at.elapsed() < self.ttl()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SaveViewPromptState {
     pub name_input: String,
@@ -1177,7 +1283,17 @@ pub struct App {
     pub mouse_selection_anchor: Option<(u16, u16)>,
     pub mouse_selection_current: Option<(u16, u16)>,
     pub is_selecting_text: bool,
+    /// A finished mouse selection (already copied) that stays highlighted
+    /// until the next click, scroll, key press or Esc.
+    pub mouse_selection_committed: bool,
     pub copied_toast: Option<(String, std::time::Instant)>,
+    pub notice_toast: Option<NoticeToast>,
+    /// Keyboard row-range selection in list views; see [`LineSelection`].
+    pub line_selection: Option<LineSelection>,
+    pub export_modal: Option<ExportModalState>,
+    /// Last fully rendered frame. Lets text selection fall back to "what is
+    /// on screen" for any view that has no dedicated extractor.
+    pub last_frame: ratatui::buffer::Buffer,
     pub filter_modal: Option<FilterModalState>,
     pub column_modal: Option<ColumnModalState>,
     pub help_modal: Option<HelpModalState>,
@@ -1232,7 +1348,12 @@ impl App {
             mouse_selection_anchor: None,
             mouse_selection_current: None,
             is_selecting_text: false,
+            mouse_selection_committed: false,
             copied_toast: None,
+            notice_toast: None,
+            line_selection: None,
+            export_modal: None,
+            last_frame: ratatui::buffer::Buffer::default(),
             filter_modal: None,
             column_modal: None,
             help_modal: None,
@@ -1284,6 +1405,48 @@ impl App {
     pub fn clear_mouse_selection(&mut self) {
         self.mouse_selection_anchor = None;
         self.mouse_selection_current = None;
+        self.mouse_selection_committed = false;
+        // A keyboard row selection is just as stale once focus or screen changes.
+        self.line_selection = None;
+    }
+
+    /// True if any kind of selection (mouse drag, list row range, or grid
+    /// visual mode) is currently showing. Esc clears these before doing
+    /// anything else.
+    pub fn has_active_selection(&self) -> bool {
+        // Only a drag in progress counts as a mouse selection: a bare click
+        // leaves anchors behind that aren't visible, and Esc must not be
+        // swallowed deselecting something the user can't see.
+        if self.mouse_highlight_active() || self.line_selection.is_some() {
+            return true;
+        }
+        matches!(&self.screen, Screen::Actions(s)
+            if s.results.as_ref().is_some_and(|r| r.is_in_visual_mode()))
+    }
+
+    /// True while a mouse selection should be painted: during the drag, and
+    /// after release until something invalidates it.
+    pub fn mouse_highlight_active(&self) -> bool {
+        self.is_selecting_text || self.mouse_selection_committed
+    }
+
+    pub fn clear_all_selections(&mut self) {
+        self.clear_mouse_selection();
+        self.is_selecting_text = false;
+        self.mouse_selection_committed = false;
+        if let Screen::Actions(s) = &mut self.screen
+            && let Some(res) = s.results.as_mut()
+        {
+            res.exit_visual_mode();
+        }
+    }
+
+    pub fn set_notice(&mut self, kind: NoticeKind, text: impl Into<String>) {
+        self.notice_toast = Some(NoticeToast {
+            text: text.into(),
+            kind,
+            at: std::time::Instant::now(),
+        });
     }
 
     pub fn has_mouse_selection(&self) -> bool {
@@ -1320,7 +1483,7 @@ impl App {
         area_y: u16,
         area_h: u16,
     ) -> bool {
-        if !self.is_selecting_text {
+        if !self.mouse_highlight_active() {
             return false;
         }
         if let (Some((a_x, a_y)), Some((c_x, c_y))) =

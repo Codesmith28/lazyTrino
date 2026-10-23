@@ -208,10 +208,13 @@ fn next_word_pos(s: &str, cursor: usize) -> usize {
     i
 }
 
+pub(crate) fn try_copy_to_clipboard(text: &str) -> Result<(), String> {
+    let mut board = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    board.set_text(text).map_err(|e| e.to_string())
+}
+
 pub(crate) fn copy_to_clipboard(text: &str) {
-    if let Ok(mut board) = arboard::Clipboard::new() {
-        let _ = board.set_text(text);
-    }
+    let _ = try_copy_to_clipboard(text);
 }
 
 pub(super) fn paste_from_clipboard() -> Option<String> {

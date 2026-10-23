@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::{ACTIONS, ActivePanel, App, Screen};
+use crate::app::{ACTIONS, ActivePanel, App, NoticeKind, Screen};
 use crate::tui::handler::{mouse, query};
 
+use super::line_select;
 use super::list::filter_items;
 
 pub fn format_csv_cell(val: &str) -> String {
@@ -114,6 +115,60 @@ pub fn copy_active_pane_content(app: &mut App) {
         query::copy_to_clipboard(&text_to_copy);
         app.copied_toast = Some((toast_summary(&text_to_copy), std::time::Instant::now()));
     }
+}
+
+/// The native copy shortcut (`Cmd+C` / `Ctrl+Shift+C`): copies whatever is
+/// selected, most specific first — a list row range, a mouse drag, a grid
+/// visual selection or cell, then the focused list row.
+pub fn copy_current_selection(app: &mut App) {
+    if line_select::copy_range(app) {
+        return;
+    }
+
+    if let (Some(anchor), Some(current)) = (app.mouse_selection_anchor, app.mouse_selection_current)
+        && anchor != current
+    {
+        let text = mouse::extract_selected_text(app, anchor, current);
+        if !text.is_empty() {
+            match query::try_copy_to_clipboard(&text) {
+                Ok(()) => app.set_notice(
+                    NoticeKind::Success,
+                    format!("Copied selection ({})", toast_summary(&text)),
+                ),
+                Err(err) => {
+                    app.set_notice(NoticeKind::Error, format!("Clipboard copy failed: {err}"))
+                }
+            }
+            return;
+        }
+    }
+
+    if grid_has_focus(app) {
+        copy_results_selection_or_cell(app);
+        return;
+    }
+
+    if line_select::copy_focused(app) {
+        return;
+    }
+
+    app.set_notice(
+        NoticeKind::Error,
+        "Nothing selected — drag, or press v / V to select, or Ctrl+E to copy the whole view",
+    );
+}
+
+/// True when the main viewer is showing the results grid and has focus.
+fn grid_has_focus(app: &App) -> bool {
+    let Screen::Actions(s) = &app.screen else {
+        return false;
+    };
+    app.active_panel == ActivePanel::MainViewer
+        && s.results.as_ref().is_some_and(|r| !r.columns.is_empty())
+        && !matches!(
+            ACTIONS.get(s.selected).map(|(_, _, a)| a),
+            Some(crate::app::Action::Partitions | crate::app::Action::Schema)
+        )
 }
 
 pub fn copy_results_selection_or_cell(app: &mut App) {

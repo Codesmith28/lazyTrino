@@ -45,8 +45,10 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(outer_chunks[1]);
 
     if !is_in_table {
-        if let Screen::Table(state) = effective_screen {
-            // Browsing tables: full width without the help & keybindings side panel
+        // Connect / Catalog / Schema / Table: full width. Help lives in the `?` modal.
+        if let Screen::Connect(state) = effective_screen {
+            screens::connect::render(frame, outer_chunks[0], state, spinner(app));
+        } else {
             let search_active =
                 matches!(app.mode, Mode::Search) && !matches!(app.screen, Screen::Help);
             let inner_w = outer_chunks[0].width.saturating_sub(2).max(1) as usize;
@@ -67,89 +69,22 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
 
             render_search_bar(frame, left_chunks[0], app);
             render_phase1_count_box(frame, left_chunks[1], effective_screen, &app.search_query);
-            screens::table::render(
-                frame,
-                left_chunks[2],
-                state,
-                if matches!(app.screen, Screen::Help) {
-                    ""
-                } else {
-                    &app.search_query
-                },
-                true,
-                app,
-            );
-        } else {
-            // Phase 1: Connect, Catalog, Schema -> Default 60% list ratio + Help side panel (Resizable 20-80%)
-            let list_pct = app.main_panel_pct.clamp(20, 80);
-            let main_chunks = Layout::horizontal([
-                Constraint::Percentage(list_pct),
-                Constraint::Percentage(100 - list_pct),
-            ])
-            .split(outer_chunks[0]);
 
-            screens::help::render_side_panel(frame, main_chunks[1]);
-
-            let is_connect = matches!(effective_screen, Screen::Connect(_));
-            let main = if is_connect {
-                main_chunks[0]
+            // The help screen shows the unfiltered lists behind its modal.
+            let search = if matches!(app.screen, Screen::Help) {
+                ""
             } else {
-                let search_active =
-                    matches!(app.mode, Mode::Search) && !matches!(app.screen, Screen::Help);
-                let inner_w = main_chunks[0].width.saturating_sub(2).max(1) as usize;
-                let search_height = if search_active {
-                    let total_chars = 3 + app.search_query.len();
-                    let lines = total_chars.div_ceil(inner_w);
-                    (lines as u16 + 2).clamp(3, 8)
-                } else {
-                    3
-                };
-
-                let left_chunks = Layout::vertical([
-                    Constraint::Length(search_height),
-                    Constraint::Length(3),
-                    Constraint::Min(0),
-                ])
-                .split(main_chunks[0]);
-
-                render_search_bar(frame, left_chunks[0], app);
-                render_phase1_count_box(frame, left_chunks[1], effective_screen, &app.search_query);
-                left_chunks[2]
+                &app.search_query
             };
-
-            let main_is_active = true;
-
             match effective_screen {
-                Screen::Connect(state) => {
-                    screens::connect::render(frame, main, state, spinner(app));
-                }
                 Screen::Catalog(state) => {
-                    screens::catalog::render(
-                        frame,
-                        main,
-                        state,
-                        if matches!(app.screen, Screen::Help) {
-                            ""
-                        } else {
-                            &app.search_query
-                        },
-                        main_is_active,
-                        app,
-                    );
+                    screens::catalog::render(frame, left_chunks[2], state, search, true, app);
                 }
                 Screen::Schema(state) => {
-                    screens::schema::render(
-                        frame,
-                        main,
-                        state,
-                        if matches!(app.screen, Screen::Help) {
-                            ""
-                        } else {
-                            &app.search_query
-                        },
-                        main_is_active,
-                        app,
-                    );
+                    screens::schema::render(frame, left_chunks[2], state, search, true, app);
+                }
+                Screen::Table(state) => {
+                    screens::table::render(frame, left_chunks[2], state, search, true, app);
                 }
                 _ => {}
             }
@@ -454,6 +389,49 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
     }
     if let Some(ref modal) = app.applied_filters_modal {
         screens::applied_filters_modal::render(frame, frame.area(), modal);
+    }
+    paint_screen_text_selection(frame, app);
+    if let Some(ref modal) = app.export_modal {
+        screens::export_modal::render(frame, frame.area(), modal);
+    }
+    // Drawn last so copy/export results and failures are visible above any modal.
+    render_notice_toast(frame, frame.area(), app);
+}
+
+/// Highlights a mouse selection whose text is read straight off the screen
+/// (partition counts, DDL, banners, …). Widgets with their own selection
+/// rendering paint the other cases.
+fn paint_screen_text_selection(frame: &mut Frame, app: &App) {
+    if !app.mouse_highlight_active() {
+        return;
+    }
+    let (Some(anchor), Some(current)) = (app.mouse_selection_anchor, app.mouse_selection_current)
+    else {
+        return;
+    };
+    if anchor == current || !crate::tui::handler::selection_uses_screen_text(app, anchor, current) {
+        return;
+    }
+
+    let area = frame.area();
+    let x0 = anchor.0.min(current.0).max(area.x);
+    let x1 = anchor
+        .0
+        .max(current.0)
+        .min(area.x + area.width.saturating_sub(1));
+    let y0 = anchor.1.min(current.1).max(area.y);
+    let y1 = anchor
+        .1
+        .max(current.1)
+        .min(area.y + area.height.saturating_sub(1));
+    let style = theme::text_selection_style();
+    let buf = frame.buffer_mut();
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_style(style);
+            }
+        }
     }
 }
 
@@ -861,26 +839,355 @@ pub mod table_browse_full_width_regression {
         }
         assert!(found_table_title, "Tables title should be rendered");
 
-        // 3. In contrast, Catalog screen still renders Help side panel
+        // 3. Catalog screen is full width too: no side panel anywhere
         app.screen = Screen::Catalog(CatalogState {
             items: vec!["iceberg".into()],
             selected: 0,
         });
         terminal.draw(|f| ui(f, &app)).unwrap();
         let buf2 = terminal.backend().buffer().clone();
-        let mut catalog_has_help = false;
+        let mut catalog_title_right_edge = false;
         for y in 0..height {
             let row_str: String = (0..width)
                 .map(|x| buf2.cell((x, y)).unwrap().symbol())
                 .collect();
-            if row_str.contains("Help & Keybindings") {
-                catalog_has_help = true;
-                break;
+            assert!(
+                !row_str.contains("Help & Keybindings"),
+                "Help & Keybindings side panel must be gone from the catalog screen"
+            );
+            if row_str.contains("Catalogs") && buf2.cell((width - 1, y)).unwrap().symbol() == "╮"
+            {
+                catalog_title_right_edge = true;
             }
         }
         assert!(
-            catalog_has_help,
-            "Catalog screen should continue to display Help & Keybindings side panel"
+            catalog_title_right_edge,
+            "catalog list should extend to the right edge of the screen"
         );
+    }
+}
+
+#[cfg(test)]
+mod selection_overlay_tests {
+    use super::*;
+    use crate::app::{ActionState, DrillDownState};
+    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+
+    #[test]
+    fn selected_screen_text_without_a_widget_highlight_is_painted_in_terminal_colors() {
+        let dd = DrillDownState {
+            partition_cols: vec!["date".into()],
+            levels_cache: vec![vec!["2026-08-06".into()]],
+            table_count: Some(1_234_567),
+            ..Default::default()
+        };
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.active_panel = ActivePanel::MainViewer;
+        app.screen = Screen::Actions(ActionState {
+            catalog: "c".into(),
+            schema: "s".into(),
+            table: "t".into(),
+            selected: 0,
+            drilldown: Some(dd),
+            ..Default::default()
+        });
+
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| ui(f, &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+
+        // find the "Total Table: ..." banner and select it with the mouse
+        let (y, x) = (0..24u16)
+            .find_map(|y| {
+                let row: String = (0..80)
+                    .map(|x| buf.cell((x, y)).unwrap().symbol())
+                    .collect();
+                row.find("Total Table")
+                    .map(|byte| (y, row[..byte].chars().count() as u16))
+            })
+            .expect("banner row");
+        app.mouse_selection_anchor = Some((x, y));
+        app.mouse_selection_current = Some((x + 20, y));
+        app.mouse_selection_committed = true;
+
+        term.draw(|f| ui(f, &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        for dx in 0..=20 {
+            let c = buf.cell((x + dx, y)).unwrap();
+            assert!(c.modifier.contains(Modifier::REVERSED), "cell +{dx}");
+            assert_eq!(c.fg, ratatui::style::Color::Reset);
+            assert_eq!(c.bg, ratatui::style::Color::Reset);
+        }
+        assert!(
+            !buf.cell((x + 21, y))
+                .unwrap()
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
+        assert!(
+            !buf.cell((x, y + 1))
+                .unwrap()
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
+
+        // and it copies exactly what is highlighted
+        app.last_frame = buf;
+        let text = crate::tui::handler::extract_selected_text(&app, (x, y), (x + 20, y));
+        assert!(text.starts_with("Total Table"), "{text}");
+
+        // gone once invalidated
+        app.mouse_selection_committed = false;
+        term.draw(|f| ui(f, &app)).unwrap();
+        assert!(
+            !term
+                .backend()
+                .buffer()
+                .cell((x, y))
+                .unwrap()
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
+    }
+}
+
+#[cfg(test)]
+mod theme_contrast_tests {
+    //! Renders real screens and checks every visible glyph against both a
+    //! light and a dark terminal background (the terminal's own default
+    //! colors stand in for `Color::Reset`).
+    use super::*;
+    use crate::app::{
+        ActionState, CatalogState, DrillDownState, ExportModalState, HelpModalState, NoticeKind,
+        ResultsState, ViewExport, VisualMode,
+    };
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        buffer::Buffer,
+        style::{Color, Modifier},
+    };
+
+    type Rgb = (u8, u8, u8);
+
+    fn indexed(i: u8) -> Rgb {
+        match i {
+            16..=231 => {
+                let n = i - 16;
+                let lv = [0u8, 95, 135, 175, 215, 255];
+                (
+                    lv[(n / 36) as usize],
+                    lv[((n / 6) % 6) as usize],
+                    lv[(n % 6) as usize],
+                )
+            }
+            232..=255 => {
+                let v = 8 + 10 * (i - 232);
+                (v, v, v)
+            }
+            _ => panic!("ANSI color {i} is remapped by terminal profiles; use a fixed color"),
+        }
+    }
+
+    fn resolve(c: Color, terminal_default: Rgb) -> Rgb {
+        match c {
+            Color::Reset => terminal_default,
+            Color::Indexed(i) => indexed(i),
+            Color::Rgb(r, g, b) => (r, g, b),
+            named => {
+                panic!("{named:?} is profile-dependent and can be unreadable on light terminals")
+            }
+        }
+    }
+
+    fn lum((r, g, b): Rgb) -> f64 {
+        let f = |v: u8| {
+            let v = f64::from(v) / 255.0;
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+    }
+
+    fn contrast(a: Rgb, b: Rgb) -> f64 {
+        let (la, lb) = (lum(a), lum(b));
+        (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    /// Returns "x,y 'glyph' ratio" for every glyph below `min`.
+    fn low_contrast(buf: &Buffer, term_fg: Rgb, term_bg: Rgb, min: f64) -> Vec<String> {
+        let mut bad = Vec::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                let cell = buf.cell((x, y)).unwrap();
+                if cell.symbol().trim().is_empty() {
+                    continue;
+                }
+                let (mut fg, mut bg) = (resolve(cell.fg, term_fg), resolve(cell.bg, term_bg));
+                if cell.modifier.contains(Modifier::REVERSED) {
+                    std::mem::swap(&mut fg, &mut bg);
+                }
+                let ratio = contrast(fg, bg);
+                if ratio < min {
+                    bad.push(format!("({x},{y}) {:?} {ratio:.2}", cell.symbol()));
+                }
+            }
+        }
+        bad
+    }
+
+    fn app_on(screen: Screen) -> App {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.screen = screen;
+        app
+    }
+
+    fn grid_app() -> App {
+        let mut res = ResultsState {
+            columns: vec!["id".into(), "status".into()],
+            rows: vec![
+                vec!["1".into(), "OK".into()],
+                vec!["2".into(), "PENDING".into()],
+                vec!["3".into(), "FAILED".into()],
+            ],
+            ..Default::default()
+        };
+        res.visual_mode = VisualMode::Block {
+            anchor_row: 0,
+            anchor_col: 0,
+        };
+        res.selected_row = 1;
+        res.selected_col = 1;
+        let mut app = app_on(Screen::Actions(ActionState {
+            catalog: "c".into(),
+            schema: "s".into(),
+            table: "t".into(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.active_panel = ActivePanel::MainViewer;
+        app
+    }
+
+    fn drilldown_app() -> App {
+        let dd = DrillDownState {
+            partition_cols: vec!["date".into(), "svc".into()],
+            levels_cache: vec![vec!["2026-08-06".into(), "2026-08-07".into()]],
+            table_count: Some(1_234_567),
+            ..Default::default()
+        };
+        let mut app = app_on(Screen::Actions(ActionState {
+            catalog: "c".into(),
+            schema: "s".into(),
+            table: "t".into(),
+            selected: 0,
+            drilldown: Some(dd),
+            ..Default::default()
+        }));
+        app.active_panel = ActivePanel::MainViewer;
+        app
+    }
+
+    fn catalog_app() -> App {
+        let mut app = app_on(Screen::Catalog(CatalogState {
+            items: vec!["hive".into(), "iceberg".into(), "delta".into()],
+            selected: 1,
+        }));
+        app.line_selection = None;
+        app
+    }
+
+    #[test]
+    fn theme_is_legible_on_light_and_dark_terminals() {
+        let mut scenarios: Vec<(&str, App)> = vec![
+            (
+                "connect",
+                App::new(crate::config::ConnectionConfig::default(), false),
+            ),
+            ("catalog", catalog_app()),
+            ("grid + visual block", grid_app()),
+            ("partition drill-down", drilldown_app()),
+        ];
+
+        let mut help = catalog_app();
+        help.help_modal = Some(HelpModalState::default());
+        help.mode = Mode::HelpModal;
+        scenarios.push(("help modal", help));
+
+        let mut export = catalog_app();
+        export.export_modal = Some(ExportModalState {
+            view: ViewExport {
+                title: "Catalogs".into(),
+                file_stem: "catalogs".into(),
+                columns: vec!["catalog".into()],
+                rows: vec![vec!["hive".into()]],
+                note: Some("Filtered by search".into()),
+            },
+            selected: 1,
+            size_bytes: 10 * 1024 * 1024,
+        });
+        export.mode = Mode::ExportModal;
+        scenarios.push(("export modal", export));
+
+        for (kind, label) in [
+            (NoticeKind::Success, "ok toast"),
+            (NoticeKind::Error, "error toast"),
+        ] {
+            let mut a = catalog_app();
+            a.set_notice(kind, "Exported 12 rows to ~/Downloads/lazytrino/x.csv");
+            scenarios.push((label, a));
+        }
+
+        let mut selected = grid_app();
+        selected.mouse_selection_anchor = Some((30, 6));
+        selected.mouse_selection_current = Some((50, 8));
+        selected.mouse_selection_committed = true;
+        scenarios.push(("grid + mouse selection", selected));
+
+        // (terminal default fg, terminal default bg)
+        let terminals = [
+            ("light", (0u8, 0u8, 0u8), (255u8, 255u8, 255u8)),
+            ("dark", (229, 229, 229), (0, 0, 0)),
+        ];
+
+        let mut failures = Vec::new();
+        for (name, app) in &scenarios {
+            let mut term = Terminal::new(TestBackend::new(120, 36)).unwrap();
+            term.draw(|f| ui(f, app)).unwrap();
+            let buf = term.backend().buffer().clone();
+            for (tname, fg, bg) in terminals {
+                let bad = low_contrast(&buf, fg, bg, 3.0);
+                if !bad.is_empty() {
+                    failures.push(format!(
+                        "{name} on {tname} terminal: {} low-contrast glyphs, e.g. {:?}",
+                        bad.len(),
+                        &bad[..bad.len().min(4)]
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn the_checker_itself_catches_the_old_white_on_light_bug() {
+        // Guard against a vacuous test: white text on a white terminal must be flagged.
+        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 4, 1));
+        buf.set_string(
+            0,
+            0,
+            "text",
+            ratatui::style::Style::default().fg(Color::Indexed(231)),
+        );
+        assert_eq!(low_contrast(&buf, (0, 0, 0), (255, 255, 255), 3.0).len(), 4);
+        // terminal-default text is fine on both
+        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 4, 1));
+        buf.set_string(0, 0, "text", ratatui::style::Style::default());
+        assert!(low_contrast(&buf, (0, 0, 0), (255, 255, 255), 3.0).is_empty());
+        assert!(low_contrast(&buf, (229, 229, 229), (0, 0, 0), 3.0).is_empty());
     }
 }

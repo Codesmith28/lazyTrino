@@ -99,8 +99,12 @@ pub fn handle_help_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> {
                 if code == KeyCode::PageDown || key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 if let Some(ref mut m) = app.help_modal {
-                    let total_lines =
-                        crate::tui::screens::help::build_help_lines(&m.search_query).len();
+                    let (w, h) = crossterm::terminal::size().unwrap_or((80, 24));
+                    let total_lines = crate::tui::screens::help::wrapped_help_lines(
+                        &m.search_query,
+                        ratatui::layout::Rect::new(0, 0, w, h),
+                    )
+                    .len();
                     m.scroll = (m.scroll + 15).min(total_lines.saturating_sub(1));
                     app.help_scroll = m.scroll;
                 }
