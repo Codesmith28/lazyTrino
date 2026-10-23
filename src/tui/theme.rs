@@ -59,7 +59,7 @@ const PALETTE: Palette = Palette {
     secondary: Color::Reset,
     muted: Color::DarkGray,
     highlight: Color::Yellow,
-    info: Color::Cyan,
+    info: Color::LightBlue,
     header: Color::Green,
     error: Color::Red,
     detail: Color::Magenta,
@@ -474,7 +474,7 @@ mod tests {
     fn syntax_colors_never_reuse_the_border_color() {
         // Cyan frames the panes, so syntax highlighting must not use it.
         let p = &PALETTE;
-        for syntax in [p.number, p.boolean, p.temporal] {
+        for syntax in [p.number, p.boolean, p.temporal, p.info] {
             assert_ne!(syntax, p.accent_border);
             assert_ne!(syntax, p.schema);
         }
