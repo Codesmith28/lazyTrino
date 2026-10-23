@@ -53,7 +53,38 @@ mod screens {
     pub mod vertical_schema;
 }
 
+/// Set once the kitty keyboard flags were pushed, so they are popped on exit.
+static KEYBOARD_ENHANCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Puts the terminal back the way the shell expects it. Used by the panic
+/// hook: without it a crash leaves raw mode, mouse reporting and the kitty
+/// keyboard protocol on, and the shell fills with escape-sequence garbage.
+fn restore_terminal() {
+    let mut out = stdout();
+    if KEYBOARD_ENHANCED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        let _ = execute!(out, PopKeyboardEnhancementFlags);
+    }
+    let _ = disable_raw_mode();
+    let _ = execute!(
+        out,
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        crossterm::cursor::Show
+    );
+}
+
+/// Restores the terminal before the default hook prints the panic message,
+/// so the message is readable and the shell keeps working.
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        previous(info);
+    }));
+}
+
 pub async fn run(app: &mut App) -> Result<()> {
+    install_panic_hook();
     enable_raw_mode()?;
     let mut stderr = stdout();
     execute!(stderr, EnterAlternateScreen, EnableMouseCapture)?;
@@ -68,6 +99,7 @@ pub async fn run(app: &mut App) -> Result<()> {
             stderr,
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )?;
+        KEYBOARD_ENHANCED.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     let backend = ratatui::backend::CrosstermBackend::new(stderr);
@@ -75,7 +107,7 @@ pub async fn run(app: &mut App) -> Result<()> {
 
     let res = run_loop(&mut terminal, app).await;
 
-    if enhanced_keys {
+    if KEYBOARD_ENHANCED.swap(false, std::sync::atomic::Ordering::SeqCst) {
         let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
     }
     disable_raw_mode()?;

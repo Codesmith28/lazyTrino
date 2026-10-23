@@ -256,13 +256,18 @@ pub fn copy_results_selection_or_cell(app: &mut App) {
                 .cloned()
                 .unwrap_or_default();
             query::copy_to_clipboard(&cell_val);
-            let summary = if cell_val.len() > 30 {
-                format!("{}...", &cell_val[..27])
-            } else {
-                cell_val
-            };
+            let summary = cell_summary(&cell_val);
             app.copied_toast = Some((format!("Copied cell: {summary}"), std::time::Instant::now()));
         }
+    }
+}
+
+/// Short preview of a copied value for the toast (cut on a character, not a byte).
+fn cell_summary(value: &str) -> String {
+    if value.chars().count() > 30 {
+        format!("{}...", value.chars().take(27).collect::<String>())
+    } else {
+        value.to_string()
     }
 }
 
@@ -328,6 +333,15 @@ mod tests {
         );
         // a single column keeps its header too
         assert_eq!(grid_selection_csv(&res, 0, 1, &[2]), "n\nx\ny");
+    }
+
+    #[test]
+    fn cell_summary_cuts_on_characters() {
+        // byte 27 falls inside "€" here; slicing bytes used to panic
+        let value = format!("{}€{}", "a".repeat(26), "b".repeat(10));
+        assert_eq!(cell_summary(&value), format!("{}€...", "a".repeat(26)));
+        assert_eq!(cell_summary("short"), "short");
+        assert_eq!(cell_summary(&"界".repeat(40)).chars().count(), 30);
     }
 
     #[test]

@@ -22,7 +22,12 @@ use ratatui::{
 
 use crate::{app::ResultsState, tui::theme};
 
+/// Word-wraps `text` to `max_width` terminal cells. Widths are measured in
+/// display cells (so `é` is 1 and `界` is 2), and over-long words are split
+/// between characters — never inside one.
 pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
     if max_width == 0 {
         return vec![text.to_string()];
     }
@@ -38,26 +43,38 @@ pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
             continue;
         }
         let mut current_line = String::new();
+        let mut current_width = 0;
         for word in words {
-            if word.len() > max_width {
+            let word_width = word.width();
+            if word_width > max_width {
                 if !current_line.is_empty() {
-                    lines.push(current_line);
-                    current_line = String::new();
+                    lines.push(std::mem::take(&mut current_line));
+                    current_width = 0;
                 }
-                let mut start = 0;
-                while start < word.len() {
-                    let end = (start + max_width).min(word.len());
-                    lines.push(word[start..end].to_string());
-                    start = end;
+                let mut piece = String::new();
+                let mut piece_width = 0;
+                for ch in word.chars() {
+                    let ch_width = ch.width().unwrap_or(0);
+                    if piece_width + ch_width > max_width && !piece.is_empty() {
+                        lines.push(std::mem::take(&mut piece));
+                        piece_width = 0;
+                    }
+                    piece.push(ch);
+                    piece_width += ch_width;
+                }
+                if !piece.is_empty() {
+                    lines.push(piece);
                 }
             } else if current_line.is_empty() {
                 current_line.push_str(word);
-            } else if current_line.len() + 1 + word.len() <= max_width {
+                current_width = word_width;
+            } else if current_width + 1 + word_width <= max_width {
                 current_line.push(' ');
                 current_line.push_str(word);
+                current_width += 1 + word_width;
             } else {
-                lines.push(current_line);
-                current_line = word.to_string();
+                lines.push(std::mem::replace(&mut current_line, word.to_string()));
+                current_width = word_width;
             }
         }
         if !current_line.is_empty() {
@@ -2021,6 +2038,74 @@ mod tests {
             content.contains("iceberg › sales › orders"),
             "Title should show table breadcrumb: {content}"
         );
+    }
+
+    /// Regression: a long unbroken value whose multi-byte character straddles
+    /// the column width used to panic ("byte index … is not a char boundary").
+    #[test]
+    fn wrap_text_never_splits_inside_a_character() {
+        // 88 ASCII bytes, then a 3-byte char occupying bytes 88..91 — the
+        // exact shape of the reported crash at width 89.
+        let value = format!("{}［{}", "a".repeat(88), "b".repeat(20));
+        for width in [1, 2, 3, 10, 88, 89, 90, 200] {
+            let lines = wrap_text(&value, width);
+            assert_eq!(lines.concat(), value, "content lost at width {width}");
+            for line in &lines {
+                let w = unicode_width::UnicodeWidthStr::width(line.as_str());
+                // a single double-width char may exceed a width of 1
+                assert!(
+                    w <= width.max(2),
+                    "{line:?} is {w} cells wide at width {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wrap_text_measures_terminal_cells_not_bytes() {
+        // "é" is 2 bytes but 1 cell; "界" is 3 bytes but 2 cells.
+        assert_eq!(wrap_text("café café", 9), vec!["café café"]);
+        assert_eq!(wrap_text("世界世界", 4), vec!["世界", "世界"]);
+        assert_eq!(wrap_text("a 世界", 5), vec!["a", "世界"]);
+        assert_eq!(wrap_text("a 世界", 3), vec!["a", "世", "界"]);
+        // emoji, combining marks and mixed scripts never panic
+        for text in ["🙂🙂🙂🙂🙂", "e\u{301}e\u{301}e\u{301}", "ab👍🏽cd€€€ffff"]
+        {
+            for width in 1..8 {
+                assert_eq!(wrap_text(text, width).concat(), text);
+            }
+        }
+    }
+
+    #[test]
+    fn grid_renders_multibyte_values_at_every_width() {
+        let state = ResultsState {
+            columns: vec!["id".to_string(), "path".to_string()],
+            rows: vec![vec![
+                "1".to_string(),
+                format!("{}［／〜€é世界🙂{}", "x".repeat(87), "y".repeat(40)),
+            ]],
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            ..Default::default()
+        };
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        for width in [20u16, 40, 60, 89, 90, 91, 92, 120, 200] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+            terminal
+                .draw(|f| {
+                    render(
+                        f,
+                        Rect::new(0, 0, width, 12),
+                        &state,
+                        String::new(),
+                        true,
+                        &app,
+                    )
+                })
+                .unwrap();
+        }
     }
 
     #[test]

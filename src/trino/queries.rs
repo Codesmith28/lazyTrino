@@ -453,7 +453,10 @@ pub fn split_sql_clauses(sql: &str) -> (&str, Option<&str>, &str) {
                 i == 0 || bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b')';
             if at_word_start {
                 let rest = &sql[i..];
-                if where_pos.is_none() && rest.len() >= 5 && rest[..5].eq_ignore_ascii_case("WHERE")
+                if where_pos.is_none()
+                    && rest
+                        .get(..5)
+                        .is_some_and(|w| w.eq_ignore_ascii_case("WHERE"))
                 {
                     let after = &rest[5..];
                     if after.is_empty()
@@ -468,7 +471,10 @@ pub fn split_sql_clauses(sql: &str) -> (&str, Option<&str>, &str) {
 
                 let mut found_trailing = false;
                 for kw in &trailing_keywords {
-                    if rest.len() >= kw.len() && rest[..kw.len()].eq_ignore_ascii_case(kw) {
+                    if rest
+                        .get(..kw.len())
+                        .is_some_and(|w| w.eq_ignore_ascii_case(kw))
+                    {
                         let after = &rest[kw.len()..];
                         if after.is_empty()
                             || after.as_bytes()[0].is_ascii_whitespace()
@@ -805,6 +811,24 @@ pub fn update_query_limit(sql: &str, new_limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clause_splitting_handles_non_ascii_words() {
+        // A word starting at a word boundary whose 5th byte is inside "à"
+        // used to panic when compared against "WHERE".
+        let sql = "SELECT città, naïve FROM t WHERE città = 'Zürich' ORDER BY naïve LIMIT 5";
+        let (head, where_clause, tail) = split_sql_clauses(sql);
+        assert_eq!(head, "SELECT città, naïve FROM t");
+        assert_eq!(where_clause, Some("città = 'Zürich'"));
+        assert_eq!(tail, "ORDER BY naïve LIMIT 5");
+        for sql in [
+            "SELECT 世界 FROM t",
+            "SELECT é FROM t WHERE é > 1",
+            "ÀÀÀÀÀÀ",
+        ] {
+            split_sql_clauses(sql);
+        }
+    }
 
     #[test]
     fn varchar_partition_values_that_look_numeric_stay_quoted() {
