@@ -1259,6 +1259,8 @@ pub struct App {
     pub should_quit: bool,
     pub number_buffer: String,
     pub search_query: String,
+    /// Pane the current `search_query` was typed in; see `sync_search_scope`.
+    pub search_pane: Option<String>,
     pub loading: bool,
     pub trino_client: Option<TrinoClient>,
     pub config: ConnectionConfig,
@@ -1324,6 +1326,7 @@ impl App {
             should_quit: false,
             number_buffer: String::new(),
             search_query: String::new(),
+            search_pane: None,
             loading: false,
             trino_client: None,
             config,
@@ -1428,6 +1431,42 @@ impl App {
     /// after release until something invalidates it.
     pub fn mouse_highlight_active(&self) -> bool {
         self.is_selecting_text || self.mouse_selection_committed
+    }
+
+    /// Identifies the list pane a search applies to. Drilling into or backing
+    /// out of a pane yields a different id.
+    fn search_pane_id(&self) -> String {
+        match &self.screen {
+            Screen::Catalog(_) => "catalog".to_string(),
+            Screen::Schema(s) => format!("schema:{}", s.catalog),
+            Screen::Table(s) => format!("table:{}.{}", s.catalog, s.schema),
+            Screen::Help => "help".to_string(),
+            _ => "other".to_string(),
+        }
+    }
+
+    /// Records that the search query belongs to the pane currently shown.
+    pub fn bind_search_to_pane(&mut self) {
+        self.search_pane = Some(self.search_pane_id());
+    }
+
+    /// A search filters only the pane it was typed in: once another pane is
+    /// showing (drill-down or back), the query is dropped.
+    pub fn sync_search_scope(&mut self) {
+        if self.search_query.is_empty() {
+            self.search_pane = None;
+            return;
+        }
+        let here = self.search_pane_id();
+        match &self.search_pane {
+            Some(pane) if *pane != here => {
+                self.search_query.clear();
+                self.search_pane = None;
+                self.help_scroll = 0;
+            }
+            Some(_) => {}
+            None => self.search_pane = Some(here),
+        }
     }
 
     pub fn clear_all_selections(&mut self) {

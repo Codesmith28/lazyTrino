@@ -104,6 +104,7 @@ pub(super) fn handle_search_mode(app: &mut App, key: KeyEvent) -> Option<Command
     match key.code {
         KeyCode::Char(c) if !c.is_ascii_control() => {
             app.search_query.push(c);
+            app.bind_search_to_pane();
             app.help_scroll = 0;
             super::navigation::reset_list_selected_for_search(app);
         }

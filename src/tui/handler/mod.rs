@@ -240,6 +240,7 @@ fn is_native_copy_chord(code: KeyCode, mods: KeyModifiers) -> bool {
 
 pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     preserve_public_api_symbols();
+    app.sync_search_scope();
 
     // The painted mouse selection is positional, so any key that could move
     // content invalidates it. Esc (deselect), `y` and the native copy chords
@@ -470,6 +471,41 @@ mod router_tests {
         });
         app.active_panel = ActivePanel::MainViewer;
         app
+    }
+
+    #[test]
+    fn search_stays_in_its_pane_and_is_dropped_on_drill_or_back() {
+        let mut app = schema_app();
+        press(&mut app, KeyCode::Char('/'), M::NONE);
+        press(&mut app, KeyCode::Char('b'), M::NONE);
+        press(&mut app, KeyCode::Enter, M::NONE); // close the search bar
+        assert_eq!(app.search_query, "b");
+
+        // another pane (drill-down) shows its own, unfiltered list
+        app.screen = Screen::Table(TableState {
+            catalog: "hive".into(),
+            schema: "b".into(),
+            items: vec!["t1".into(), "t2".into()],
+            selected: 0,
+        });
+        press(&mut app, KeyCode::Down, M::NONE);
+        assert!(app.search_query.is_empty());
+
+        // and the previous pane is not filtered when coming back
+        app.screen = schema_app().screen;
+        press(&mut app, KeyCode::Down, M::NONE);
+        assert!(app.search_query.is_empty());
+    }
+
+    #[test]
+    fn search_survives_keys_within_the_same_pane() {
+        let mut app = schema_app();
+        press(&mut app, KeyCode::Char('/'), M::NONE);
+        press(&mut app, KeyCode::Char('a'), M::NONE);
+        press(&mut app, KeyCode::Enter, M::NONE);
+        press(&mut app, KeyCode::Down, M::NONE);
+        press(&mut app, KeyCode::Up, M::NONE);
+        assert_eq!(app.search_query, "a");
     }
 
     fn in_visual(app: &App) -> bool {

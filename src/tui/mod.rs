@@ -119,6 +119,7 @@ async fn run_loop(
             }
         }
 
+        app.sync_search_scope();
         let frame = terminal.draw(|frame| draw::ui(frame, app))?;
         app.last_frame = frame.buffer.clone();
 
