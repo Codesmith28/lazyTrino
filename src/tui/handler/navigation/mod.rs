@@ -1791,7 +1791,7 @@ pub mod tests {
         }));
         app.set_active_panel(ActivePanel::MainViewer);
 
-        // Shift+Down enters visual line mode
+        // Shift+Down enters visual block mode (cell level, not the whole row)
         let shift_down = KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::SHIFT);
         actions_keys(&mut app, shift_down);
         let Screen::Actions(state) = &app.screen else {
@@ -1800,7 +1800,10 @@ pub mod tests {
         let res = state.results.as_ref().unwrap();
         assert_eq!(
             res.visual_mode,
-            crate::app::VisualMode::Line { anchor_row: 0 }
+            crate::app::VisualMode::Block {
+                anchor_row: 0,
+                anchor_col: 0
+            }
         );
         assert_eq!(res.selected_row, 1);
 
@@ -1854,6 +1857,49 @@ pub mod tests {
         // anchored where selection began, spanning 2x3 cells
         assert!(res.is_cell_selected(0, 0) && res.is_cell_selected(1, 2));
         assert!(!res.is_cell_selected(0, 3));
+    }
+
+    #[test]
+    fn test_shift_down_up_select_cells_not_whole_rows() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["a".into(), "b".into(), "c".into()];
+        res.rows = vec![
+            vec!["1".into(), "2".into(), "3".into()],
+            vec!["4".into(), "5".into(), "6".into()],
+            vec!["7".into(), "8".into(), "9".into()],
+        ];
+        res.selected_row = 1;
+        res.selected_col = 1;
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        let shift = crossterm::event::KeyModifiers::SHIFT;
+        actions_keys(&mut app, KeyEvent::new(KeyCode::Down, shift));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        // only column `b`, rows 1..=2
+        assert!(res.is_cell_selected(1, 1) && res.is_cell_selected(2, 1));
+        assert!(!res.is_cell_selected(1, 0) && !res.is_cell_selected(2, 2));
+        assert!(!res.is_cell_selected(0, 1));
+
+        // and upwards from a fresh start
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
+        actions_keys(&mut app, KeyEvent::new(KeyCode::Up, shift));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert!(res.is_cell_selected(2, 1) && res.is_cell_selected(1, 1));
+        assert!(!res.is_cell_selected(2, 0) && !res.is_cell_selected(1, 2));
     }
 
     #[test]

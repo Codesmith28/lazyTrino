@@ -387,11 +387,14 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
                                 app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
                             } else if let Some(ref mut res) = s.results {
+                                // Shift+↑/↓ selects at cell level (the current
+                                // cell, extended along the column); `V` is the
+                                // whole-row selection.
                                 if is_shift
                                     && code == KeyCode::Down
                                     && res.visual_mode == crate::app::VisualMode::None
                                 {
-                                    res.enter_visual_line();
+                                    res.enter_visual_block();
                                 }
                                 if !res.rows.is_empty() {
                                     res.selected_row = (res.selected_row + 1)
@@ -407,11 +410,14 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             } else if is_schema {
                                 app.schema_scroll = app.schema_scroll.saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {
+                                // Shift+↑/↓ selects at cell level (the current
+                                // cell, extended along the column); `V` is the
+                                // whole-row selection.
                                 if is_shift
                                     && code == KeyCode::Up
                                     && res.visual_mode == crate::app::VisualMode::None
                                 {
-                                    res.enter_visual_line();
+                                    res.enter_visual_block();
                                 }
                                 res.selected_row = res.selected_row.saturating_sub(1);
                             }

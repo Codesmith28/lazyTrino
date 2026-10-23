@@ -69,7 +69,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
         items: &[
             "  Mouse drag                     Select anything on screen; copied on release and kept highlighted",
             "                                 (in your terminal's own colors) until you click, scroll, type or press Esc",
-            "  Shift+↑ / ↓ (/ ← →)            Start / extend a selection (in the grid, ← → move one cell)",
+            "  Shift+↑ / ↓ (/ ← →)            Start / extend a selection (in the grid: cell level, one cell at a time)",
             "  V                              Visual line: select whole rows (lists, partition values, grid)",
             "  v / Ctrl+V                     Visual / block: select a range (grid: cell block)",
             "  y                              Copy the selection (and leave visual mode)",
