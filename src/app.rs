@@ -33,6 +33,8 @@ pub struct QueryLogEntry {
     pub duration_ms: Option<u64>,
     pub row_count: Option<usize>,
     pub error_msg: Option<String>,
+    /// Answered from the query cache instead of being sent to Trino.
+    pub cached: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1486,7 +1488,18 @@ impl App {
             duration_ms: None,
             row_count: None,
             error_msg: None,
+            cached: false,
         });
+        id
+    }
+
+    /// Like `add_query_log`, but flags the entry when `cached` (the query is
+    /// served from the client's cache, so nothing is sent to Trino).
+    pub fn add_query_log_with_cache(&mut self, sql: String, cached: bool) -> usize {
+        let id = self.add_query_log(sql);
+        if cached && let Some(entry) = self.query_logs.last_mut() {
+            entry.cached = true;
+        }
         id
     }
 

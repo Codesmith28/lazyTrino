@@ -58,14 +58,26 @@ pub fn lines(app: &App, inner_w: u16) -> Vec<InspectorLine> {
             QueryStatus::Error => ("✗", theme::error_bold_style()),
             QueryStatus::Running => ("○", theme::warning_bold_style()),
         };
+        let cached = entry.cached && entry.status != QueryStatus::Error;
         let meta = match &entry.status {
+            QueryStatus::Success if cached => {
+                format!(" [cached, {}r] ", entry.row_count.unwrap_or(0))
+            }
             QueryStatus::Success => {
                 let dur = entry.duration_ms.unwrap_or(0);
                 let rows = entry.row_count.unwrap_or(0);
                 format!(" [{dur}ms, {rows}r] ")
             }
             QueryStatus::Error => " [error] ".to_string(),
+            QueryStatus::Running if cached => " [cached] ".to_string(),
             QueryStatus::Running => " [running] ".to_string(),
+        };
+        // A cache hit is called out in the info color so it stands apart
+        // from queries that actually went to Trino.
+        let meta_style = if cached {
+            theme::info_bold_style()
+        } else {
+            theme::muted_style()
         };
 
         let header_len = 1 + symbol.chars().count() + meta.chars().count();
@@ -75,10 +87,7 @@ pub fn lines(app: &App, inner_w: u16) -> Vec<InspectorLine> {
         let wrapped_sql = crate::tui::screens::results::wrap_text(&entry.sql, avail_w);
         for (i, part) in wrapped_sql.into_iter().enumerate() {
             let lead = if i == 0 {
-                vec![
-                    (format!(" {symbol}"), style),
-                    (meta.clone(), theme::muted_style()),
-                ]
+                vec![(format!(" {symbol}"), style), (meta.clone(), meta_style)]
             } else {
                 vec![(indent.clone(), Style::default())]
             };
@@ -264,6 +273,46 @@ mod tests {
         assert!(parts[1].starts_with("line 1:15"));
         assert_eq!(parts[2], "SELECT 1");
         assert_eq!(parts.len(), 3);
+    }
+
+    fn first_row_text(app: &App) -> String {
+        let row = &lines(app, 80)[0];
+        let lead: String = row.lead.iter().map(|(t, _)| t.as_str()).collect();
+        format!("{lead}{}", row.text)
+    }
+
+    #[test]
+    fn cache_hits_are_called_out_in_the_log() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        let id = app.add_query_log_with_cache("SELECT 1".to_string(), true);
+        // flagged as soon as it is logged, before the (instant) result arrives
+        assert!(first_row_text(&app).contains("[cached] SELECT 1"));
+        app.complete_query_log_success(id, 0, 7);
+        assert!(app.query_logs[0].cached, "completing keeps the flag");
+        assert!(first_row_text(&app).contains("[cached, 7r] SELECT 1"));
+
+        // a real query shows its duration, not "cached"
+        let id = app.add_query_log_with_cache("SELECT 2".to_string(), false);
+        app.complete_query_log_success(id, 120, 3);
+        assert!(first_row_text(&app).contains("[120ms, 3r] SELECT 2"));
+
+        // the badge is styled differently from an ordinary query's
+        let rows = lines(&app, 80);
+        let cached_row = rows.iter().find(|r| r.text == "SELECT 1").unwrap();
+        let real_row = rows.iter().find(|r| r.text == "SELECT 2").unwrap();
+        assert_ne!(cached_row.lead[1].1, real_row.lead[1].1);
+    }
+
+    #[test]
+    fn a_failed_query_is_never_labelled_cached() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        let id = app.add_query_log_with_cache("SELECT bad".to_string(), true);
+        app.complete_query_log_error(id, "boom".to_string());
+        let text = first_row_text(&app);
+        assert!(
+            text.contains("[error]") && !text.contains("cached"),
+            "{text}"
+        );
     }
 
     #[test]

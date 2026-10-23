@@ -270,6 +270,7 @@ The query bar is a small vim editor. It opens in **INSERT** mode so you can type
 | `--user` | | `$USER` (or `trino`) | Trino username |
 | `--password` | `--pass` | *(none)* | Trino password |
 | `--profile <NAME>` | | *(none)* | Load connection defaults from named profile |
+| `--query-cache-limit <COUNT>` | `--cache-limit` | `30` | How many query results to keep in memory. A repeated query is answered from the cache (nothing is sent to Trino) and shows as `[cached]` in the Executed Queries pane; `0` disables caching. Also settable as `query_cache_limit` in the config file or a profile |
 | `--log-level <LEVEL>` | | `info` | Set file log level (`trace`, `debug`, `info`, `warn`, `error`) |
 | `--no-log` | | `false` | Disable file logging entirely |
 | `--update` | `-u` | | Check for and install latest GitHub release |

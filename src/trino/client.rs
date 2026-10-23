@@ -105,6 +105,12 @@ impl TrinoClient {
         Ok(())
     }
 
+    /// True when `execute(sql)` would be answered from the cache (no query is
+    /// sent to Trino). Does not change what the cache evicts next.
+    pub fn is_cached(&self, sql: &str) -> bool {
+        self.cache.lock().is_ok_and(|cache| cache.contains(sql))
+    }
+
     pub async fn execute(&self, sql: &str) -> Result<QueryResults, TrinoClientError> {
         if let Ok(mut cache) = self.cache.lock()
             && let Some(cached) = cache.get(sql)
@@ -324,6 +330,60 @@ mod tests {
             ]
         );
         assert!(results.duration_ms < 5_000);
+    }
+
+    #[tokio::test]
+    async fn repeated_queries_are_served_from_the_cache_and_reported_as_cached() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/statement")
+            .match_body(Matcher::Exact("SELECT 1".to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({"columns": [{"name": "x"}], "data": [[1]]}).to_string())
+            .expect(1) // the second execute must not reach Trino
+            .create_async()
+            .await;
+        let client = TrinoClient::new(&server.url(), "test_user").unwrap();
+
+        assert!(!client.is_cached("SELECT 1"));
+        client.execute("SELECT 1").await.unwrap();
+        assert!(client.is_cached("SELECT 1"));
+        assert!(!client.is_cached("SELECT 2"));
+
+        let again = client.execute("SELECT 1").await.unwrap();
+        assert_eq!(again.data, vec![vec!["1".to_string()]]);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn failed_queries_are_not_cached() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/v1/statement")
+            .with_status(503)
+            .with_body("down")
+            .create_async()
+            .await;
+        let client = TrinoClient::new(&server.url(), "test_user").unwrap();
+        assert!(client.execute("SELECT 1").await.is_err());
+        assert!(!client.is_cached("SELECT 1"));
+    }
+
+    #[test]
+    fn the_default_cache_holds_30_queries() {
+        let client = TrinoClient::new("https://example.com", "u").unwrap();
+        for i in 0..40 {
+            client.cache.lock().unwrap().insert(
+                format!("q{i}"),
+                QueryResults {
+                    columns: vec![],
+                    data: vec![],
+                    duration_ms: 1,
+                },
+            );
+        }
+        assert_eq!(client.cache.lock().unwrap().len(), 30);
     }
 
     #[tokio::test]

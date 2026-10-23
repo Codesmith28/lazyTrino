@@ -23,6 +23,16 @@ use super::{AsyncResult, Command};
 
 pub use crate::trino::queries::DRILLDOWN_LEVEL_LIMIT;
 
+/// Adds the query to the Executed Queries log, flagged when the client will
+/// answer it from its cache instead of sending it to Trino.
+fn log_query(app: &mut App, sql: String) -> usize {
+    let cached = app
+        .trino_client
+        .as_ref()
+        .is_some_and(|client| client.is_cached(&sql));
+    app.add_query_log_with_cache(sql, cached)
+}
+
 pub fn dispatch_command(
     app: &mut App,
     cmd: Command,
@@ -67,7 +77,7 @@ pub fn dispatch_command(
         }
         Command::FetchSchemas { catalog } => {
             let sql = queries::show_schemas(&catalog);
-            let log_id = app.add_query_log(sql);
+            let log_id = log_query(app, sql);
             app.loading = true;
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
@@ -83,7 +93,7 @@ pub fn dispatch_command(
         }
         Command::FetchTables { catalog, schema } => {
             let sql = queries::show_tables(&catalog, &schema);
-            let log_id = app.add_query_log(sql);
+            let log_id = log_query(app, sql);
             app.loading = true;
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
@@ -105,9 +115,9 @@ pub fn dispatch_command(
         } => {
             if let Some(client) = app.trino_client.clone() {
                 let show_create_query = queries::show_create(&catalog, &schema, &table);
-                let show_create_log_id = app.add_query_log(show_create_query.clone());
+                let show_create_log_id = log_query(app, show_create_query.clone());
                 let desc_query = queries::info_schema_columns(&catalog, &schema, &table);
-                let cols_log_id = app.add_query_log(desc_query.clone());
+                let cols_log_id = log_query(app, desc_query.clone());
                 app.loading = true;
 
                 let tx = tx.clone();
@@ -209,7 +219,7 @@ pub fn dispatch_command(
             table,
             filters,
         } => {
-            let log_id = app.add_query_log(query.clone());
+            let log_id = log_query(app, query.clone());
             app.loading = true;
             // The query bar must always mirror exactly what's being
             // executed — whether the user typed it manually or a menu
@@ -312,7 +322,7 @@ pub fn dispatch_command(
                         &filters,
                         &table_column_types(app, &catalog, &schema, &table),
                     );
-                    let count_log_id = app.add_query_log(count_query.clone());
+                    let count_log_id = log_query(app, count_query.clone());
                     let tx_cnt = tx.clone();
                     let client_cnt = client;
                     let cat_cnt = catalog;
@@ -352,7 +362,7 @@ pub fn dispatch_command(
                 &safe_columns,
                 &table_column_types(app, &catalog, &schema, &table),
             );
-            let log_id = app.add_query_log(query.clone());
+            let log_id = log_query(app, query.clone());
             if let Screen::Actions(ref mut action_state) = app.screen
                 && let Some(state) = action_state.results.as_mut()
             {
@@ -409,7 +419,7 @@ pub fn dispatch_command(
                 DRILLDOWN_LEVEL_LIMIT,
                 &types,
             );
-            let log_id = app.add_query_log(query.clone());
+            let log_id = log_query(app, query.clone());
 
             let need_count = if let Screen::Actions(ref action_state) = app.screen {
                 action_state
@@ -468,7 +478,7 @@ pub fn dispatch_command(
                 if need_count {
                     let count_query =
                         queries::filtered_count(&catalog, &schema, &table, &filters, &types);
-                    let count_log_id = app.add_query_log(count_query.clone());
+                    let count_log_id = log_query(app, count_query.clone());
                     let tx2 = tx.clone();
                     let client2 = client;
                     let cat2 = catalog;
@@ -502,7 +512,7 @@ pub fn dispatch_command(
                 &filters,
                 &table_column_types(app, &catalog, &schema, &table),
             );
-            let count_log_id = app.add_query_log(count_query.clone());
+            let count_log_id = log_query(app, count_query.clone());
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
                 tokio::spawn(async move {

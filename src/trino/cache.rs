@@ -16,7 +16,7 @@ use std::collections::{HashMap, VecDeque};
 
 use super::types::QueryResults;
 
-pub const DEFAULT_QUERY_CACHE_LIMIT: usize = 10;
+pub const DEFAULT_QUERY_CACHE_LIMIT: usize = 30;
 
 #[derive(Debug, Clone)]
 pub struct QueryCache {
@@ -55,6 +55,11 @@ impl QueryCache {
         } else {
             None
         }
+    }
+
+    /// Whether `sql` is cached, without touching its recency.
+    pub fn contains(&self, sql: &str) -> bool {
+        self.capacity > 0 && self.entries.contains_key(sql)
     }
 
     pub fn insert(&mut self, sql: String, results: QueryResults) {
@@ -102,6 +107,36 @@ mod tests {
             data: vec![vec![tag.to_string()]],
             duration_ms: 100,
         }
+    }
+
+    #[test]
+    fn default_capacity_is_30_queries() {
+        assert_eq!(DEFAULT_QUERY_CACHE_LIMIT, 30);
+        assert_eq!(QueryCache::default().capacity(), 30);
+        assert_eq!(crate::config::DEFAULT_QUERY_CACHE_LIMIT, 30);
+        assert_eq!(
+            crate::config::ConnectionConfig::default().query_cache_limit,
+            30
+        );
+        let mut cache = QueryCache::default();
+        for i in 0..40 {
+            cache.insert(format!("q{i}"), dummy_results("x"));
+        }
+        assert_eq!(cache.len(), 30);
+        assert!(!cache.contains("q9"), "oldest entries are evicted");
+        assert!(cache.contains("q10") && cache.contains("q39"));
+    }
+
+    #[test]
+    fn contains_peeks_without_changing_eviction_order() {
+        let mut cache = QueryCache::new(2);
+        cache.insert("a".into(), dummy_results("a"));
+        cache.insert("b".into(), dummy_results("b"));
+        assert!(cache.contains("a"));
+        // `a` was only peeked at, so it is still the oldest and goes first
+        cache.insert("c".into(), dummy_results("c"));
+        assert!(!cache.contains("a") && cache.contains("b") && cache.contains("c"));
+        assert!(!QueryCache::new(0).contains("a"));
     }
 
     #[test]

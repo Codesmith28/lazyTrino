@@ -943,7 +943,7 @@ mod tests {
                 url: "http://localhost:8080".to_string(),
                 user: "test".to_string(),
                 password: "".to_string(),
-                query_cache_limit: 10,
+                query_cache_limit: crate::config::DEFAULT_QUERY_CACHE_LIMIT,
             },
             false,
         );

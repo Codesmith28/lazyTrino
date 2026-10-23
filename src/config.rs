@@ -76,12 +76,12 @@ pub struct CliArgs {
     #[arg(long, short = 'u')]
     pub update: bool,
 
-    /// Maximum number of queries to cache (default: 10).
+    /// Maximum number of queries to cache (default: 30).
     #[arg(long, alias = "cache-limit", value_name = "COUNT")]
     pub query_cache_limit: Option<usize>,
 }
 
-pub const DEFAULT_QUERY_CACHE_LIMIT: usize = 10;
+pub use crate::trino::cache::DEFAULT_QUERY_CACHE_LIMIT;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionConfig {
