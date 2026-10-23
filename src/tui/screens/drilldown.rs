@@ -277,12 +277,12 @@ pub fn render(
     });
     frame.render_stateful_widget(list, items_area, &mut list_state);
 
-    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+    use ratatui::widgets::{ScrollbarOrientation, ScrollbarState};
     if values.len() > 1 {
         let mut scrollbar_state =
             ScrollbarState::new(values.len().saturating_sub(1)).position(dd.selected);
         frame.render_stateful_widget(
-            Scrollbar::default()
+            crate::tui::theme::scrollbar()
                 .orientation(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("▲"))
                 .end_symbol(Some("▼")),

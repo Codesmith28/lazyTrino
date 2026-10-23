@@ -145,6 +145,21 @@ impl Entity {
     }
 }
 
+/// Scrollbars own their cells: a fixed style that clears whatever was drawn
+/// underneath, so a scrollbar never picks up the color or weight of the
+/// highlighted row, selected cell or value tint it is drawn over.
+pub fn scrollbar_style() -> Style {
+    Style::default()
+        .fg(Color::Reset)
+        .bg(Color::Reset)
+        .remove_modifier(Modifier::all())
+}
+
+/// A scrollbar in the fixed `scrollbar_style`; callers set orientation and symbols.
+pub fn scrollbar() -> ratatui::widgets::Scrollbar<'static> {
+    ratatui::widgets::Scrollbar::default().style(scrollbar_style())
+}
+
 pub fn border_style(is_active: bool) -> Style {
     style(border_color(is_active))
 }

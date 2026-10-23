@@ -16,7 +16,7 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Paragraph, ScrollbarOrientation, ScrollbarState},
 };
 
 use crate::app::{AppliedFilterKind, AppliedFiltersModalState};
@@ -116,7 +116,7 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &AppliedFiltersModalState) {
         if total > visible_height && visible_height > 0 {
             let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll);
             frame.render_stateful_widget(
-                Scrollbar::default()
+                crate::tui::theme::scrollbar()
                     .orientation(ScrollbarOrientation::VerticalRight)
                     .begin_symbol(Some("▲"))
                     .end_symbol(Some("▼")),

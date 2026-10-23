@@ -16,9 +16,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{
-        Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    },
+    widgets::{Block, BorderType, Borders, Paragraph, ScrollbarOrientation, ScrollbarState},
 };
 
 use crate::tui::theme;
@@ -405,7 +403,7 @@ pub fn render_modal(
     if total_lines > visible_height && visible_height > 0 {
         let mut scrollbar_state = ScrollbarState::new(max_scroll).position(effective_scroll);
         frame.render_stateful_widget(
-            Scrollbar::default()
+            crate::tui::theme::scrollbar()
                 .orientation(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("▲"))
                 .end_symbol(Some("▼")),

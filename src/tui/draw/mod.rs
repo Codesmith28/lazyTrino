@@ -1219,6 +1219,60 @@ mod theme_contrast_tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// Vertical scrollbars (▲ … ▼) must look the same on every row: they used
+    /// to inherit the highlighted row's color / weight / reverse video.
+    fn assert_scrollbars_are_untouched(name: &str, app: &App) {
+        use ratatui::style::Color;
+        let mut term = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        term.draw(|f| ui(f, app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let mut found = 0;
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                if buf.cell((x, y)).unwrap().symbol() != "▲" {
+                    continue;
+                }
+                found += 1;
+                let mut row = y;
+                loop {
+                    let cell = buf.cell((x, row)).unwrap();
+                    assert_eq!(cell.fg, Color::Reset, "{name}: scrollbar ({x},{row}) fg");
+                    assert_eq!(cell.bg, Color::Reset, "{name}: scrollbar ({x},{row}) bg");
+                    assert!(
+                        cell.modifier.is_empty(),
+                        "{name}: scrollbar ({x},{row}) has {:?}",
+                        cell.modifier
+                    );
+                    // The bar runs ▲ (thumb ║ █) ▼; it can be cut short where a
+                    // horizontal bar or the border meets it.
+                    let next = buf.cell((x, row + 1)).map(|c| c.symbol().to_string());
+                    if cell.symbol() == "▼" || !matches!(next.as_deref(), Some("║" | "█" | "▼"))
+                    {
+                        break;
+                    }
+                    row += 1;
+                }
+            }
+        }
+        assert!(found > 0, "{name}: no scrollbar rendered");
+    }
+
+    #[test]
+    fn scrollbars_keep_their_own_style_under_highlights_and_tints() {
+        // list with a highlighted cursor row (selection fills the whole row)
+        assert_scrollbars_are_untouched("catalog", &catalog_app());
+        // grid: selected cell, visual block, typed-value colors
+        assert_scrollbars_are_untouched("grid", &grid_app());
+        // drill-down list with its cursor row
+        assert_scrollbars_are_untouched("drill-down", &drilldown_app());
+        // a mouse selection (reverse video) across the scrollbar column
+        let mut selected = catalog_app();
+        selected.mouse_selection_anchor = Some((2, 8));
+        selected.mouse_selection_current = Some((118, 11));
+        selected.mouse_selection_committed = true;
+        assert_scrollbars_are_untouched("catalog + mouse selection", &selected);
+    }
+
     #[test]
     fn the_checker_itself_catches_unreadable_pairs() {
         // Guard against a vacuous test: white-on-white and dark-blue-on-black

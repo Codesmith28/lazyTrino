@@ -16,9 +16,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{
-        Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    },
+    widgets::{Block, BorderType, Borders, Paragraph, ScrollbarOrientation, ScrollbarState},
 };
 
 use crate::app::{FilterModalState, FilterMode, NumericOp};
@@ -362,7 +360,7 @@ fn render_values_mode(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
             ScrollbarState::new(matched_indices.len().saturating_sub(visible_count))
                 .position(modal.scroll);
         frame.render_stateful_widget(
-            Scrollbar::default()
+            crate::tui::theme::scrollbar()
                 .orientation(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("▲"))
                 .end_symbol(Some("▼")),

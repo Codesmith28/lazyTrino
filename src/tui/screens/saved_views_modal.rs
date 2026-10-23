@@ -16,9 +16,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{
-        List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    },
+    widgets::{List, ListItem, ListState, Paragraph, ScrollbarOrientation, ScrollbarState},
 };
 
 use crate::app::{SaveViewPromptState, SavedViewsModalState};
@@ -148,7 +146,7 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &SavedViewsModalState) {
             let mut scroll_state =
                 ScrollbarState::new(modal.views.len().saturating_sub(1)).position(modal.selected);
             frame.render_stateful_widget(
-                Scrollbar::default()
+                crate::tui::theme::scrollbar()
                     .orientation(ScrollbarOrientation::VerticalRight)
                     .begin_symbol(Some("▲"))
                     .end_symbol(Some("▼")),

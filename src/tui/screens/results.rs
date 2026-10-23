@@ -1007,7 +1007,7 @@ pub fn render(
         .header(header)
         .column_spacing(2);
 
-    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+    use ratatui::widgets::{ScrollbarOrientation, ScrollbarState};
 
     frame.render_widget(table, inner);
 
@@ -1015,7 +1015,7 @@ pub fn render(
         let mut v_scroll_state =
             ScrollbarState::new(state.rows.len().saturating_sub(1)).position(effective_scroll_v);
         frame.render_stateful_widget(
-            Scrollbar::default()
+            crate::tui::theme::scrollbar()
                 .orientation(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("▲"))
                 .end_symbol(Some("▼")),
@@ -1029,7 +1029,7 @@ pub fn render(
         let mut h_scroll_state =
             ScrollbarState::new(all_vis_len.saturating_sub(1)).position(effective_scroll_h);
         frame.render_stateful_widget(
-            Scrollbar::default()
+            crate::tui::theme::scrollbar()
                 .orientation(ScrollbarOrientation::HorizontalBottom)
                 .thumb_symbol("▄")
                 .begin_symbol(Some("◄"))

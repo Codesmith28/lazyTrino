@@ -17,8 +17,7 @@ use ratatui::{
     layout::Rect,
     text::{Line, Span},
     widgets::{
-        Block, BorderType, Borders, List, ListItem, ListState, Scrollbar, ScrollbarOrientation,
-        ScrollbarState,
+        Block, BorderType, Borders, List, ListItem, ListState, ScrollbarOrientation, ScrollbarState,
     },
 };
 
@@ -148,7 +147,7 @@ pub(crate) fn render_selectable_list(
         let mut scrollbar_state =
             ScrollbarState::new(filtered.len().saturating_sub(1)).position(clamped_selected);
         frame.render_stateful_widget(
-            Scrollbar::default()
+            crate::tui::theme::scrollbar()
                 .orientation(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("▲"))
                 .end_symbol(Some("▼")),

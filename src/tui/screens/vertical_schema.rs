@@ -159,10 +159,10 @@ pub fn render(
 
     frame.render_widget(table, inner);
 
-    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+    use ratatui::widgets::{ScrollbarOrientation, ScrollbarState};
     let mut scroll_state = ScrollbarState::new(columns.len().saturating_sub(1)).position(scroll);
     frame.render_stateful_widget(
-        Scrollbar::default()
+        crate::tui::theme::scrollbar()
             .orientation(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("▲"))
             .end_symbol(Some("▼")),
