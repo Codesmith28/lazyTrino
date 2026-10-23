@@ -43,7 +43,17 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
         Mode::ExportModal => Some(" c:clipboard  e:CSV file  j/k:move  Enter:confirm  Esc:cancel "),
         Mode::SaveViewPrompt => Some(" Type:name  Bksp:del  Enter:save  Esc:cancel "),
         Mode::Search => Some(" Type:filter  Bksp:del  Enter:close  Esc:clear "),
-        Mode::QueryInput => Some(" Enter:run  Esc:cancel  Ctrl+A:all  Ctrl+C:copy  Ctrl+V:paste "),
+        Mode::QueryInput => Some(match app.query_vim_mode() {
+            crate::app::VimMode::Insert => {
+                " Enter:run  Esc:normal  ←→↑↓:move  Opt/Alt+←→:word  Cmd+←→:ends  Ctrl+A:all  Ctrl+V:paste "
+            }
+            crate::app::VimMode::Normal => {
+                " Enter:run  i/a/I/A:insert  hjkl/w/b/e/0/$:move  d/c/y+motion  x/D/C  p:paste  u/^R:undo  v:visual  Esc:cancel "
+            }
+            crate::app::VimMode::Visual => {
+                " hjkl/w/b/e/0/$:extend  iw/i\":object  y:yank  d/x:delete  c:change  o:swap  Esc:normal "
+            }
+        }),
         Mode::HelpModal | Mode::Normal => {
             let screen = if let Screen::Help = &app.screen {
                 app.prev_screen.as_deref().unwrap_or(&app.screen)

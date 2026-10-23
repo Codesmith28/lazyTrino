@@ -281,8 +281,54 @@ pub struct ActionState {
     pub pending_action: Option<usize>,
 }
 
+/// Editing mode of the SQL query panel (vim-style). The panel opens in
+/// `Insert`, so typing works immediately; `Esc` drops to `Normal`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VimMode {
+    #[default]
+    Insert,
+    Normal,
+    Visual,
+}
+
+/// Vim state of the query panel: pending count/operator/prefix, undo
+/// history and the unnamed register.
+#[derive(Clone, Debug, Default)]
+pub struct QueryVim {
+    pub mode: VimMode,
+    pub count: Option<usize>,
+    pub op_count: Option<usize>,
+    pub op: Option<char>,
+    pub pending: Option<char>,
+    pub last_find: Option<(char, char)>,
+    pub undo: Vec<(String, usize)>,
+    pub redo: Vec<(String, usize)>,
+    pub register: String,
+    /// True once the current insert session has pushed its undo snapshot.
+    pub insert_dirty: bool,
+}
+
+impl QueryVim {
+    pub fn clear_pending(&mut self) {
+        self.count = None;
+        self.op_count = None;
+        self.op = None;
+        self.pending = None;
+    }
+
+    /// Back to a fresh `Insert` session (panel opened or closed).
+    pub fn reset(&mut self) {
+        self.mode = VimMode::Insert;
+        self.clear_pending();
+        self.insert_dirty = false;
+        self.undo.clear();
+        self.redo.clear();
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ResultsState {
+    pub vim: QueryVim,
     pub query_buffer: String,
     pub query_cursor: usize,
     pub columns: Vec<String>,
@@ -422,6 +468,18 @@ impl ResultsState {
     }
 
     pub fn selection_range(&self) -> Option<(usize, usize)> {
+        if self.vim.mode == VimMode::Visual
+            && let Some(anchor) = self.selection_anchor
+        {
+            // Vim's visual selection is inclusive of the character under the cursor.
+            let start = anchor.min(self.query_cursor).min(self.query_buffer.len());
+            let last = anchor.max(self.query_cursor).min(self.query_buffer.len());
+            let mut end = (last + 1).min(self.query_buffer.len());
+            while end < self.query_buffer.len() && !self.query_buffer.is_char_boundary(end) {
+                end += 1;
+            }
+            return (start < end).then_some((start, end));
+        }
         if let Some(anchor) = self.selection_anchor
             && anchor != self.query_cursor
         {
@@ -1466,6 +1524,14 @@ impl App {
             }
             Some(_) => {}
             None => self.search_pane = Some(here),
+        }
+    }
+
+    /// Vim mode of the query panel (`Insert` when there is no query state yet).
+    pub fn query_vim_mode(&self) -> VimMode {
+        match &self.screen {
+            Screen::Actions(s) => s.results.as_ref().map(|r| r.vim.mode).unwrap_or_default(),
+            _ => VimMode::Insert,
         }
     }
 

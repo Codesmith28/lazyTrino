@@ -28,6 +28,7 @@ pub mod help_modal;
 mod mouse;
 mod navigation;
 mod query;
+pub mod query_vim;
 pub mod saved_views_modal;
 mod screen_text;
 

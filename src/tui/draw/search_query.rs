@@ -163,8 +163,21 @@ pub fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
         _ => " ".to_string(),
     };
 
+    let vim_mode = match effective_screen {
+        Screen::Actions(state) => state
+            .results
+            .as_ref()
+            .map(|r| r.vim.mode)
+            .unwrap_or_default(),
+        _ => crate::app::VimMode::Insert,
+    };
     let title = if is_editing {
-        format!(" Table Query Bar{table_scope}[EDITING - Press Enter to run, Esc to cancel] ")
+        let mode = match vim_mode {
+            crate::app::VimMode::Insert => "INSERT - Enter: run, Esc: normal mode",
+            crate::app::VimMode::Normal => "NORMAL - i: insert, Enter: run, Esc: cancel",
+            crate::app::VimMode::Visual => "VISUAL - y: yank, d: delete, Esc: normal mode",
+        };
+        format!(" Table Query Bar{table_scope}[{mode}] ")
     } else if is_table_view {
         format!(" Table Query Bar{table_scope}[Press 'q' or ':' to write query] ")
     } else {

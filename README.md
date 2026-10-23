@@ -217,10 +217,28 @@ Works in the catalog / schema / table lists, partition drill-down, and the resul
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Execute SQL query |
+| `Enter` | Execute SQL query (from any mode) |
+| `← → ↑ ↓` / `Home` / `End` | Move the cursor (`↑ ↓` walk wrapped rows); works in every vim mode |
+| `Opt/Alt + ← / →`, `Ctrl + ← / →` | Hop words (also `Opt+b` / `Opt+f`, which is what macOS terminals send for Option+arrow) |
+| `Cmd + ← / →` | Jump to the start / end of the query (needs a terminal that forwards Cmd, e.g. kitty-protocol terminals) |
+| `Opt+Backspace` / `Cmd+Backspace` | Delete previous word / delete to the start (insert mode) |
 | `Shift + ← / →` | Select text within query buffer |
 | `Ctrl+C` / `Ctrl+V` | Copy selected SQL text / paste clipboard text |
-| `Esc` | Return to results grid / cancel query editing |
+| `Esc` | Insert → Normal mode; in Normal mode leave the query bar (cancels a pending `d`/`c`/`y` or count first) |
+
+The query bar is a small vim editor. It opens in **INSERT** mode so you can type right away; `Esc` switches to **NORMAL**:
+
+| Normal mode | Action |
+| --- | --- |
+| `h j k l`, `w b e`, `W B E`, `0 ^ $`, `gg G`, `f F t T` + char, `;` `,` | Motions (`j`/`k` move between wrapped rows). Counts work: `3w` |
+| `d` / `c` / `y` + motion | Delete / change / yank; `dd`, `cc`, `yy` act on the whole query |
+| `iw aw i" a" i' a' i( a( i[ a[ i{ a{` | Text objects, e.g. `ci'`, `di(`, `daw` |
+| `x X D C s S r ~` | Quick edits |
+| `i a I A` (`o O` too) | Enter insert mode |
+| `p` / `P` | Paste (the vim register, else the clipboard) |
+| `u` / `Ctrl+R` | Undo / redo |
+| `v` | Visual mode: extend with motions or text objects, then `y` / `d` / `c`; `o` swaps ends |
+| `y` | Also copies to the system clipboard |
 
 ### Mouse Controls
 

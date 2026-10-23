@@ -15,7 +15,7 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::{
-    ACTIONS, Action, ActionState, ActivePanel, App, DrillDownState, Mode, ResultsState, Screen,
+    ACTIONS, Action, ActionState, ActivePanel, App, DrillDownState, ResultsState, Screen,
 };
 use crate::tui::handler::Command;
 
@@ -704,7 +704,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('q') | KeyCode::Char(':') => {
-                            app.mode = Mode::QueryInput;
+                            crate::tui::handler::query::begin_query_input(app);
                             None
                         }
                         KeyCode::Char('y') => {

@@ -121,6 +121,22 @@ const HELP_SECTIONS: &[HelpSection] = &[
             "  Ctrl+C                         Quit lazyTrino",
         ],
     },
+    HelpSection {
+        title: "Query Bar (vim-style)",
+        items: &[
+            "  (opens in INSERT)              Type SQL; Enter runs it; Esc switches to NORMAL mode",
+            "  ← → ↑ ↓ / Home / End           Move (↑ ↓ walk wrapped rows) — in every mode",
+            "  Opt/Alt+← →, Ctrl+← →          Word hop (also Opt+b / Opt+f); Cmd+← → jump to start / end",
+            "  Opt+Backspace, Cmd+Backspace   Delete word / delete to the start (insert mode)",
+            "  NORMAL: h j k l w b e W B E    Motions; 0 ^ $ line ends; gg G; f/F/t/T + char, ; ,",
+            "  NORMAL: d c y + motion         Delete / change / yank; dd cc yy act on the whole query",
+            "  NORMAL: iw aw i\" a\" i' a' i( a(  Text objects, e.g. ci' or di(",
+            "  NORMAL: x X D C s S r ~        Quick edits; counts work (3x, d2w)",
+            "  NORMAL: i a I A / p P / u Ctrl+R  Enter insert / paste / undo / redo",
+            "  NORMAL: v                      Visual select (then motions, y d c, o to swap ends)",
+            "  NORMAL: Esc                    Leave the query bar (first cancels a pending d/c/y or count)",
+        ],
+    },
 ];
 
 pub fn build_help_lines(search_query: &str) -> Vec<Line<'static>> {

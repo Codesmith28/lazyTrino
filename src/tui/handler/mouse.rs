@@ -120,7 +120,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     );
                     let is_actions_screen = matches!(&app.screen, Screen::Actions(_));
                     if is_actions_screen {
-                        app.mode = Mode::QueryInput;
+                        super::query::begin_query_input(app);
                     }
                     app.set_active_panel(ActivePanel::MainViewer);
                     app.is_dragging_query_select = true;
