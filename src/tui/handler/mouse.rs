@@ -866,18 +866,19 @@ fn extract_structured_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -
 
     // 1. Selection in Bottom Query Inspector Pane
     if anchor.1 >= bottom_y || current.1 >= bottom_y {
-        let mut lines = Vec::new();
         let inner_y = bottom_y + 1;
-        let rev_logs: Vec<&QueryLogEntry> = app.query_logs.iter().rev().collect();
-        for r in start_row..=end_row {
-            if r >= inner_y && r < term_height.saturating_sub(1) {
-                let idx = (r - inner_y) as usize + app.query_inspector_scroll;
-                if idx < rev_logs.len() {
-                    lines.push(rev_logs[idx].sql.clone());
-                }
-            }
+        let last_row = term_height.saturating_sub(2);
+        let from = start_row.max(inner_y);
+        let to = end_row.min(last_row);
+        if from > to {
+            return String::new();
         }
-        return lines.join("\n");
+        return crate::tui::screens::query_inspector::selected_text(
+            app,
+            term_width.saturating_sub(2),
+            (from - inner_y) as usize,
+            (to - inner_y) as usize,
+        );
     }
 
     let is_in_table = matches!(app.screen, Screen::Actions(_));
