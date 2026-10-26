@@ -394,6 +394,14 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return None;
     }
 
+    // `{` / `}` scroll the Executed Queries pane (it has no focus of its own;
+    // the mouse wheel over it works too).
+    if matches!(code, KeyCode::Char('{') | KeyCode::Char('}')) {
+        let delta = if code == KeyCode::Char('{') { -1 } else { 1 };
+        crate::tui::screens::query_inspector::scroll_by(app, delta);
+        return None;
+    }
+
     if code == KeyCode::Char('/')
         && matches!(
             app.screen,
@@ -506,6 +514,28 @@ mod router_tests {
         app.screen = schema_app().screen;
         press(&mut app, KeyCode::Down, M::NONE);
         assert!(app.search_query.is_empty());
+    }
+
+    #[test]
+    fn braces_scroll_the_executed_queries_pane() {
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+        let mut app = schema_app();
+        for i in 0..30 {
+            let id = app.add_query_log(format!("SELECT {i}"));
+            app.complete_query_log_success(id, 1, 1);
+        }
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| {
+            crate::tui::screens::query_inspector::render(f, Rect::new(0, 17, 80, 7), &app)
+        })
+        .unwrap();
+        press(&mut app, KeyCode::Char('}'), M::NONE);
+        press(&mut app, KeyCode::Char('}'), M::NONE);
+        assert_eq!(app.query_inspector_scroll, 2);
+        press(&mut app, KeyCode::Char('{'), M::NONE);
+        assert_eq!(app.query_inspector_scroll, 1);
+        // the list cursor is not affected
+        assert!(matches!(&app.screen, Screen::Schema(s) if s.selected == 1));
     }
 
     #[test]

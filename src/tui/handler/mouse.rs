@@ -446,6 +446,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::ScrollDown => {
+            if crate::tui::screens::query_inspector::contains(app, mouse.column, mouse.row) {
+                crate::tui::screens::query_inspector::scroll_by(app, 1);
+                return None;
+            }
             if app.help_modal.is_some() || matches!(app.screen, Screen::Help) {
                 if let Some(ref mut m) = app.help_modal {
                     m.scroll = m.scroll.saturating_add(1);
@@ -516,6 +520,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::ScrollUp => {
+            if crate::tui::screens::query_inspector::contains(app, mouse.column, mouse.row) {
+                crate::tui::screens::query_inspector::scroll_by(app, -1);
+                return None;
+            }
             if app.help_modal.is_some() || matches!(app.screen, Screen::Help) {
                 if let Some(ref mut m) = app.help_modal {
                     m.scroll = m.scroll.saturating_sub(1);
@@ -879,7 +887,7 @@ fn extract_structured_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -
         }
         return crate::tui::screens::query_inspector::selected_text(
             app,
-            term_width.saturating_sub(2),
+            crate::tui::screens::query_inspector::wrap_width(term_width.saturating_sub(2)),
             (from - inner_y) as usize,
             (to - inner_y) as usize,
         );
@@ -1449,6 +1457,39 @@ mod tests {
 
         let text = extract_selected_text(&app, (10, bottom_y + 1), (10, bottom_y + 1));
         assert_eq!(text, "SELECT 2");
+    }
+
+    #[test]
+    fn the_wheel_over_executed_queries_scrolls_it_and_nothing_else() {
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+        let mut app = sample_app();
+        for i in 0..40 {
+            let id = app.add_query_log(format!("SELECT {i}"));
+            app.complete_query_log_success(id, 5, 1);
+        }
+        let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        term.draw(|f| {
+            crate::tui::screens::query_inspector::render(f, Rect::new(0, 17, 100, 7), &app)
+        })
+        .unwrap();
+        let selected_before = get_selected(&app.screen);
+        let wheel = |kind, row| MouseEvent {
+            kind,
+            column: 10,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        handle_mouse_sync(&mut app, wheel(MouseEventKind::ScrollDown, 20));
+        handle_mouse_sync(&mut app, wheel(MouseEventKind::ScrollDown, 20));
+        assert_eq!(app.query_inspector_scroll, 2);
+        handle_mouse_sync(&mut app, wheel(MouseEventKind::ScrollUp, 20));
+        assert_eq!(app.query_inspector_scroll, 1);
+        assert_eq!(get_selected(&app.screen), selected_before, "list untouched");
+
+        // above the pane the wheel keeps doing what it did
+        handle_mouse_sync(&mut app, wheel(MouseEventKind::ScrollDown, 5));
+        assert_eq!(app.query_inspector_scroll, 1);
     }
 
     #[test]

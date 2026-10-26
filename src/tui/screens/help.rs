@@ -34,6 +34,8 @@ const HELP_SECTIONS: &[HelpSection] = &[
             "  Inside Table View             Left: Menu Pane (15%) | Right: Query & Main Preview (85%)",
             "  ?                             Open this help (search with /, scroll with j/k)",
             "  Shift+H/L / Shift+←/→ / Tab / Click  Switch focus between Menu Pane (left) and Preview Pane (right)",
+            "  { / }  or mouse wheel on it     Scroll the Executed Queries pane (long queries and errors)",
+            "  j/k, PgUp/PgDn, wheel in a tall row  Scroll inside a row taller than the pane (e.g. Table DDL)",
             "  Option Selection              Selecting a menu option shifts focus to Preview Pane while option stays highlighted",
         ],
     },

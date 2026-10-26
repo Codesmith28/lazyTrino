@@ -1423,7 +1423,11 @@ pub struct App {
     pub is_dragging_resizer: bool,
     pub is_dragging_query_select: bool,
     pub is_dragging_h_scrollbar: bool,
+    /// First visible line of the Executed Queries pane (0 = newest at top).
     pub query_inspector_scroll: usize,
+    /// Where the pane was last drawn (set by the renderer, read by the
+    /// mouse wheel hit-test and scroll clamping).
+    pub inspector_rect: Cell<ratatui::layout::Rect>,
     pub mouse_selection_anchor: Option<(u16, u16)>,
     pub mouse_selection_current: Option<(u16, u16)>,
     pub is_selecting_text: bool,
@@ -1491,6 +1495,7 @@ impl App {
             is_dragging_query_select: false,
             is_dragging_h_scrollbar: false,
             query_inspector_scroll: 0,
+            inspector_rect: Cell::new(ratatui::layout::Rect::default()),
             mouse_selection_anchor: None,
             mouse_selection_current: None,
             is_selecting_text: false,
