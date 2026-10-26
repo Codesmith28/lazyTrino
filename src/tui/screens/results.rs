@@ -25,6 +25,76 @@ use crate::{app::ResultsState, tui::theme};
 /// Word-wraps `text` to `max_width` terminal cells. Widths are measured in
 /// display cells (so `é` is 1 and `界` is 2), and over-long words are split
 /// between characters — never inside one.
+/// Draws logical `(text, style)` lines wrapped to the pane, as a window of
+/// `row_line_offset` lines with a scrollbar and a `lines a–b of n` marker when
+/// there is more than fits. The same state `scroll_within_row` moves, so j/k,
+/// the page keys and the wheel scroll error / message panels too.
+fn render_scrollable_text(
+    frame: &mut Frame,
+    area: Rect,
+    inner: Rect,
+    state: &ResultsState,
+    logical: &[(String, ratatui::style::Style)],
+    is_active: bool,
+) {
+    // one column is left for the scrollbar
+    let width = (inner.width as usize).saturating_sub(1).max(1);
+    let mut rows: Vec<(String, ratatui::style::Style)> = Vec::new();
+    for (text, style) in logical {
+        if text.is_empty() {
+            rows.push((String::new(), *style));
+        }
+        for line in wrap_text(text, width) {
+            rows.push((line, *style));
+        }
+    }
+    let total = rows.len();
+    let height = (inner.height as usize).max(1);
+    // geometry for scroll_within_row / the clamping below
+    state.sel_row_height.set(total);
+    state.viewport_lines.set(height);
+    state.row_offset_for.set(state.selected_row);
+    let offset = state
+        .row_line_offset
+        .get()
+        .min(total.saturating_sub(height));
+    state.row_line_offset.set(offset);
+
+    let lines: Vec<Line> = rows
+        .into_iter()
+        .skip(offset)
+        .take(height)
+        .map(|(t, st)| Line::from(Span::styled(t, st)))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+
+    if total > height {
+        use ratatui::widgets::{ScrollbarOrientation, ScrollbarState};
+        let mut bar = ScrollbarState::new(total - height).position(offset);
+        frame.render_stateful_widget(
+            crate::tui::theme::scrollbar()
+                .orientation(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("▲"))
+                .end_symbol(Some("▼")),
+            inner,
+            &mut bar,
+        );
+        let label = format!(
+            " lines {}–{} of {} · j/k scroll ",
+            offset + 1,
+            (offset + height).min(total),
+            total
+        );
+        let w = (label.chars().count() as u16).min(area.width.saturating_sub(4));
+        if w > 0 && area.height > 2 {
+            frame.render_widget(
+                Paragraph::new(Span::styled(label, theme::border_style(is_active))),
+                Rect::new(area.right().saturating_sub(w + 2), area.bottom() - 1, w, 1),
+            );
+        }
+    }
+}
+
 pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
     use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -741,41 +811,46 @@ pub fn render(
     }
 
     if let Some(invalid_msg) = &state.invalid_query_error {
-        let err_lines = vec![
-            Line::from(Span::styled(
-                "✖ Invalid query for this view",
+        let err_lines = [
+            (
+                "✖ Invalid query for this view".to_string(),
                 theme::error_bold_style(),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(invalid_msg.as_str(), theme::error_style())),
-            Line::from(""),
-            Line::from(Span::styled(
+            ),
+            (String::new(), theme::text_style()),
+            (invalid_msg.clone(), theme::error_style()),
+            (String::new(), theme::text_style()),
+            (
                 format!(
                     "Current View Scope: {}.{}.{}",
                     state.catalog, state.schema, state.table
                 ),
                 theme::info_style(),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Note: Queries in this view can only target data inside the current table.",
+            ),
+            (String::new(), theme::text_style()),
+            (
+                "Note: Queries in this view can only target data inside the current table."
+                    .to_string(),
                 theme::muted_style(),
-            )),
-            Line::from(Span::styled(
-                "Enter full SQL queries operating on this table (e.g. 'SELECT * FROM table WHERE col = val').",
+            ),
+            (
+                "Enter full SQL queries operating on this table (e.g. 'SELECT * FROM table WHERE col = val')."
+                    .to_string(),
                 theme::muted_style(),
-            )),
+            ),
         ];
-        let p = Paragraph::new(err_lines).wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(p, inner);
+        render_scrollable_text(frame, area, inner, state, &err_lines, is_active);
         return;
     }
 
     if let Some(err) = &state.error {
-        let err = Paragraph::new(err.as_str())
-            .style(theme::error_style())
-            .wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(err, inner);
+        render_scrollable_text(
+            frame,
+            area,
+            inner,
+            state,
+            &[(err.clone(), theme::error_style())],
+            is_active,
+        );
         return;
     }
 
@@ -789,10 +864,14 @@ pub fn render(
     }
 
     if state.columns.is_empty() && !state.rows.is_empty() && state.rows[0].len() == 1 {
-        let err = Paragraph::new(state.rows[0][0].as_str())
-            .style(theme::error_style())
-            .wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(err, inner);
+        render_scrollable_text(
+            frame,
+            area,
+            inner,
+            state,
+            &[(state.rows[0][0].clone(), theme::error_style())],
+            is_active,
+        );
         return;
     }
 
@@ -2172,6 +2251,70 @@ mod tests {
                 .join("\n")
                 .contains("column_000")
         );
+    }
+
+    #[test]
+    fn a_long_error_message_can_be_scrolled_to_its_end() {
+        let message = (0..60)
+            .map(|i| format!("stack frame {i:02}: something failed here"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let state = ResultsState {
+            error: Some(message),
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            ..Default::default()
+        };
+        let top = render_grid(&state, 60, 12).join("\n");
+        assert!(top.contains("stack frame 00") && !top.contains("stack frame 59"));
+        assert!(top.contains("lines 1–"), "{top}");
+
+        assert!(state.scroll_within_row(10_000));
+        let end = render_grid(&state, 60, 12).join("\n");
+        assert!(end.contains("stack frame 59"), "last line reachable: {end}");
+        assert!(!end.contains("stack frame 00"));
+        assert!(!state.scroll_within_row(1), "at the end");
+    }
+
+    #[test]
+    fn the_invalid_query_note_and_one_row_error_results_scroll_too() {
+        let tall = "x".repeat(2_000);
+        let state = ResultsState {
+            invalid_query_error: Some(tall.clone()),
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            ..Default::default()
+        };
+        let screen = render_grid(&state, 50, 12).join("\n");
+        assert!(screen.contains("Invalid query"), "{screen}");
+        assert!(state.sel_row_height.get() > state.viewport_lines.get());
+        assert!(state.scroll_within_row(10_000));
+        assert!(
+            render_grid(&state, 50, 12)
+                .join("\n")
+                .contains("Current View Scope"),
+            "the scope note under a huge message is reachable"
+        );
+
+        let state = ResultsState {
+            rows: vec![vec![format!("Error: {tall}")]],
+            ..Default::default()
+        };
+        render_grid(&state, 50, 12);
+        assert!(state.scroll_within_row(5));
+    }
+
+    #[test]
+    fn short_messages_do_not_scroll() {
+        let state = ResultsState {
+            error: Some("boom".to_string()),
+            ..Default::default()
+        };
+        let screen = render_grid(&state, 50, 12).join("\n");
+        assert!(screen.contains("boom") && !screen.contains("lines 1–"));
+        assert!(!state.scroll_within_row(1));
     }
 
     #[test]
