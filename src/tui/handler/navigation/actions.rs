@@ -213,6 +213,9 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
     }
 }
 
+/// Characters per h / l press (or horizontal wheel notch) in the Partitions tree.
+pub const PARTITION_HSCROLL_STEP: usize = 8;
+
 pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
     let code = normalize_key_code(key.code);
     let is_ctrl = key
@@ -471,6 +474,13 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Left => {
+                            if is_partitions {
+                                app.partition_scroll_h = app
+                                    .partition_scroll_h
+                                    .min(app.partition_max_h.get())
+                                    .saturating_sub(PARTITION_HSCROLL_STEP);
+                                return None;
+                            }
                             if let Some(ref mut res) = s.results {
                                 if is_shift && code == KeyCode::Left {
                                     match res.visual_mode {
@@ -498,6 +508,12 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Right => {
+                            if is_partitions {
+                                app.partition_scroll_h = (app.partition_scroll_h
+                                    + PARTITION_HSCROLL_STEP)
+                                    .min(app.partition_max_h.get());
+                                return None;
+                            }
                             if let Some(ref mut res) = s.results
                                 && !res.columns.is_empty()
                             {

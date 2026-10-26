@@ -1414,6 +1414,11 @@ pub struct App {
     pub active_panel: ActivePanel,
     pub partition_tree_lines: Vec<String>,
     pub partition_scroll: usize,
+    /// Characters the Partitions tree is scrolled to the left, for lines wider
+    /// than the pane (long storage locations). The renderer records the
+    /// largest useful value in `partition_max_h`.
+    pub partition_scroll_h: usize,
+    pub partition_max_h: Cell<usize>,
     pub vertical_schema_cols: Vec<VerticalColumn>,
     pub schema_scroll: usize,
     pub auto_connect: bool,
@@ -1485,6 +1490,8 @@ impl App {
             active_panel: ActivePanel::MainViewer,
             partition_tree_lines: Vec::new(),
             partition_scroll: 0,
+            partition_scroll_h: 0,
+            partition_max_h: Cell::new(0),
             vertical_schema_cols: Vec::new(),
             schema_scroll: 0,
             auto_connect,

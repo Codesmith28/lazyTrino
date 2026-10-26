@@ -474,6 +474,12 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 };
                 let action = ACTIONS.get(selected_idx).map(|(_, _, a)| a);
                 if matches!(action, Some(Action::Partitions)) {
+                    if is_horizontal {
+                        app.partition_scroll_h = (app.partition_scroll_h
+                            + crate::tui::handler::navigation::PARTITION_HSCROLL_STEP)
+                            .min(app.partition_max_h.get());
+                        return None;
+                    }
                     let max_lines = app.partition_tree_lines.len().saturating_sub(1);
                     app.partition_scroll = (app.partition_scroll + 3).min(max_lines);
                 } else if matches!(action, Some(Action::Schema)) {
@@ -551,6 +557,15 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 };
                 let action = ACTIONS.get(selected_idx).map(|(_, _, a)| a);
                 if matches!(action, Some(Action::Partitions)) {
+                    if is_horizontal {
+                        app.partition_scroll_h = app
+                            .partition_scroll_h
+                            .min(app.partition_max_h.get())
+                            .saturating_sub(
+                                crate::tui::handler::navigation::PARTITION_HSCROLL_STEP,
+                            );
+                        return None;
+                    }
                     app.partition_scroll = app.partition_scroll.saturating_sub(3);
                 } else if matches!(action, Some(Action::Schema)) {
                     app.schema_scroll = app.schema_scroll.saturating_sub(3);
@@ -587,6 +602,17 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::ScrollRight => {
+            if let Screen::Actions(a) = &app.screen
+                && matches!(
+                    ACTIONS.get(a.selected).map(|(_, _, act)| act),
+                    Some(Action::Partitions)
+                )
+            {
+                app.partition_scroll_h = (app.partition_scroll_h
+                    + crate::tui::handler::navigation::PARTITION_HSCROLL_STEP)
+                    .min(app.partition_max_h.get());
+                return None;
+            }
             let avail_width = results_table_inner_rect(app, term_width, term_height)
                 .map(|r| (r.width as usize).saturating_sub(4).max(1))
                 .unwrap_or(80);
@@ -598,6 +624,18 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::ScrollLeft => {
+            if let Screen::Actions(a) = &app.screen
+                && matches!(
+                    ACTIONS.get(a.selected).map(|(_, _, act)| act),
+                    Some(Action::Partitions)
+                )
+            {
+                app.partition_scroll_h = app
+                    .partition_scroll_h
+                    .min(app.partition_max_h.get())
+                    .saturating_sub(crate::tui::handler::navigation::PARTITION_HSCROLL_STEP);
+                return None;
+            }
             let avail_width = results_table_inner_rect(app, term_width, term_height)
                 .map(|r| (r.width as usize).saturating_sub(4).max(1))
                 .unwrap_or(80);

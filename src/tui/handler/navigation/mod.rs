@@ -1956,6 +1956,39 @@ pub mod tests {
     }
 
     #[test]
+    fn h_l_and_arrows_scroll_the_partitions_tree_sideways() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            selected: Action::Partitions.index(),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+        app.partition_max_h.set(20); // as recorded by the renderer
+        let h = |app: &App| app.partition_scroll_h;
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(h(&app), PARTITION_HSCROLL_STEP);
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Right));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Right));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Right));
+        assert_eq!(h(&app), 20, "clamped to the widest line");
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Left));
+        assert_eq!(h(&app), 12);
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        assert_eq!(h(&app), 0);
+
+        // a narrower pane (smaller max) pulls an old offset back in
+        app.partition_scroll_h = 30;
+        app.partition_max_h.set(10);
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Left));
+        assert_eq!(h(&app), 2);
+    }
+
+    #[test]
     fn test_u_and_esc_undo_and_clear_selection() {
         let mut res = sample_leaf_results_state();
         res.columns = vec!["id".to_string(), "name".to_string()];

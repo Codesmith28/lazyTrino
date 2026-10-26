@@ -217,6 +217,23 @@ fn split_tree_line(line: &str) -> (String, String) {
     (branch_part, content_part)
 }
 
+/// Drops the first `n` characters of `branch + content`, keeping which part
+/// each remaining character belongs to (so the colors survive scrolling).
+fn scroll_parts(branch: String, content: String, n: usize) -> (String, String) {
+    if n == 0 {
+        return (branch, content);
+    }
+    let branch_len = branch.chars().count();
+    if n >= branch_len {
+        (
+            String::new(),
+            content.chars().skip(n - branch_len).collect(),
+        )
+    } else {
+        (branch.chars().skip(n).collect(), content)
+    }
+}
+
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -243,6 +260,16 @@ pub fn render(
 
     let tree_lines = raw_partitions;
 
+    // Lines wider than the pane (long storage locations) scroll sideways.
+    let widest = tree_lines
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0);
+    let max_h = widest.saturating_sub((inner.width as usize).saturating_sub(1));
+    app.partition_max_h.set(max_h);
+    let hscroll = app.partition_scroll_h.min(max_h);
+
     let items: Vec<ListItem> = tree_lines
         .iter()
         .skip(scroll)
@@ -255,6 +282,7 @@ pub fn render(
                 is_active && app.is_area_mouse_selected(inner.x, inner.width, line_y);
 
             let (branch_part, content_part) = split_tree_line(line_str);
+            let (branch_part, content_part) = scroll_parts(branch_part, content_part, hscroll);
 
             let content_style = if is_mouse_sel {
                 theme::text_selection_style()
@@ -294,11 +322,81 @@ pub fn render(
         inner,
         &mut scroll_state,
     );
+    if max_h > 0 {
+        let mut h_state = ScrollbarState::new(max_h).position(hscroll);
+        frame.render_stateful_widget(
+            crate::tui::theme::scrollbar()
+                .orientation(ScrollbarOrientation::HorizontalBottom)
+                .thumb_symbol("▄")
+                .begin_symbol(Some("◄"))
+                .end_symbol(Some("►")),
+            inner,
+            &mut h_state,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn draw(app: &crate::app::App, lines: &[String], w: u16) -> Vec<String> {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut term = Terminal::new(TestBackend::new(w, 8)).unwrap();
+        term.draw(|f| render(f, Rect::new(0, 0, w, 8), lines, "t", 0, true, app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..8)
+            .map(|y| (0..w).map(|x| buf.cell((x, y)).unwrap().symbol()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn wide_lines_scroll_sideways_and_keep_their_colors() {
+        let location = format!(" s3://bucket/{}/END", "very-long-path/".repeat(8));
+        let lines = vec![
+            location.clone(),
+            " ├── Level 1: date=<YYYY>".to_string(),
+            " └── .hoodie/".to_string(),
+        ];
+        let mut app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        let screen = draw(&app, &lines, 40).join("\n");
+        assert!(screen.contains("s3://bucket"), "{screen}");
+        assert!(!screen.contains("END"), "the tail is off-screen");
+        let max = app.partition_max_h.get();
+        assert!(
+            max > 0 && screen.contains('►'),
+            "horizontal scrollbar: {screen}"
+        );
+
+        app.partition_scroll_h = max;
+        let screen = draw(&app, &lines, 40).join("\n");
+        assert!(
+            screen.contains("END") && !screen.contains("s3://bucket"),
+            "{screen}"
+        );
+
+        // past the end clamps; the tree branches scroll away with the text
+        app.partition_scroll_h = 10_000;
+        assert!(draw(&app, &lines, 40).join("\n").contains("END"));
+        assert_eq!(
+            scroll_parts(" ├── ".to_string(), "Level".to_string(), 2),
+            ("── ".to_string(), "Level".to_string())
+        );
+        assert_eq!(
+            scroll_parts(" ├── ".to_string(), "Level".to_string(), 7),
+            (String::new(), "vel".to_string())
+        );
+    }
+
+    #[test]
+    fn narrow_content_has_no_sideways_scroll() {
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        let lines = vec![" s3://b/t/".to_string()];
+        let screen = draw(&app, &lines, 40).join("\n");
+        assert_eq!(app.partition_max_h.get(), 0);
+        assert!(!screen.contains('►'));
+    }
 
     #[test]
     fn ddl_column_types_are_parsed() {
