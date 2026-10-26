@@ -36,6 +36,8 @@ const HELP_SECTIONS: &[HelpSection] = &[
             "  Shift+H/L / Shift+←/→ / Tab / Click  Switch focus between Menu Pane (left) and Preview Pane (right)",
             "  { / }  or mouse wheel on it     Scroll the Executed Queries pane (long queries and errors)",
             "  j/k, PgUp/PgDn, wheel in a tall row  Scroll inside a row taller than the pane (e.g. Table DDL)",
+            "                                 Long error messages scroll the same way",
+            "  h/l, ←/→ or Shift+wheel (Partitions)  Scroll the tree sideways when a line is wider than the pane",
             "  Option Selection              Selecting a menu option shifts focus to Preview Pane while option stays highlighted",
         ],
     },

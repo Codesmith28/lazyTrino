@@ -149,7 +149,8 @@ lazyTrino --profile prod
 | `/` | Focus search bar (in menus and modals) |
 | `Tab` / `Shift+H` / `Shift+L` | Toggle focus between Menu Pane (left) and Preview Pane (right) |
 | `{` / `}` or mouse wheel over it | Scroll the **Executed Queries** pane when the log, a long query or an error is taller than it |
-| `j`/`k`, `PgUp`/`PgDn`, wheel | In the results grid, scroll *inside* a row taller than the pane (e.g. **Table DDL**) before moving to the next row; the border shows `lines 25–48 of 118` |
+| `j`/`k`, `PgUp`/`PgDn`, wheel | In the results grid, scroll *inside* a row taller than the pane (e.g. **Table DDL**, or a long error message) before moving to the next row; the border shows `lines 25–48 of 118` |
+| `h`/`l`, `←`/`→`, `Shift`+wheel | In **Partitions**, scroll the tree sideways when a line (such as a long `s3://…` location) is wider than the pane |
 | `?` | Toggle Help overlay |
 | `Ctrl+C` | Quit lazyTrino |
 
