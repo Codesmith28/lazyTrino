@@ -130,20 +130,32 @@ pub fn render_notice_toast(frame: &mut Frame, area: Rect, app: &App) {
         crate::app::NoticeKind::Success => ("✔", "Done", theme::toast_style()),
         crate::app::NoticeKind::Error => ("✖", "Error", theme::error_toast_style()),
     };
-    let text = format!(" {} ", sanitize_toast_text(&notice.text));
-    let toast_w = (text.chars().count() as u16 + 2).clamp(TOAST_MIN_W, max_w);
+    let message = sanitize_toast_text(&notice.text);
+    // Long messages (a file path, an error with detail) wrap onto up to
+    // MAX_TOAST_LINES rows instead of being cut in the middle.
+    let toast_w = (message.chars().count() as u16 + 4).clamp(TOAST_MIN_W, max_w);
+    let text_w = toast_w.saturating_sub(4) as usize;
+    let mut lines = crate::tui::screens::results::wrap_text(&message, text_w.max(1));
+    let room = (area.height.saturating_sub(2) as usize).saturating_sub(2);
+    let max_lines = MAX_TOAST_LINES.min(room.max(1));
+    if lines.len() > max_lines {
+        lines.truncate(max_lines);
+        if let Some(last) = lines.last_mut() {
+            *last = truncate_middle(&format!("{last}…"), text_w.max(1));
+        }
+    }
     let toast_area = Rect {
         x: area.x + area.width - toast_w - 1,
         y: area.y + 1,
         width: toast_w,
-        height: TOAST_H,
+        height: lines.len().max(1) as u16 + 2,
     };
     render_toast_card(
         frame,
         toast_area,
         &format!(" {icon} {label} "),
         accent,
-        &truncate_middle(&text, toast_w.saturating_sub(2) as usize),
+        &lines,
     );
 }
 
@@ -154,7 +166,7 @@ fn render_toast_card(
     area: Rect,
     title: &str,
     accent: ratatui::style::Style,
-    text: &str,
+    text: &[String],
 ) {
     frame.render_widget(ratatui::widgets::Clear, area);
     let block = Block::default()
@@ -164,14 +176,11 @@ fn render_toast_card(
         .title(Span::styled(title.to_string(), accent));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            text.to_string(),
-            theme::toast_text_style(),
-        )))
-        .alignment(Alignment::Center),
-        inner,
-    );
+    let lines: Vec<Line> = text
+        .iter()
+        .map(|t| Line::from(Span::styled(t.clone(), theme::toast_text_style())))
+        .collect();
+    frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
 }
 
 /// Keeps both ends (action and file name) when a message is too wide.
@@ -196,6 +205,23 @@ pub(crate) fn sanitize_toast_text(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
+}
+
+/// Fits a footer hint into `width`, cutting the contextual keys first so the
+/// always-relevant tail (`?:help  Ctrl+C:quit`) stays visible on narrow
+/// terminals.
+pub fn fit_hint(hint: &str, width: usize) -> String {
+    if hint.chars().count() <= width {
+        return hint.to_string();
+    }
+    if let Some(pos) = hint.rfind("  ?:help") {
+        let (head, tail) = hint.split_at(pos);
+        let tail_w = tail.chars().count();
+        if width > tail_w + 6 {
+            return format!("{}{tail}", truncate_hint(head, width - tail_w));
+        }
+    }
+    truncate_hint(hint, width)
 }
 
 pub fn truncate_hint(hint: &str, width: usize) -> String {
@@ -244,7 +270,7 @@ pub fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
-    let footer = Paragraph::new(hint_line(&truncate_hint(hint, area.width as usize)))
+    let footer = Paragraph::new(hint_line(&fit_hint(hint, area.width as usize)))
         .style(theme::footer_style())
         .wrap(ratatui::widgets::Wrap { trim: true });
     frame.render_widget(footer, area);
@@ -253,6 +279,8 @@ pub fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
 pub const TOAST_MIN_W: u16 = 24;
 pub const TOAST_MAX_W: u16 = 60;
 pub const TOAST_H: u16 = 3;
+/// Most message rows a notification toast grows to.
+pub const MAX_TOAST_LINES: usize = 6;
 
 pub fn toast_envelope(area: Rect) -> Option<Rect> {
     if area.width < TOAST_MAX_W + 2 || area.height < TOAST_H + 1 {
@@ -292,6 +320,94 @@ pub fn render_copied_toast(frame: &mut Frame, area: Rect, app: &App) {
         toast_area,
         " ✔ Copied ",
         theme::toast_style(),
-        &truncate_hint(&text, toast_w.saturating_sub(2) as usize),
+        &[truncate_hint(&text, toast_w.saturating_sub(2) as usize)],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn toast_text(app: &App, w: u16, h: u16) -> String {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| render_notice_toast(f, Rect::new(0, 0, w, h), app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..h)
+            .map(|y| {
+                (0..w)
+                    .map(|x| buf.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn app_with(text: &str, kind: crate::app::NoticeKind) -> App {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.set_notice(kind, text);
+        app
+    }
+
+    #[test]
+    fn a_long_notification_wraps_instead_of_losing_its_middle() {
+        let words: Vec<String> = (0..24).map(|i| format!("word{i:02}")).collect();
+        let message = format!("Export failed: {}", words.join(" "));
+        let app = app_with(&message, crate::app::NoticeKind::Error);
+        let screen = toast_text(&app, 80, 20);
+        for w in &words {
+            assert!(screen.contains(w.as_str()), "{w} was dropped:\n{screen}");
+        }
+        assert!(!screen.contains('…'), "nothing needed cutting:\n{screen}");
+        // it is a multi-row card, not one squeezed line
+        assert!(screen.lines().filter(|l| l.contains("word")).count() >= 2);
+    }
+
+    #[test]
+    fn an_enormous_notification_is_capped_with_an_ellipsis() {
+        let message = "x ".repeat(2_000);
+        let app = app_with(&message, crate::app::NoticeKind::Error);
+        let screen = toast_text(&app, 80, 20);
+        let rows = screen.lines().filter(|l| l.contains('x')).count();
+        assert!(rows <= MAX_TOAST_LINES, "{rows} rows");
+        assert!(screen.contains('…'));
+    }
+
+    #[test]
+    fn short_notifications_stay_a_three_row_card() {
+        let app = app_with("Copied 3 rows", crate::app::NoticeKind::Success);
+        let screen = toast_text(&app, 80, 20);
+        assert!(screen.contains("Copied 3 rows"));
+        let border_rows = screen
+            .lines()
+            .filter(|l| l.contains('╭') || l.contains('╰'))
+            .count();
+        assert_eq!(border_rows, 2);
+        assert_eq!(screen.lines().filter(|l| l.contains('│')).count(), 1);
+    }
+
+    #[test]
+    fn narrow_footers_keep_help_and_quit_visible() {
+        let hint = " hjkl/←→:cells  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ";
+        for width in [60usize, 80, 100, 120] {
+            let fitted = fit_hint(hint, width);
+            assert!(fitted.chars().count() <= width, "{width}: {fitted:?}");
+            assert!(
+                fitted.contains("?:help") && fitted.ends_with("Ctrl+C:quit "),
+                "{width}: {fitted:?}"
+            );
+            assert!(fitted.contains('…'), "{width}: the contextual part was cut");
+        }
+        // when it all fits nothing changes
+        assert_eq!(fit_hint(hint, 400), hint);
+        // hints without a help tail fall back to plain truncation
+        let q = " Enter:run  Esc:normal  ←→↑↓:move  Opt/Alt+←→:word  Cmd+←→:ends  Ctrl+A:all  Ctrl+V:paste ";
+        let fitted = fit_hint(q, 40);
+        assert!(fitted.chars().count() <= 40 && fitted.ends_with('…'));
+        // absurdly narrow widths never panic
+        for w in 0..12 {
+            fit_hint(hint, w);
+        }
+    }
 }

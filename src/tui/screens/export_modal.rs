@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn notice_toast_renders_success_and_keeps_both_ends_of_long_paths() {
+    fn notice_toast_renders_success_and_wraps_long_paths_without_losing_any_of_them() {
         let mut app = App::new(ConnectionConfig::default(), false);
         app.set_notice(
             NoticeKind::Success,
@@ -177,11 +177,24 @@ mod tests {
             .unwrap();
         let out = dump(t.backend().buffer());
         assert!(out.contains("Exported"), "{out}");
+        // the long path is wrapped across rows, so every part of it is on
+        // screen (the old single-line toast cut its middle out with "…")
+        let text: String = out
+            .lines()
+            .filter_map(|l| {
+                l.trim_matches(|c: char| c == '│' || c.is_whitespace())
+                    .into()
+            })
+            .collect::<Vec<&str>>()
+            .join("");
+        let compact = text.replace(' ', "");
         assert!(
-            out.contains(".csv"),
-            "file name tail must survive truncation: {out}"
+            compact.contains(
+                "~/Downloads/lazytrino/some_really_long_catalog_schema_table_partitions_20261023-101500Z.csv"
+            ),
+            "{out}"
         );
-        assert!(out.contains('…'), "{out}");
+        assert!(!out.contains('…'), "{out}");
     }
 
     #[test]
