@@ -350,6 +350,14 @@ pub struct ResultsState {
     pub selected_row: usize,
     pub selected_col: usize,
     pub last_selected_row: Cell<usize>,
+    /// Lines of the selected row hidden above the viewport, for a row taller
+    /// than the viewport (e.g. a long DDL cell). Set by keys / wheel, clamped
+    /// by the renderer, which also records the geometry below.
+    pub row_line_offset: Cell<usize>,
+    /// The selected row `row_line_offset` belongs to (it resets on change).
+    pub row_offset_for: Cell<usize>,
+    pub sel_row_height: Cell<usize>,
+    pub viewport_lines: Cell<usize>,
     pub last_selected_col: Cell<usize>,
     pub loading: bool,
     pub error: Option<String>,
@@ -523,6 +531,35 @@ impl ResultsState {
     pub fn select_all(&mut self) {
         self.selection_anchor = Some(0);
         self.query_cursor = self.query_buffer.len();
+    }
+
+    /// Scrolls inside the selected row when it is taller than the viewport.
+    /// Returns true when it moved (the key / wheel event is consumed); false
+    /// when the row fits, or its top / bottom was reached — so the caller
+    /// moves on to the previous / next row.
+    pub fn scroll_within_row(&self, delta: isize) -> bool {
+        if self.visual_mode != VisualMode::None {
+            return false;
+        }
+        let max = self
+            .sel_row_height
+            .get()
+            .saturating_sub(self.viewport_lines.get());
+        if max == 0 {
+            return false;
+        }
+        let cur = self.row_line_offset.get();
+        let new = (cur as isize + delta).clamp(0, max as isize) as usize;
+        if new == cur {
+            return false;
+        }
+        self.row_line_offset.set(new);
+        true
+    }
+
+    /// Lines per page when scrolling inside a tall row.
+    pub fn row_scroll_page(&self) -> isize {
+        self.viewport_lines.get().saturating_sub(1).max(1) as isize
     }
 
     pub fn is_in_visual_mode(&self) -> bool {

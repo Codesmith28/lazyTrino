@@ -1911,6 +1911,51 @@ pub mod tests {
     }
 
     #[test]
+    fn j_k_page_keys_and_the_wheel_scroll_inside_a_tall_row_before_moving_rows() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["Create Table".to_string()];
+        res.rows = vec![vec!["ddl".to_string()], vec!["next".to_string()]];
+        // geometry as the renderer records it: a 60-line row in a 20-line view
+        res.sel_row_height.set(60);
+        res.viewport_lines.set(20);
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+        let state = |app: &App| match &app.screen {
+            Screen::Actions(a) => {
+                let r = a.results.as_ref().unwrap();
+                (r.row_line_offset.get(), r.selected_row)
+            }
+            _ => panic!(),
+        };
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Down));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(
+            state(&app),
+            (2, 0),
+            "j / Down scroll the row, not the cursor"
+        );
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Up));
+        assert_eq!(state(&app), (1, 0));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::PageDown));
+        assert_eq!(state(&app), (20, 0), "a page is the view height minus one");
+        actions_keys(&mut app, KeyEvent::from(KeyCode::PageDown));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::PageDown));
+        assert_eq!(state(&app), (40, 0), "clamped to the last line (60 - 20)");
+
+        // at the end of the row the next key moves on to the next row
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Down));
+        assert_eq!(state(&app).1, 1);
+    }
+
+    #[test]
     fn test_u_and_esc_undo_and_clear_selection() {
         let mut res = sample_leaf_results_state();
         res.columns = vec!["id".to_string(), "name".to_string()];

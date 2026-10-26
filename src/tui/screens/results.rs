@@ -858,6 +858,27 @@ pub fn render(
         &row_visual_heights,
         state.rows.len(),
     );
+    // A row taller than the viewport is read by scrolling inside it, so it
+    // must start at the top of the view.
+    let sel_row_height = row_visual_heights
+        .get(state.selected_row)
+        .map_or(0, |h| *h as usize);
+    let effective_scroll_v = if sel_row_height > viewport_lines {
+        state.selected_row
+    } else {
+        effective_scroll_v
+    };
+    if state.row_offset_for.get() != state.selected_row {
+        state.row_offset_for.set(state.selected_row);
+        state.row_line_offset.set(0);
+    }
+    let line_skip = state
+        .row_line_offset
+        .get()
+        .min(sel_row_height.saturating_sub(viewport_lines));
+    state.row_line_offset.set(line_skip);
+    state.sel_row_height.set(sel_row_height);
+    state.viewport_lines.set(viewport_lines);
     state.scroll_v.set(effective_scroll_v);
     state.last_selected_row.set(state.selected_row);
 
@@ -959,6 +980,17 @@ pub fn render(
                 if wrapped_lines.is_empty() {
                     wrapped_lines.push(String::new());
                 }
+                if row_idx == state.selected_row && sel_row_height > viewport_lines {
+                    // The table widget drops a row that does not fit, so show
+                    // exactly the window of lines being scrolled through.
+                    let skip = line_skip.min(wrapped_lines.len().saturating_sub(1));
+                    wrapped_lines.drain(..skip);
+                }
+                if row_idx == effective_scroll_v {
+                    // The first row on screen always gets drawn, even when it
+                    // alone is taller than the view.
+                    wrapped_lines.truncate(viewport_lines);
+                }
                 let cell_h = wrapped_lines.len() as u16;
                 max_row_height = max_row_height.max(cell_h);
 
@@ -1012,8 +1044,14 @@ pub fn render(
     frame.render_widget(table, inner);
 
     if !state.rows.is_empty() {
-        let mut v_scroll_state =
-            ScrollbarState::new(state.rows.len().saturating_sub(1)).position(effective_scroll_v);
+        // Inside a row taller than the viewport the bar tracks lines of that
+        // row, not rows.
+        let in_tall_row = sel_row_height > viewport_lines;
+        let mut v_scroll_state = if in_tall_row {
+            ScrollbarState::new(sel_row_height - viewport_lines).position(line_skip)
+        } else {
+            ScrollbarState::new(state.rows.len().saturating_sub(1)).position(effective_scroll_v)
+        };
         frame.render_stateful_widget(
             crate::tui::theme::scrollbar()
                 .orientation(ScrollbarOrientation::VerticalRight)
@@ -1022,6 +1060,25 @@ pub fn render(
             inner,
             &mut v_scroll_state,
         );
+    }
+
+    if sel_row_height > viewport_lines && area.height > 2 {
+        // "lines 25–48 of 118" on the bottom border, right-aligned
+        let shown_end = (line_skip + viewport_lines).min(sel_row_height);
+        let label = format!(
+            " lines {}–{} of {} · j/k scroll ",
+            line_skip + 1,
+            shown_end,
+            sel_row_height
+        );
+        let w = (label.chars().count() as u16).min(area.width.saturating_sub(4));
+        if w > 0 {
+            let rect = Rect::new(area.right().saturating_sub(w + 2), area.bottom() - 1, w, 1);
+            frame.render_widget(
+                Paragraph::new(Span::styled(label, theme::border_style(is_active))),
+                rect,
+            );
+        }
     }
 
     let all_vis_len = state.visible_columns().len();
@@ -2038,6 +2095,117 @@ mod tests {
             content.contains("iceberg › sales › orders"),
             "Title should show table breadcrumb: {content}"
         );
+    }
+
+    fn ddl_state(lines: usize) -> ResultsState {
+        let ddl = (0..lines)
+            .map(|i| format!("   column_{i:03} varchar"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        ResultsState {
+            columns: vec!["Create Table".to_string()],
+            rows: vec![vec![ddl]],
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn render_grid(state: &ResultsState, width: u16, height: u16) -> Vec<String> {
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                render(
+                    f,
+                    Rect::new(0, 0, width, height),
+                    state,
+                    String::new(),
+                    true,
+                    &app,
+                )
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buf.cell((x, y)).unwrap().symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_row_taller_than_the_view_can_be_scrolled_line_by_line() {
+        // The reported case: one huge DDL cell in a 14-row pane.
+        let state = ddl_state(100);
+        let screen = render_grid(&state, 60, 14);
+        let text = screen.join("\n");
+        assert!(text.contains("column_000"));
+        assert!(!text.contains("column_050"), "still at the top");
+        assert!(text.contains("lines 1–"), "{text}");
+        let viewport = state.viewport_lines.get();
+        assert!(state.sel_row_height.get() > viewport);
+
+        // scrolling moves the window; the last line becomes reachable
+        assert!(state.scroll_within_row(10));
+        let text = render_grid(&state, 60, 14).join("\n");
+        assert!(
+            !text.contains("column_000") && text.contains("column_010"),
+            "{text}"
+        );
+        assert!(state.scroll_within_row(10_000), "clamps to the end");
+        let text = render_grid(&state, 60, 14).join("\n");
+        assert!(text.contains("column_099"), "last line reachable: {text}");
+        assert!(
+            !state.scroll_within_row(1),
+            "at the bottom: the key moves on"
+        );
+
+        // and back to the top
+        assert!(state.scroll_within_row(-10_000));
+        assert!(!state.scroll_within_row(-1));
+        assert!(
+            render_grid(&state, 60, 14)
+                .join("\n")
+                .contains("column_000")
+        );
+    }
+
+    #[test]
+    fn rows_that_fit_are_not_scrolled_internally() {
+        let state = ddl_state(3);
+        render_grid(&state, 60, 14);
+        assert!(!state.scroll_within_row(1));
+        assert!(!state.scroll_within_row(-1));
+        let screen = render_grid(&state, 60, 14).join("\n");
+        assert!(!screen.contains("lines 1–"));
+    }
+
+    #[test]
+    fn the_in_row_offset_resets_when_another_row_is_selected() {
+        let mut state = ddl_state(100);
+        state.rows.push(vec!["short".to_string()]);
+        render_grid(&state, 60, 14);
+        state.scroll_within_row(20);
+        render_grid(&state, 60, 14);
+        assert_eq!(state.row_line_offset.get(), 20);
+        state.selected_row = 1;
+        render_grid(&state, 60, 14);
+        assert_eq!(state.row_line_offset.get(), 0);
+        state.selected_row = 0;
+        render_grid(&state, 60, 14);
+        assert_eq!(state.row_line_offset.get(), 0, "back at the top of row 0");
+    }
+
+    #[test]
+    fn visual_mode_never_scrolls_inside_a_row() {
+        let mut state = ddl_state(100);
+        render_grid(&state, 60, 14);
+        state.enter_visual_line();
+        assert!(!state.scroll_within_row(1));
     }
 
     /// Regression: a long unbroken value whose multi-byte character straddles

@@ -494,6 +494,8 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                             res,
                             avail_width,
                         );
+                    } else if res.scroll_within_row(3) {
+                        return None;
                     } else if !res.rows.is_empty() {
                         let delta = 3;
                         let new_scroll_v =
@@ -558,6 +560,8 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                             res,
                             avail_width,
                         );
+                    } else if res.scroll_within_row(-3) {
+                        return None;
                     } else {
                         let delta = 3;
                         let new_scroll_v = res.scroll_v.get().saturating_sub(delta);
@@ -1094,6 +1098,16 @@ fn extract_structured_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -
                     &row_visual_heights,
                     res.rows.len(),
                 );
+                // Same rule as the renderer: a row taller than the viewport
+                // starts at the top and is read by scrolling inside it.
+                let selected_height = row_visual_heights
+                    .get(res.selected_row)
+                    .map_or(0, |h| *h as usize);
+                let effective_scroll_v = if selected_height > viewport_lines {
+                    res.selected_row
+                } else {
+                    effective_scroll_v
+                };
 
                 // The header always travels with copied cells, wherever the drag started.
                 let header = format_csv_row(
@@ -1105,7 +1119,10 @@ fn extract_structured_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -
 
                 let mut cur_y = inner.y + 2;
                 for (row_idx, row) in res.rows.iter().enumerate().skip(effective_scroll_v) {
-                    let h = row_visual_heights.get(row_idx).copied().unwrap_or(1);
+                    let mut h = row_visual_heights.get(row_idx).copied().unwrap_or(1);
+                    if row_idx == res.selected_row {
+                        h = h.saturating_sub(res.row_line_offset.get() as u16).max(1);
+                    }
                     if cur_y <= end_row && cur_y + h > start_row {
                         let row_line = format_csv_row(
                             sel_cols

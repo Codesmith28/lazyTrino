@@ -392,6 +392,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
                                 app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
                             } else if let Some(ref mut res) = s.results {
+                                if res.scroll_within_row(1) {
+                                    return None;
+                                }
                                 // Shift+↑/↓ selects at cell level (the current
                                 // cell, extended along the column); `V` is the
                                 // whole-row selection.
@@ -415,6 +418,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             } else if is_schema {
                                 app.schema_scroll = app.schema_scroll.saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {
+                                if res.scroll_within_row(-1) {
+                                    return None;
+                                }
                                 // Shift+↑/↓ selects at cell level (the current
                                 // cell, extended along the column); `V` is the
                                 // whole-row selection.
@@ -438,6 +444,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
                                 app.schema_scroll = (app.schema_scroll + 15).min(max_cols);
                             } else if let Some(ref mut res) = s.results {
+                                if res.scroll_within_row(res.row_scroll_page()) {
+                                    return None;
+                                }
                                 if !res.rows.is_empty() {
                                     res.selected_row = (res.selected_row + 15)
                                         .min(res.rows.len().saturating_sub(1));
@@ -454,6 +463,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             } else if is_schema {
                                 app.schema_scroll = app.schema_scroll.saturating_sub(15);
                             } else if let Some(ref mut res) = s.results {
+                                if res.scroll_within_row(-res.row_scroll_page()) {
+                                    return None;
+                                }
                                 res.selected_row = res.selected_row.saturating_sub(15);
                             }
                             None
