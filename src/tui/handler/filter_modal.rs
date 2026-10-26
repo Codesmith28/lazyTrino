@@ -122,6 +122,11 @@ pub fn open_filter_modal(app: &mut App) {
             selected_values,
             cursor: 0,
             scroll: 0,
+            visible_rows: std::cell::Cell::new(crate::app::estimated_modal_list_rows({
+                let (w, h) = crossterm::terminal::size().unwrap_or((80, 24));
+                crate::tui::screens::modal::modal_medium(ratatui::layout::Rect::new(0, 0, w, h))
+                    .height
+            })),
             search_query: String::new(),
             is_searching: false,
             numeric_op,
@@ -420,9 +425,8 @@ fn handle_values_modal_key(app: &mut App, key: KeyEvent, is_numeric_col: bool) -
                 let matched = m.filtered_indices();
                 if !matched.is_empty() {
                     m.cursor = (m.cursor + 1).min(matched.len() - 1);
-                    if m.cursor >= m.scroll + 10 {
-                        m.scroll = m.cursor.saturating_sub(9);
-                    }
+                    m.scroll =
+                        crate::app::scroll_into_view(m.cursor, m.scroll, m.visible_rows.get());
                 }
             }
             None
@@ -446,9 +450,8 @@ fn handle_values_modal_key(app: &mut App, key: KeyEvent, is_numeric_col: bool) -
                 let matched = m.filtered_indices();
                 if !matched.is_empty() {
                     m.cursor = (m.cursor + 10).min(matched.len() - 1);
-                    if m.cursor >= m.scroll + 10 {
-                        m.scroll = m.cursor.saturating_sub(9);
-                    }
+                    m.scroll =
+                        crate::app::scroll_into_view(m.cursor, m.scroll, m.visible_rows.get());
                 }
             }
             None
@@ -479,9 +482,8 @@ fn handle_values_modal_key(app: &mut App, key: KeyEvent, is_numeric_col: bool) -
                 let matched = m.filtered_indices();
                 if !matched.is_empty() {
                     m.cursor = matched.len() - 1;
-                    if m.cursor >= 10 {
-                        m.scroll = m.cursor.saturating_sub(9);
-                    }
+                    m.scroll =
+                        crate::app::scroll_into_view(m.cursor, m.scroll, m.visible_rows.get());
                 }
             }
             None
@@ -687,6 +689,78 @@ mod tests {
             ..Default::default()
         });
         app
+    }
+
+    /// Regression: the keys scrolled the list as if it always showed 10 rows,
+    /// but on a short terminal the list area is smaller, so the cursor moved
+    /// onto rows that were never drawn.
+    #[test]
+    fn the_cursor_stays_visible_when_the_modal_is_shorter_than_ten_rows() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut app = sample_app_with_results();
+        if let Screen::Actions(a) = &mut app.screen {
+            let res = a.results.as_mut().unwrap();
+            res.rows = (0..60)
+                .map(|i| vec![i.to_string(), format!("value{i:02}")])
+                .collect();
+        }
+        open_filter_modal(&mut app);
+        let mut term = Terminal::new(TestBackend::new(70, 18)).unwrap();
+        let screen = |term: &mut Terminal<TestBackend>, app: &App| -> String {
+            term.draw(|f| crate::tui::draw::ui(f, app)).unwrap();
+            let buf = term.backend().buffer().clone();
+            (0..buf.area.height)
+                .map(|y| {
+                    (0..buf.area.width)
+                        .map(|x| buf.cell((x, y)).unwrap().symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        screen(&mut term, &app);
+        let rows = app.filter_modal.as_ref().unwrap().visible_rows.get();
+        assert!(
+            rows < 10,
+            "this terminal must make the list shorter than 10 rows: {rows}"
+        );
+
+        for step in 1..=30 {
+            handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('j')));
+            let out = screen(&mut term, &app);
+            let m = app.filter_modal.as_ref().unwrap();
+            let matched = m.filtered_indices();
+            let wanted = &m.values[matched[m.cursor]];
+            assert!(
+                out.contains(wanted.as_str()),
+                "step {step}: cursor value {wanted} is not on screen (scroll {}, rows {rows}):\n{out}",
+                m.scroll
+            );
+        }
+        // and back up to the top, and jumping to the end
+        for _ in 0..30 {
+            handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('k')));
+        }
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('G')));
+        let out = screen(&mut term, &app);
+        let m = app.filter_modal.as_ref().unwrap();
+        assert!(out.contains(&m.values[m.values.len() - 1]), "{out}");
+    }
+
+    #[test]
+    fn scroll_into_view_keeps_the_cursor_inside_the_window() {
+        use crate::app::scroll_into_view;
+        assert_eq!(scroll_into_view(0, 0, 5), 0);
+        assert_eq!(scroll_into_view(4, 0, 5), 0);
+        assert_eq!(scroll_into_view(5, 0, 5), 1);
+        assert_eq!(scroll_into_view(2, 6, 5), 2, "cursor above the window");
+        assert_eq!(scroll_into_view(9, 3, 5), 5);
+        assert_eq!(
+            scroll_into_view(3, 0, 0),
+            3,
+            "a zero-row window counts as one"
+        );
     }
 
     #[test]

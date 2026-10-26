@@ -404,6 +404,26 @@ pub enum VisualMode {
     },
 }
 
+/// Smallest scroll offset that keeps `cursor` inside a window of `visible`
+/// rows starting at `scroll`.
+pub fn scroll_into_view(cursor: usize, scroll: usize, visible: usize) -> usize {
+    let visible = visible.max(1);
+    if cursor < scroll {
+        cursor
+    } else if cursor >= scroll + visible {
+        cursor + 1 - visible
+    } else {
+        scroll
+    }
+}
+
+/// Rows a modal's list area has when the terminal is `height` tall, before
+/// the first frame reports the real number (the list is the modal minus its
+/// borders, search box and hint line).
+pub fn estimated_modal_list_rows(medium_modal_height: u16) -> usize {
+    medium_modal_height.saturating_sub(7).max(1) as usize
+}
+
 pub fn format_count(n: usize) -> String {
     let s = n.to_string();
     let mut result = String::with_capacity(s.len() + s.len() / 3);
@@ -1070,6 +1090,8 @@ pub struct FilterModalState {
     pub selected_values: HashSet<String>,
     pub cursor: usize,
     pub scroll: usize,
+    /// List rows the renderer showed last time (what the keys scroll by).
+    pub visible_rows: Cell<usize>,
     pub search_query: String,
     pub is_searching: bool,
     pub numeric_op: NumericOp,
@@ -1160,6 +1182,8 @@ pub struct ColumnModalState {
     pub selected_columns: HashSet<String>,
     pub cursor: usize,
     pub scroll: usize,
+    /// List rows the renderer showed last time (what the keys scroll by).
+    pub visible_rows: Cell<usize>,
     pub search_query: String,
     pub is_searching: bool,
     pub tree_nodes: Vec<crate::trino::flatten::ColumnTreeNode>,

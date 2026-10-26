@@ -1303,9 +1303,8 @@ fn handle_filter_modal_mouse(
                 let matched_len = m.filtered_indices().len();
                 if matched_len > 0 {
                     m.cursor = (m.cursor + 1).min(matched_len - 1);
-                    if m.cursor >= m.scroll + 10 {
-                        m.scroll = m.cursor.saturating_sub(9);
-                    }
+                    m.scroll =
+                        crate::app::scroll_into_view(m.cursor, m.scroll, m.visible_rows.get());
                 }
             }
             None
@@ -1391,11 +1390,9 @@ fn handle_column_modal_mouse(
             if let Some(ref mut m) = app.column_modal {
                 let matched_len = m.filtered_indices().len();
                 if matched_len > 0 {
-                    let vis_h = (popup_area.height.saturating_sub(6) as usize).max(1);
                     m.cursor = (m.cursor + 2).min(matched_len - 1);
-                    if m.cursor >= m.scroll + vis_h {
-                        m.scroll = m.cursor.saturating_sub(vis_h.saturating_sub(1));
-                    }
+                    m.scroll =
+                        crate::app::scroll_into_view(m.cursor, m.scroll, m.visible_rows.get());
                 }
             }
             None
@@ -2101,6 +2098,7 @@ mod tests {
                 .collect(),
             cursor: 0,
             scroll: 0,
+            visible_rows: std::cell::Cell::new(10),
             search_query: String::new(),
             is_searching: false,
             tree_nodes: Vec::new(),

@@ -302,6 +302,7 @@ fn render_values_mode(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
 
     let matched_indices = modal.filtered_indices();
     let visible_count = list_area.height as usize;
+    modal.visible_rows.set(visible_count.max(1));
     let mut lines = Vec::new();
 
     if matched_indices.is_empty() {
@@ -430,6 +431,7 @@ mod tests {
             selected_values: HashSet::new(),
             cursor: 0,
             scroll: 0,
+            visible_rows: std::cell::Cell::new(10),
             search_query: String::new(),
             is_searching: false,
             numeric_op: NumericOp::Lt,
@@ -454,6 +456,7 @@ mod tests {
             selected_values: ["10".to_string()].into_iter().collect(),
             cursor: 0,
             scroll: 0,
+            visible_rows: std::cell::Cell::new(10),
             search_query: "< 25".to_string(),
             is_searching: false,
             numeric_op: NumericOp::Lt,
