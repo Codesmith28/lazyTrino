@@ -119,6 +119,9 @@ const HELP_SECTIONS: &[HelpSection] = &[
         title: "Search & Custom Query",
         items: &[
             "  /                              Search / filter current view or modal",
+            "  r                              Refresh: drop cached results and reload the view from Trino",
+            "  Click / wheel on the help bar  Scroll the bottom hints when they do not fit; while it is focused",
+            "                                 ←/→ (h/l), Home/End scroll it instead of the pane; Esc leaves it",
             "  q or :                         Write custom SQL in Query Bar (in Table View)",
             "  Ctrl+C                         Quit lazyTrino",
         ],

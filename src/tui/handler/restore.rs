@@ -226,6 +226,7 @@ pub fn on_table_ddl(
             a.query_buffer = sql.clone();
             set_stage(app, RestoreStage::Results);
             Some(Some(Command::ExecuteQuery {
+                fresh: false,
                 query: sql,
                 is_paginated: false,
                 catalog: catalog.to_string(),
@@ -287,6 +288,7 @@ fn restore_table_view(
         a.query_buffer = sql.clone();
         set_stage(app, RestoreStage::Results);
         return Some(Command::ExecuteQuery {
+            fresh: false,
             query: sql,
             is_paginated: true,
             catalog: catalog.clone(),
@@ -336,6 +338,7 @@ fn restore_table_view(
         a.query_buffer = sql.clone();
         set_stage(app, RestoreStage::Results);
         return Some(with_total(Command::ExecuteQuery {
+            fresh: false,
             query: sql,
             is_paginated: true,
             catalog: catalog.clone(),

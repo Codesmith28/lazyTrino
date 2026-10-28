@@ -75,9 +75,25 @@ pub fn dispatch_command(
                 });
             });
         }
+        Command::FetchCatalogs => {
+            // Metadata lookups never use the query cache, so they are logged
+            // as plain queries.
+            let log_id = app.add_query_log(queries::show_catalogs());
+            app.loading = true;
+            if let Some(client) = app.trino_client.clone() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let res = client.fetch_catalogs().await;
+                    let _ = tx.send(AsyncResult::FetchCatalogs {
+                        log_id,
+                        result: res,
+                    });
+                });
+            }
+        }
         Command::FetchSchemas { catalog } => {
             let sql = queries::show_schemas(&catalog);
-            let log_id = log_query(app, sql);
+            let log_id = app.add_query_log(sql);
             app.loading = true;
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
@@ -93,7 +109,7 @@ pub fn dispatch_command(
         }
         Command::FetchTables { catalog, schema } => {
             let sql = queries::show_tables(&catalog, &schema);
-            let log_id = log_query(app, sql);
+            let log_id = app.add_query_log(sql);
             app.loading = true;
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
@@ -115,9 +131,9 @@ pub fn dispatch_command(
         } => {
             if let Some(client) = app.trino_client.clone() {
                 let show_create_query = queries::show_create(&catalog, &schema, &table);
-                let show_create_log_id = log_query(app, show_create_query.clone());
+                let show_create_log_id = app.add_query_log(show_create_query.clone());
                 let desc_query = queries::info_schema_columns(&catalog, &schema, &table);
-                let cols_log_id = log_query(app, desc_query.clone());
+                let cols_log_id = app.add_query_log(desc_query.clone());
                 app.loading = true;
 
                 let tx = tx.clone();
@@ -125,7 +141,7 @@ pub fn dispatch_command(
                     // The table's partition layout is always derived directly
                     // from the table's DDL (`SHOW CREATE TABLE`).
                     let (partitioned_by, location, ddl_text, show_create_error) =
-                        match client.execute(&show_create_query).await {
+                        match client.execute_fresh(&show_create_query).await {
                             Ok(res) => {
                                 let ddl = res
                                     .data
@@ -157,7 +173,7 @@ pub fn dispatch_command(
                             Some(&location),
                         );
 
-                    let (columns, columns_error) = match client.execute(&desc_query).await {
+                    let (columns, columns_error) = match client.execute_fresh(&desc_query).await {
                         Ok(res) => {
                             let columns = res
                                 .data
@@ -218,8 +234,13 @@ pub fn dispatch_command(
             schema,
             table,
             filters,
+            fresh,
         } => {
-            let log_id = log_query(app, query.clone());
+            let log_id = if fresh {
+                app.add_query_log(query.clone())
+            } else {
+                log_query(app, query.clone())
+            };
             app.loading = true;
             // The query bar must always mirror exactly what's being
             // executed — whether the user typed it manually or a menu
@@ -300,7 +321,11 @@ pub fn dispatch_command(
                 let tbl = table.clone();
                 let filts = filters.clone();
                 tokio::spawn(async move {
-                    let res = client_page.execute(&query).await;
+                    let res = if fresh {
+                        client_page.execute_fresh(&query).await
+                    } else {
+                        client_page.execute(&query).await
+                    };
                     let _ = tx_page.send(AsyncResult::ExecuteQuery {
                         log_id,
                         query_buffer: query_buf,
@@ -322,7 +347,7 @@ pub fn dispatch_command(
                         &filters,
                         &table_column_types(app, &catalog, &schema, &table),
                     );
-                    let count_log_id = log_query(app, count_query.clone());
+                    let count_log_id = app.add_query_log(count_query.clone());
                     let tx_cnt = tx.clone();
                     let client_cnt = client;
                     let cat_cnt = catalog;
@@ -330,7 +355,7 @@ pub fn dispatch_command(
                     let tbl_cnt = table;
                     let filts_cnt = filters;
                     tokio::spawn(async move {
-                        let res = client_cnt.execute(&count_query).await;
+                        let res = client_cnt.execute_fresh(&count_query).await;
                         let _ = tx_cnt.send(AsyncResult::FetchPartitionCount {
                             log_id: count_log_id,
                             catalog: cat_cnt,
@@ -419,7 +444,7 @@ pub fn dispatch_command(
                 DRILLDOWN_LEVEL_LIMIT,
                 &types,
             );
-            let log_id = log_query(app, query.clone());
+            let log_id = app.add_query_log(query.clone());
 
             let need_count = if let Screen::Actions(ref action_state) = app.screen {
                 action_state
@@ -462,7 +487,7 @@ pub fn dispatch_command(
                 let filts1 = filters.clone();
                 let col1 = column.clone();
                 tokio::spawn(async move {
-                    let res = client1.execute(&query).await;
+                    let res = client1.execute_fresh(&query).await;
                     let _ = tx1.send(AsyncResult::FetchPartitionLevel {
                         log_id,
                         catalog: cat1,
@@ -478,7 +503,7 @@ pub fn dispatch_command(
                 if need_count {
                     let count_query =
                         queries::filtered_count(&catalog, &schema, &table, &filters, &types);
-                    let count_log_id = log_query(app, count_query.clone());
+                    let count_log_id = app.add_query_log(count_query.clone());
                     let tx2 = tx.clone();
                     let client2 = client;
                     let cat2 = catalog;
@@ -486,7 +511,7 @@ pub fn dispatch_command(
                     let tbl2 = table;
                     let filts2 = filters;
                     tokio::spawn(async move {
-                        let res = client2.execute(&count_query).await;
+                        let res = client2.execute_fresh(&count_query).await;
                         let _ = tx2.send(AsyncResult::FetchPartitionCount {
                             log_id: count_log_id,
                             catalog: cat2,
@@ -512,11 +537,11 @@ pub fn dispatch_command(
                 &filters,
                 &table_column_types(app, &catalog, &schema, &table),
             );
-            let count_log_id = log_query(app, count_query.clone());
+            let count_log_id = app.add_query_log(count_query.clone());
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    let res = client.execute(&count_query).await;
+                    let res = client.execute_fresh(&count_query).await;
                     let _ = tx.send(AsyncResult::FetchPartitionCount {
                         log_id: count_log_id,
                         catalog,
@@ -584,6 +609,27 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                 }
             }
         }
+        AsyncResult::FetchCatalogs { log_id, result } => {
+            app.loading = false;
+            match result {
+                Ok(catalogs) => {
+                    app.complete_query_log_success(log_id, 15, catalogs.len());
+                    app.catalogs = catalogs.iter().map(|c| c.trim().to_string()).collect();
+                    if let Screen::Catalog(s) = &mut app.screen {
+                        s.items = app.catalogs.clone();
+                        s.selected = s.selected.min(s.items.len().saturating_sub(1));
+                    }
+                }
+                Err(e) => {
+                    error!(error = %e, "Fetch catalogs failed");
+                    app.complete_query_log_error(log_id, e.to_string());
+                    app.set_notice(
+                        crate::app::NoticeKind::Error,
+                        format!("Could not refresh catalogs: {e}"),
+                    );
+                }
+            }
+        }
         AsyncResult::FetchSchemas {
             log_id,
             catalog,
@@ -600,8 +646,11 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                         return next;
                     }
                     app.clear_mouse_selection();
-                    let saved_selected =
-                        app.last_selected_schema.get(&catalog).copied().unwrap_or(0);
+                    // Reloading the list already on screen keeps the cursor.
+                    let saved_selected = match &app.screen {
+                        Screen::Schema(s) if s.catalog == catalog => s.selected,
+                        _ => app.last_selected_schema.get(&catalog).copied().unwrap_or(0),
+                    };
                     let selected = saved_selected.min(trimmed.len().saturating_sub(1));
                     app.screen = Screen::Schema(SchemaState {
                         catalog: catalog.clone(),
@@ -635,11 +684,16 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                         return next;
                     }
                     app.clear_mouse_selection();
-                    let saved_selected = app
-                        .last_selected_table
-                        .get(&(catalog.clone(), schema.clone()))
-                        .copied()
-                        .unwrap_or(0);
+                    let saved_selected = match &app.screen {
+                        Screen::Table(s) if s.catalog == catalog && s.schema == schema => {
+                            s.selected
+                        }
+                        _ => app
+                            .last_selected_table
+                            .get(&(catalog.clone(), schema.clone()))
+                            .copied()
+                            .unwrap_or(0),
+                    };
                     let selected = saved_selected.min(trimmed.len().saturating_sub(1));
                     app.screen = Screen::Table(TableState {
                         catalog: catalog.clone(),
@@ -711,6 +765,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                         action_state.query_buffer = query.clone();
                         action_state.query_cursor = query_len;
                         return Some(Command::ExecuteQuery {
+                            fresh: false,
                             query,
                             is_paginated: true,
                             catalog,
@@ -1359,6 +1414,7 @@ mod tests {
         dispatch_command(
             &mut app,
             Command::ExecuteQuery {
+                fresh: false,
                 query: programmatic_query.clone(),
                 is_paginated: false,
                 catalog: "iceberg".to_string(),

@@ -15,6 +15,7 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
 };
@@ -63,48 +64,48 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
             match screen {
                 Screen::Connect(_) => Some(" Tab:next field  Enter:connect  ?:help  Ctrl+C:quit "),
                 Screen::Catalog(_) => Some(
-                    " j/k:move  l/Enter:select  /:search  V:select  ^E:export  ?:help  Ctrl+C:quit ",
+                    " j/k:move  l/Enter:select  /:search  V:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
                 ),
                 Screen::Schema(_) | Screen::Table(_) => Some(
-                    " j/k:move  l/Enter:select  h/Esc:back  /:search  V:select  ^E:export  ?:help  Ctrl+C:quit ",
+                    " j/k:move  l/Enter:select  h/Esc:back  /:search  V:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
                 ),
                 Screen::Actions(state) => {
                     let selected_action = ACTIONS.get(state.selected).map(|(_, _, action)| *action);
 
                     match app.active_panel {
                         ActivePanel::MenuPane => Some(
-                            " j/k:move  l/Enter:run  h/Esc:back  A:filters  v/c/e/t/m/p:action  Tab:pane  ?:help  Ctrl+C:quit ",
+                            " j/k:move  l/Enter:run  h/Esc:back  A:filters  v/c/e/t/m/p:action  Tab:pane  r:refresh  ?:help  Ctrl+C:quit ",
                         ),
                         ActivePanel::MainViewer => match selected_action {
                             Some(Action::TableView)
                                 if state.results.is_some() && state.drilldown.is_some() =>
                             {
                                 Some(
-                                    " hjkl/←→:cells  <:up  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
+                                    " hjkl/←→:cells  <:up  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
                                 )
                             }
                             Some(Action::TableView) if state.results.is_some() => Some(
-                                " hjkl/←→:cells  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
+                                " hjkl/←→:cells  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
                             ),
                             Some(Action::Partitions) if !app.partition_tree_lines.is_empty() => {
                                 Some(
-                                    " j/k:scroll  g/G:top/btm  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
+                                    " j/k:scroll  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
                                 )
                             }
                             Some(Action::Schema) if !app.vertical_schema_cols.is_empty() => Some(
-                                " j/k:scroll  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
+                                " j/k:scroll  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
                             ),
                             _ if state.results.is_some() => Some(
-                                " hjkl/←→:cells  S:sort  C:cols  F:filter  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
+                                " hjkl/←→:cells  S:sort  C:cols  F:filter  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
                             ),
                             Some(Action::TableView) if state.drilldown.is_some() => Some(
-                                " j/k:move  >/Enter:drill  <:up  u:clear sel  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
+                                " j/k:move  >/Enter:drill  <:up  u:clear sel  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
                             ),
                             Some(Action::TableView) => Some(
-                                " q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
+                                " q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
                             ),
                             _ => Some(
-                                " q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  ?:help  Ctrl+C:quit ",
+                                " q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
                             ),
                         },
                     }
@@ -270,10 +271,79 @@ pub fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
-    let footer = Paragraph::new(hint_line(&fit_hint(hint, area.width as usize)))
+    let width = area.width as usize;
+    app.footer_rect.set(area);
+    // A different hint starts from its beginning.
+    let hint_key = hint.as_ptr() as usize;
+    if app.footer_hint_key.replace(hint_key) != hint_key {
+        app.footer_scroll.set(0);
+    }
+    let max_scroll = hint.chars().count().saturating_sub(width);
+    app.footer_max_scroll.set(max_scroll);
+    let scroll = app.footer_scroll.get().min(max_scroll);
+    app.footer_scroll.set(scroll);
+    let focused = app.footer_focused && app.mode == Mode::Normal;
+
+    // Untouched, a bar that is too narrow keeps the always-relevant
+    // `?:help  Ctrl+C:quit` tail in view; once it is scrolled or focused it
+    // shows the full hints, a window at a time.
+    if max_scroll > 0 && (scroll > 0 || focused) {
+        let mut line = hint_line(hint);
+        line.spans.push(Span::raw(" "));
+        let footer = Paragraph::new(scrolled_line(&line, scroll, width, focused))
+            .style(theme::footer_style());
+        frame.render_widget(footer, area);
+        return;
+    }
+
+    let footer = Paragraph::new(hint_line(&fit_hint(hint, width)))
         .style(theme::footer_style())
         .wrap(ratatui::widgets::Wrap { trim: true });
     frame.render_widget(footer, area);
+}
+
+/// `width` columns of `line` starting `scroll` columns in. The edge cells
+/// become `‹` / `›` where more hints lie beyond them; they light up while the
+/// bar is focused.
+fn scrolled_line(
+    line: &Line<'static>,
+    scroll: usize,
+    width: usize,
+    focused: bool,
+) -> Line<'static> {
+    let cells: Vec<(char, Style)> = line
+        .spans
+        .iter()
+        .flat_map(|span| span.content.chars().map(move |c| (c, span.style)))
+        .collect();
+    let start = scroll.min(cells.len());
+    let end = (start + width).min(cells.len());
+    let mut window = cells[start..end].to_vec();
+
+    let marker = if focused {
+        theme::border_style(true)
+    } else {
+        theme::muted_style()
+    };
+    if start > 0
+        && let Some(first) = window.first_mut()
+    {
+        *first = ('‹', marker);
+    }
+    if end < cells.len()
+        && let Some(last) = window.last_mut()
+    {
+        *last = ('›', marker);
+    }
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (c, style) in window {
+        match spans.last_mut() {
+            Some(prev) if prev.style == style => prev.content.to_mut().push(c),
+            _ => spans.push(Span::styled(c.to_string(), style)),
+        }
+    }
+    Line::from(spans)
 }
 
 pub const TOAST_MIN_W: u16 = 24;
@@ -409,5 +479,107 @@ mod tests {
         for w in 0..12 {
             fit_hint(hint, w);
         }
+    }
+
+    fn footer_app() -> App {
+        let mut app = App::new(
+            crate::config::ConnectionConfig {
+                url: "http://localhost:8080".to_string(),
+                user: "test".to_string(),
+                password: String::new(),
+                query_cache_limit: crate::config::DEFAULT_QUERY_CACHE_LIMIT,
+            },
+            false,
+        );
+        app.screen = Screen::Catalog(crate::app::CatalogState {
+            items: Vec::new(),
+            selected: 0,
+        });
+        app
+    }
+
+    fn footer_text(app: &App, width: u16) -> String {
+        let mut term = Terminal::new(TestBackend::new(width, 1)).unwrap();
+        term.draw(|f| render_footer(f, Rect::new(0, 0, width, 1), app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..width)
+            .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_narrow_footer_scrolls_through_all_its_hints() {
+        let mut app = footer_app();
+
+        // untouched: the always-relevant tail stays in view, as before
+        let untouched = footer_text(&app, 40);
+        assert!(untouched.contains("Ctrl+C:quit"), "{untouched:?}");
+        assert!(!untouched.contains('›') && !untouched.contains('‹'));
+        assert!(app.footer_max_scroll.get() > 0, "it can be scrolled");
+
+        // scrolled into the middle: more on both sides
+        app.footer_scroll.set(10);
+        let middle = footer_text(&app, 40);
+        assert!(
+            middle.starts_with('‹') && middle.ends_with('›'),
+            "{middle:?}"
+        );
+
+        // scrolled to the end: the tail and nothing beyond it
+        app.footer_scroll.set(usize::MAX);
+        let end = footer_text(&app, 40);
+        assert!(end.starts_with('‹') && !end.contains('›'), "{end:?}");
+        assert!(end.contains("Ctrl+C:quit"), "{end:?}");
+        assert_eq!(app.footer_scroll.get(), app.footer_max_scroll.get());
+
+        // focused at the start: the first hints, with more to the right
+        app.footer_scroll.set(0);
+        app.footer_focused = true;
+        let start = footer_text(&app, 40);
+        assert!(
+            start.contains("j/k:move") && start.ends_with('›'),
+            "{start:?}"
+        );
+        assert!(!start.starts_with('‹'), "{start:?}");
+    }
+
+    #[test]
+    fn a_footer_that_fits_has_nothing_to_scroll() {
+        let mut app = footer_app();
+        app.footer_focused = true;
+        app.footer_scroll.set(5);
+        let text = footer_text(&app, 200);
+        assert_eq!(app.footer_max_scroll.get(), 0);
+        assert_eq!(app.footer_scroll.get(), 0, "the offset is clamped away");
+        assert!(!text.contains('‹') && !text.contains('›'), "{text:?}");
+        assert!(text.contains("Ctrl+C:quit"));
+    }
+
+    #[test]
+    fn a_different_hint_starts_from_its_beginning() {
+        let mut app = footer_app();
+        footer_text(&app, 40);
+        app.footer_scroll.set(20);
+        assert!(footer_text(&app, 40).starts_with('‹'));
+
+        app.screen = Screen::Schema(crate::app::SchemaState {
+            catalog: "datalake".to_string(),
+            items: Vec::new(),
+            selected: 0,
+        });
+        footer_text(&app, 40);
+        assert_eq!(app.footer_scroll.get(), 0);
+    }
+
+    #[test]
+    fn the_footer_records_where_it_was_drawn_for_hit_testing() {
+        let app = footer_app();
+        let mut term = Terminal::new(TestBackend::new(60, 5)).unwrap();
+        term.draw(|f| render_footer(f, Rect::new(0, 4, 60, 1), &app))
+            .unwrap();
+        assert_eq!(app.footer_rect.get(), Rect::new(0, 4, 60, 1));
+        assert!(crate::tui::handler::footer::contains(&app, 10, 4));
+        assert!(!crate::tui::handler::footer::contains(&app, 10, 3));
     }
 }

@@ -640,6 +640,7 @@ pub fn reapply_in_memory_filters(app: &mut App) -> Option<Command> {
         // 3. Return ExecuteQuery if Trino client is present
         if app.trino_client.is_some() {
             return Some(Command::ExecuteQuery {
+                fresh: false,
                 query: updated_query,
                 is_paginated: res.is_paginated,
                 catalog: res.catalog.clone(),

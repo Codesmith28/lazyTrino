@@ -202,11 +202,14 @@ pub fn render_actions_count_box(frame: &mut Frame, area: Rect, app: &App, state:
         Line::from(" Dataset Records ")
     };
 
+    // Same border as the menu pane, so the two boxes read as one frame.
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(theme::style(theme::accent_border_color()));
+        .border_style(theme::border_style(
+            app.active_panel == crate::app::ActivePanel::MenuPane,
+        ));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);

@@ -111,6 +111,7 @@ impl TrinoClient {
         self.cache.lock().is_ok_and(|cache| cache.contains(sql))
     }
 
+    /// Runs `sql`, answered from the cache when a fresh copy is there.
     pub async fn execute(&self, sql: &str) -> Result<QueryResults, TrinoClientError> {
         if let Ok(mut cache) = self.cache.lock()
             && let Some(cached) = cache.get(sql)
@@ -118,6 +119,27 @@ impl TrinoClient {
             return Ok(cached);
         }
 
+        let results = self.run(sql).await?;
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(sql.to_string(), results.clone());
+        }
+        Ok(results)
+    }
+
+    /// Runs `sql` on Trino without reading or writing the cache. Catalog,
+    /// schema and partition lookups use this so they show the live state.
+    pub async fn execute_fresh(&self, sql: &str) -> Result<QueryResults, TrinoClientError> {
+        self.run(sql).await
+    }
+
+    /// Drops every cached result, so the next run of each query reaches Trino.
+    pub fn clear_cache(&self) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.clear();
+        }
+    }
+
+    async fn run(&self, sql: &str) -> Result<QueryResults, TrinoClientError> {
         let start = std::time::Instant::now();
         let headers = self.headers()?;
 
@@ -183,15 +205,11 @@ impl TrinoClient {
             duration_ms,
         };
 
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(sql.to_string(), results.clone());
-        }
-
         Ok(results)
     }
 
     pub async fn fetch_catalogs(&self) -> Result<Vec<String>, TrinoClientError> {
-        let results = self.execute(&queries::show_catalogs()).await?;
+        let results = self.execute_fresh(&queries::show_catalogs()).await?;
         Ok(results
             .data
             .into_iter()
@@ -200,7 +218,7 @@ impl TrinoClient {
     }
 
     pub async fn fetch_schemas(&self, catalog: &str) -> Result<Vec<String>, TrinoClientError> {
-        let results = self.execute(&queries::show_schemas(catalog)).await?;
+        let results = self.execute_fresh(&queries::show_schemas(catalog)).await?;
         Ok(results
             .data
             .into_iter()
@@ -213,7 +231,9 @@ impl TrinoClient {
         catalog: &str,
         schema: &str,
     ) -> Result<Vec<String>, TrinoClientError> {
-        let results = self.execute(&queries::show_tables(catalog, schema)).await?;
+        let results = self
+            .execute_fresh(&queries::show_tables(catalog, schema))
+            .await?;
         Ok(results
             .data
             .into_iter()
@@ -368,6 +388,57 @@ mod tests {
         let client = TrinoClient::new(&server.url(), "test_user").unwrap();
         assert!(client.execute("SELECT 1").await.is_err());
         assert!(!client.is_cached("SELECT 1"));
+    }
+
+    #[tokio::test]
+    async fn fresh_queries_always_reach_trino_and_never_use_the_cache() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/statement")
+            .match_body(Matcher::Exact("SHOW SCHEMAS FROM datalake".to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({"columns": [{"name": "x"}], "data": [["tenant"]]}).to_string())
+            .expect(2) // both calls must reach Trino
+            .create_async()
+            .await;
+        let client = TrinoClient::new(&server.url(), "test_user").unwrap();
+
+        client
+            .execute_fresh("SHOW SCHEMAS FROM datalake")
+            .await
+            .unwrap();
+        assert!(
+            !client.is_cached("SHOW SCHEMAS FROM datalake"),
+            "a fresh run does not fill the cache"
+        );
+        client
+            .execute_fresh("SHOW SCHEMAS FROM datalake")
+            .await
+            .unwrap();
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn clearing_the_cache_sends_the_next_run_to_trino() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/statement")
+            .match_body(Matcher::Exact("SELECT 1".to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({"columns": [{"name": "x"}], "data": [[1]]}).to_string())
+            .expect(2) // once before and once after the clear
+            .create_async()
+            .await;
+        let client = TrinoClient::new(&server.url(), "test_user").unwrap();
+
+        client.execute("SELECT 1").await.unwrap();
+        assert!(client.is_cached("SELECT 1"));
+        client.clear_cache();
+        assert!(!client.is_cached("SELECT 1"));
+        client.execute("SELECT 1").await.unwrap();
+        mock.assert_async().await;
     }
 
     #[test]

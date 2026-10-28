@@ -468,6 +468,7 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
                     ran_custom_sql = Some(full_sql.clone());
                     exit_mode = true;
                     command = Some(Command::ExecuteQuery {
+                        fresh: false,
                         query: full_sql,
                         is_paginated,
                         catalog: cat,

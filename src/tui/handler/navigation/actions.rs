@@ -145,6 +145,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                         schema: s.schema.clone(),
                         table: s.table.clone(),
                         filters: Vec::new(),
+                        fresh: false,
                     })
                 } else {
                     let first_col = partition_cols[0].clone();
@@ -205,6 +206,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                     schema: s.schema.clone(),
                     table: s.table.clone(),
                     filters: Vec::new(),
+                    fresh: action.is_metadata(),
                 })
             }
         }
@@ -365,6 +367,10 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             drilldown_drill_into_selected(s, &safe_columns)
                         }
                         KeyCode::Char('<') | KeyCode::Left => drilldown_go_up(s),
+                        KeyCode::Char('q') | KeyCode::Char(':') => {
+                            crate::tui::handler::query::begin_query_input(app);
+                            None
+                        }
                         KeyCode::Char('y') => {
                             copy_active_pane_content(app);
                             None

@@ -23,6 +23,7 @@ pub mod connect_help;
 pub mod drilldown;
 pub mod line_select;
 pub mod list;
+pub mod refresh;
 
 pub use actions::*;
 pub use connect_help::*;
@@ -2243,5 +2244,41 @@ pub mod tests {
             act_st.query_buffer, "SELECT * FROM t3 LIMIT 50",
             "cached query preserved"
         );
+    }
+
+    #[test]
+    fn q_and_colon_open_the_query_bar_in_every_footer_state_that_offers_them() {
+        let config = || ConnectionConfig {
+            url: "http://localhost:8080".to_string(),
+            user: "test".to_string(),
+            password: String::new(),
+            query_cache_limit: crate::config::DEFAULT_QUERY_CACHE_LIMIT,
+        };
+        // Table View, drilled into a partition level above the leaf
+        let mut drilldown = drilldown_action_state(vec!["date", "service"]);
+        drilldown.selected = 0;
+        drilldown.drilldown = Some(DrillDownState {
+            partition_cols: vec!["date".to_string(), "service".to_string()],
+            levels_cache: vec![vec!["2026-08-06".to_string()]],
+            ..Default::default()
+        });
+        // Partitions, with its tree shown in the main viewer
+        let mut partitions = drilldown_action_state(vec!["date"]);
+        partitions.selected = 5;
+        let partition_lines = vec!["date=2026-08-06".to_string()];
+
+        for (label, state, tree_lines) in [
+            ("drill-down", drilldown, Vec::new()),
+            ("partitions tree", partitions, partition_lines),
+        ] {
+            for key in ['q', ':'] {
+                let mut app = App::new(config(), false);
+                app.screen = Screen::Actions(state.clone());
+                app.active_panel = ActivePanel::MainViewer;
+                app.partition_tree_lines = tree_lines.clone();
+                actions_keys(&mut app, KeyEvent::from(KeyCode::Char(key)));
+                assert_eq!(app.mode, Mode::QueryInput, "{key} in {label}");
+            }
+        }
     }
 }

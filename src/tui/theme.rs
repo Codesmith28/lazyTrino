@@ -166,11 +166,17 @@ pub fn border_style(is_active: bool) -> Style {
     style(border_color(is_active))
 }
 
-pub fn query_bar_border_color(is_editing: bool, is_table_view: bool) -> Color {
+/// Border of the query bar: the active color while editing, dimmed while it
+/// is disabled, and otherwise the same as the menu pane's border.
+pub fn query_bar_border_color(
+    is_editing: bool,
+    is_table_view: bool,
+    menu_is_active: bool,
+) -> Color {
     if is_editing {
         pal().active_border
     } else if is_table_view {
-        pal().accent_border
+        border_color(menu_is_active)
     } else {
         pal().inactive_border
     }
@@ -572,5 +578,25 @@ mod tests {
         assert_ne!(toast_style().fg, error_toast_style().fg);
         // message text is the terminal default, never an accent
         assert_eq!(toast_text_style().fg, Some(Color::Reset));
+    }
+
+    #[test]
+    fn the_query_bar_border_follows_the_menu_pane() {
+        for menu_is_active in [true, false] {
+            assert_eq!(
+                query_bar_border_color(false, true, menu_is_active),
+                border_color(menu_is_active),
+                "an idle query bar in table view matches the menu"
+            );
+        }
+        // editing always lights up, and a disabled bar stays dim
+        assert_eq!(
+            query_bar_border_color(true, true, false),
+            PALETTE.active_border
+        );
+        assert_eq!(
+            query_bar_border_color(false, false, true),
+            PALETTE.inactive_border
+        );
     }
 }

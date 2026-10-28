@@ -147,7 +147,9 @@ lazyTrino --profile prod
 | `g` / `G` | Jump to top / bottom of list |
 | `<number> + Enter` | Jump directly to item number |
 | `/` | Focus search bar (in menus and modals) |
+| `r` | **Refresh** the current view: drops every cached query result and reloads the catalog / schema / table list, or the table's DDL, columns, partition level and the rows behind the grid |
 | `Tab` / `Shift+H` / `Shift+L` | Toggle focus between Menu Pane (left) and Preview Pane (right) |
+| Click / wheel on the bottom help bar | Scroll the key hints sideways when the terminal is too narrow for them (`‹` / `›` mark more). Clicking gives the bar focus: `←`/`→` (`h`/`l`), `Home`/`End` then scroll *it* and not the pane; `Esc` or any other key hands focus back |
 | `{` / `}` or mouse wheel over it | Scroll the **Executed Queries** pane when the log, a long query or an error is taller than it |
 | `j`/`k`, `PgUp`/`PgDn`, wheel | In the results grid, scroll *inside* a row taller than the pane (e.g. **Table DDL**, or a long error message) before moving to the next row; the border shows `lines 25–48 of 118` |
 | `h`/`l`, `←`/`→`, `Shift`+wheel | In **Partitions**, scroll the tree sideways when a line (such as a long `s3://…` location) is wider than the pane |
@@ -273,7 +275,7 @@ The query bar is a small vim editor. It opens in **INSERT** mode so you can type
 | `--user` | | `$USER` (or `trino`) | Trino username |
 | `--password` | `--pass` | *(none)* | Trino password |
 | `--profile <NAME>` | | *(none)* | Load connection defaults from named profile |
-| `--query-cache-limit <COUNT>` | `--cache-limit` | `30` | How many query results to keep in memory. A repeated query is answered from the cache (nothing is sent to Trino) and shows as `[cached]` in the Executed Queries pane; `0` disables caching. Also settable as `query_cache_limit` in the config file or a profile |
+| `--query-cache-limit <COUNT>` | `--cache-limit` | `30` | How many query results to keep in memory. A repeated query is answered from the cache (nothing is sent to Trino) and shows as `[cached]` in the Executed Queries pane; `0` disables caching. Cached results expire after 2 minutes, and `r` clears them at any time. Catalog, schema, table, partition and count lookups are never cached. Also settable as `query_cache_limit` in the config file or a profile |
 | `--log-level <LEVEL>` | | `info` | Set file log level (`trace`, `debug`, `info`, `warn`, `error`) |
 | `--no-log` | | `false` | Disable file logging entirely |
 | `--update` | `-u` | | Check for and install latest GitHub release |

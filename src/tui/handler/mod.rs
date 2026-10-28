@@ -24,6 +24,7 @@ pub mod column_modal;
 mod commands;
 pub mod export;
 pub mod filter_modal;
+pub mod footer;
 pub mod help_modal;
 mod mouse;
 mod navigation;
@@ -103,6 +104,7 @@ pub enum Command {
         user: String,
         password: String,
     },
+    FetchCatalogs,
     FetchSchemas {
         catalog: String,
     },
@@ -125,6 +127,9 @@ pub enum Command {
         /// resulting `ResultsState` (and any subsequent `FetchNextPage`)
         /// keeps using them. Empty for ordinary, non-drill-down queries.
         filters: Vec<(String, String)>,
+        /// Skip the query cache. Set for metadata actions (Schema, Show
+        /// Stats, Partitions) so they show the live state of the table.
+        fresh: bool,
     },
     FetchNextPage {
         catalog: String,
@@ -161,6 +166,10 @@ pub enum AsyncResult {
         user: String,
         password: String,
         result: Result<(TrinoClient, Vec<String>), TrinoClientError>,
+    },
+    FetchCatalogs {
+        log_id: usize,
+        result: Result<Vec<String>, TrinoClientError>,
     },
     FetchSchemas {
         log_id: usize,
@@ -327,6 +336,11 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         Mode::Normal => {}
     }
 
+    // A focused help bar takes its scroll keys before any pane can see them.
+    if footer::handle_key(app, key) {
+        return None;
+    }
+
     let code = navigation::normalize_key_code(key.code);
 
     // Native copy shortcuts. Must run before the Ctrl+C quit check: with the
@@ -410,6 +424,11 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     {
         app.mode = Mode::Search;
         return None;
+    }
+
+    // `r` drops the cached query results and reloads the view on screen.
+    if code == KeyCode::Char('r') && key.modifiers.is_empty() && navigation::refresh::applies(app) {
+        return navigation::refresh::refresh_current_view(app);
     }
 
     if code == KeyCode::Esc {

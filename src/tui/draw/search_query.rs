@@ -191,6 +191,7 @@ pub fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
         .border_style(theme::style(theme::query_bar_border_color(
             is_editing,
             is_table_view,
+            app.active_panel == crate::app::ActivePanel::MenuPane,
         )));
 
     let (buf, cursor, sel_range) = match effective_screen {

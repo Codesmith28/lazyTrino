@@ -55,6 +55,7 @@ pub fn drilldown_drill_into_selected(
         s.query_buffer = query.clone();
         s.query_cursor = query_len;
         Some(Command::ExecuteQuery {
+            fresh: false,
             query,
             is_paginated: true,
             catalog,

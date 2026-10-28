@@ -1406,6 +1406,15 @@ impl Action {
         ACTIONS[self.index()].1
     }
 
+    /// Whether the action reads catalog metadata rather than table rows.
+    /// Its queries bypass the query cache.
+    pub fn is_metadata(self) -> bool {
+        matches!(
+            self,
+            Action::Schema | Action::ShowStats | Action::Partitions
+        )
+    }
+
     pub fn build_query(&self, catalog: &str, schema: &str, table: &str) -> String {
         match self {
             Action::TableView => crate::trino::queries::page_query(catalog, schema, table, 0, 100),
@@ -1457,6 +1466,17 @@ pub struct App {
     /// Where the pane was last drawn (set by the renderer, read by the
     /// mouse wheel hit-test and scroll clamping).
     pub inspector_rect: Cell<ratatui::layout::Rect>,
+    /// The bottom help bar. Where it was last drawn, how far it is scrolled
+    /// sideways, how far it can scroll (all set by the renderer), and whether
+    /// it holds keyboard focus: while it does, it alone takes the scroll
+    /// keys, so the active pane never moves at the same time.
+    pub footer_rect: Cell<ratatui::layout::Rect>,
+    pub footer_scroll: Cell<usize>,
+    pub footer_max_scroll: Cell<usize>,
+    /// Identifies the hint the scroll offset belongs to, so a new hint
+    /// starts from its beginning.
+    pub footer_hint_key: Cell<usize>,
+    pub footer_focused: bool,
     pub mouse_selection_anchor: Option<(u16, u16)>,
     pub mouse_selection_current: Option<(u16, u16)>,
     pub is_selecting_text: bool,
@@ -1527,6 +1547,11 @@ impl App {
             is_dragging_h_scrollbar: false,
             query_inspector_scroll: 0,
             inspector_rect: Cell::new(ratatui::layout::Rect::default()),
+            footer_rect: Cell::new(ratatui::layout::Rect::default()),
+            footer_scroll: Cell::new(0),
+            footer_max_scroll: Cell::new(0),
+            footer_hint_key: Cell::new(0),
+            footer_focused: false,
             mouse_selection_anchor: None,
             mouse_selection_current: None,
             is_selecting_text: false,

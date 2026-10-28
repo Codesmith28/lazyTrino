@@ -87,6 +87,11 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
         app.mouse_selection_committed = false;
     }
 
+    // The help bar owns clicks and the wheel over it: no pane sees them.
+    if super::footer::handle_mouse(app, mouse) {
+        return None;
+    }
+
     let bottom_y = term_height.saturating_sub(7);
     let is_in_table = matches!(app.screen, Screen::Actions(_));
     // Only the Actions screen has a pane divider; the Connect / Catalog /
