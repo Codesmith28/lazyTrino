@@ -19,3 +19,4 @@ pub mod saved_views;
 pub mod trino;
 pub mod tui;
 pub mod updater;
+pub mod view_location;

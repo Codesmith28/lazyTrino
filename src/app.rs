@@ -33,6 +33,8 @@ pub struct QueryLogEntry {
     pub duration_ms: Option<u64>,
     pub row_count: Option<usize>,
     pub error_msg: Option<String>,
+    /// Answered from the query cache instead of being sent to Trino.
+    pub cached: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -205,6 +207,10 @@ pub struct DrillDownState {
     pub counts_cache: HashMap<Vec<(String, String)>, usize>,
     pub current_count_loading: bool,
     pub path_cursors: HashMap<Vec<(String, String)>, usize>,
+    /// Value to put the cursor on once the current level's values arrive
+    /// (set when going up into a level that was never loaded, e.g. after
+    /// restoring a saved view deep in the hierarchy).
+    pub focus_value: Option<String>,
 }
 
 impl DrillDownState {
@@ -225,6 +231,14 @@ impl DrillDownState {
     /// levels remain.
     pub fn next_column(&self) -> Option<&str> {
         self.partition_cols.get(self.path.len()).map(|s| s.as_str())
+    }
+
+    /// Cached record count for `value` at the level currently displayed.
+    pub fn count_for_value(&self, value: &str) -> Option<usize> {
+        let column = self.next_column()?;
+        let mut key = self.path.clone();
+        key.push((column.to_string(), value.to_string()));
+        self.counts_cache.get(&key).copied()
     }
 
     /// Gets the cached count for the current partition path (or table count if path is empty).
@@ -269,12 +283,64 @@ pub struct ActionState {
     /// queries resolve. Gates `Partitions` and `Schema`.
     pub metadata_loading: bool,
     pub drilldown: Option<DrillDownState>,
-    pub pending_view_restore: Option<crate::saved_views::SavedView>,
+    /// SQL the user ran from the query bar, when the current view is not
+    /// the one the app generated for this location. Cleared whenever
+    /// navigation regenerates the query.
+    pub custom_sql: Option<String>,
+    /// Column / partition-expression types, so predicate values are written
+    /// as literals of the right type (see `queries::sql_literal`).
+    pub column_types: crate::trino::queries::ColumnTypes,
     pub pending_action: Option<usize>,
+}
+
+/// Editing mode of the SQL query panel (vim-style). The panel opens in
+/// `Insert`, so typing works immediately; `Esc` drops to `Normal`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VimMode {
+    #[default]
+    Insert,
+    Normal,
+    Visual,
+}
+
+/// Vim state of the query panel: pending count/operator/prefix, undo
+/// history and the unnamed register.
+#[derive(Clone, Debug, Default)]
+pub struct QueryVim {
+    pub mode: VimMode,
+    pub count: Option<usize>,
+    pub op_count: Option<usize>,
+    pub op: Option<char>,
+    pub pending: Option<char>,
+    pub last_find: Option<(char, char)>,
+    pub undo: Vec<(String, usize)>,
+    pub redo: Vec<(String, usize)>,
+    pub register: String,
+    /// True once the current insert session has pushed its undo snapshot.
+    pub insert_dirty: bool,
+}
+
+impl QueryVim {
+    pub fn clear_pending(&mut self) {
+        self.count = None;
+        self.op_count = None;
+        self.op = None;
+        self.pending = None;
+    }
+
+    /// Back to a fresh `Insert` session (panel opened or closed).
+    pub fn reset(&mut self) {
+        self.mode = VimMode::Insert;
+        self.clear_pending();
+        self.insert_dirty = false;
+        self.undo.clear();
+        self.redo.clear();
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct ResultsState {
+    pub vim: QueryVim,
     pub query_buffer: String,
     pub query_cursor: usize,
     pub columns: Vec<String>,
@@ -284,6 +350,14 @@ pub struct ResultsState {
     pub selected_row: usize,
     pub selected_col: usize,
     pub last_selected_row: Cell<usize>,
+    /// Lines of the selected row hidden above the viewport, for a row taller
+    /// than the viewport (e.g. a long DDL cell). Set by keys / wheel, clamped
+    /// by the renderer, which also records the geometry below.
+    pub row_line_offset: Cell<usize>,
+    /// The selected row `row_line_offset` belongs to (it resets on change).
+    pub row_offset_for: Cell<usize>,
+    pub sel_row_height: Cell<usize>,
+    pub viewport_lines: Cell<usize>,
     pub last_selected_col: Cell<usize>,
     pub loading: bool,
     pub error: Option<String>,
@@ -328,6 +402,26 @@ pub enum VisualMode {
         anchor_row: usize,
         anchor_col: usize,
     },
+}
+
+/// Smallest scroll offset that keeps `cursor` inside a window of `visible`
+/// rows starting at `scroll`.
+pub fn scroll_into_view(cursor: usize, scroll: usize, visible: usize) -> usize {
+    let visible = visible.max(1);
+    if cursor < scroll {
+        cursor
+    } else if cursor >= scroll + visible {
+        cursor + 1 - visible
+    } else {
+        scroll
+    }
+}
+
+/// Rows a modal's list area has when the terminal is `height` tall, before
+/// the first frame reports the real number (the list is the modal minus its
+/// borders, search box and hint line).
+pub fn estimated_modal_list_rows(medium_modal_height: u16) -> usize {
+    medium_modal_height.saturating_sub(7).max(1) as usize
 }
 
 pub fn format_count(n: usize) -> String {
@@ -414,6 +508,18 @@ impl ResultsState {
     }
 
     pub fn selection_range(&self) -> Option<(usize, usize)> {
+        if self.vim.mode == VimMode::Visual
+            && let Some(anchor) = self.selection_anchor
+        {
+            // Vim's visual selection is inclusive of the character under the cursor.
+            let start = anchor.min(self.query_cursor).min(self.query_buffer.len());
+            let last = anchor.max(self.query_cursor).min(self.query_buffer.len());
+            let mut end = (last + 1).min(self.query_buffer.len());
+            while end < self.query_buffer.len() && !self.query_buffer.is_char_boundary(end) {
+                end += 1;
+            }
+            return (start < end).then_some((start, end));
+        }
         if let Some(anchor) = self.selection_anchor
             && anchor != self.query_cursor
         {
@@ -445,6 +551,35 @@ impl ResultsState {
     pub fn select_all(&mut self) {
         self.selection_anchor = Some(0);
         self.query_cursor = self.query_buffer.len();
+    }
+
+    /// Scrolls inside the selected row when it is taller than the viewport.
+    /// Returns true when it moved (the key / wheel event is consumed); false
+    /// when the row fits, or its top / bottom was reached — so the caller
+    /// moves on to the previous / next row.
+    pub fn scroll_within_row(&self, delta: isize) -> bool {
+        if self.visual_mode != VisualMode::None {
+            return false;
+        }
+        let max = self
+            .sel_row_height
+            .get()
+            .saturating_sub(self.viewport_lines.get());
+        if max == 0 {
+            return false;
+        }
+        let cur = self.row_line_offset.get();
+        let new = (cur as isize + delta).clamp(0, max as isize) as usize;
+        if new == cur {
+            return false;
+        }
+        self.row_line_offset.set(new);
+        true
+    }
+
+    /// Lines per page when scrolling inside a tall row.
+    pub fn row_scroll_page(&self) -> isize {
+        self.viewport_lines.get().saturating_sub(1).max(1) as isize
     }
 
     pub fn is_in_visual_mode(&self) -> bool {
@@ -803,6 +938,7 @@ pub enum Mode {
     SavedViewsModal,
     SaveViewPrompt,
     AppliedFiltersModal,
+    ExportModal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -954,6 +1090,8 @@ pub struct FilterModalState {
     pub selected_values: HashSet<String>,
     pub cursor: usize,
     pub scroll: usize,
+    /// List rows the renderer showed last time (what the keys scroll by).
+    pub visible_rows: Cell<usize>,
     pub search_query: String,
     pub is_searching: bool,
     pub numeric_op: NumericOp,
@@ -1044,6 +1182,8 @@ pub struct ColumnModalState {
     pub selected_columns: HashSet<String>,
     pub cursor: usize,
     pub scroll: usize,
+    /// List rows the renderer showed last time (what the keys scroll by).
+    pub visible_rows: Cell<usize>,
     pub search_query: String,
     pub is_searching: bool,
     pub tree_nodes: Vec<crate::trino::flatten::ColumnTreeNode>,
@@ -1086,10 +1226,126 @@ pub struct HelpModalState {
     pub scroll: usize,
 }
 
+/// Which vim-style visual key started a keyboard selection in a list view.
+/// List rows are single-column, so all three select a contiguous row range;
+/// the kind only drives the `-- VISUAL ... --` indicator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineSelectKind {
+    Line,
+    Char,
+    Block,
+}
+
+impl LineSelectKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            LineSelectKind::Line => "VISUAL LINE",
+            LineSelectKind::Char => "VISUAL",
+            LineSelectKind::Block => "VISUAL BLOCK",
+        }
+    }
+}
+
+/// Keyboard row-range selection for cursor-based list views (catalog /
+/// schema / table lists and the partition drill-down). The selection spans
+/// `anchor..=cursor`, where the cursor is the view's own selected index
+/// (so it keeps following `j`/`k`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LineSelection {
+    pub anchor: usize,
+    pub kind: LineSelectKind,
+    /// Fingerprint of the view (screen, drill-down path, search filter, row
+    /// count) the selection was made in. Async results or a changed filter
+    /// can replace the list under an index-based anchor; a selection whose
+    /// scope no longer matches is discarded instead of highlighting the
+    /// wrong rows.
+    pub scope: u64,
+}
+
+impl LineSelection {
+    pub fn range(self, cursor: usize) -> (usize, usize) {
+        (self.anchor.min(cursor), self.anchor.max(cursor))
+    }
+
+    pub fn contains(self, cursor: usize, idx: usize) -> bool {
+        let (lo, hi) = self.range(cursor);
+        idx >= lo && idx <= hi
+    }
+}
+
+/// Snapshot of whatever view "copy / export entire view" acts on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ViewExport {
+    /// Human-readable name shown in the modal title.
+    pub title: String,
+    /// Base for the exported file name (sanitized, without extension).
+    pub file_stem: String,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    /// Extra caveat shown in the modal (e.g. only loaded rows are included).
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportModalState {
+    pub view: ViewExport,
+    /// 0 = copy to clipboard, 1 = export to CSV file.
+    pub selected: usize,
+    pub size_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoticeKind {
+    Success,
+    Error,
+}
+
+/// A self-describing status message (unlike `copied_toast`, which is always
+/// rendered as `Copied: "..."`), used for copy/export results and failures.
+#[derive(Clone, Debug)]
+pub struct NoticeToast {
+    pub text: String,
+    pub kind: NoticeKind,
+    pub at: std::time::Instant,
+}
+
+impl NoticeToast {
+    /// Errors stay up longer than successes so they can actually be read.
+    pub fn ttl(&self) -> std::time::Duration {
+        match self.kind {
+            NoticeKind::Success => std::time::Duration::from_secs(4),
+            NoticeKind::Error => std::time::Duration::from_secs(7),
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.at.elapsed() < self.ttl()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SaveViewPromptState {
     pub name_input: String,
     pub view: crate::saved_views::SavedView,
+}
+
+/// Which step a saved-view restore is waiting on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreStage {
+    Schemas,
+    Tables,
+    Metadata,
+    Results,
+}
+
+/// A saved view being rebuilt step by step (lists → table → partitions →
+/// results) as the async results arrive. See `tui::handler::restore`.
+#[derive(Clone, Debug)]
+pub struct RestorePlan {
+    pub view: crate::saved_views::SavedView,
+    pub stage: RestoreStage,
+    /// Things that could not be restored exactly, reported when done.
+    pub notes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1099,24 +1355,31 @@ pub struct SavedViewsModalState {
     pub scroll: usize,
     pub selected_ids: std::collections::HashSet<String>,
     pub pending_delete_ids: Vec<String>,
+    /// Trino URL of the current connection, to flag views saved elsewhere.
+    pub current_url: String,
 }
 
 impl SavedViewsModalState {
     pub fn new() -> Self {
-        let views = crate::saved_views::load_saved_views();
+        let views = crate::saved_views::load_saved_views().unwrap_or_default();
         Self {
             views,
             selected: 0,
             scroll: 0,
             selected_ids: std::collections::HashSet::new(),
             pending_delete_ids: Vec::new(),
+            current_url: String::new(),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Serialized by name (`table_view`, `table_ddl`, …) so saved views do not
+/// depend on the menu order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Action {
     TableView,
+    #[serde(rename = "table_ddl")]
     TableDDL,
     Schema,
     ShowStats,
@@ -1134,6 +1397,24 @@ pub const ACTIONS: &[(char, &str, Action)] = &[
 ];
 
 impl Action {
+    /// Position of this action in the menu (`ACTIONS`).
+    pub fn index(self) -> usize {
+        ACTIONS.iter().position(|(_, _, a)| *a == self).unwrap_or(0)
+    }
+
+    pub fn label(self) -> &'static str {
+        ACTIONS[self.index()].1
+    }
+
+    /// Whether the action reads catalog metadata rather than table rows.
+    /// Its queries bypass the query cache.
+    pub fn is_metadata(self) -> bool {
+        matches!(
+            self,
+            Action::Schema | Action::ShowStats | Action::Partitions
+        )
+    }
+
     pub fn build_query(&self, catalog: &str, schema: &str, table: &str) -> String {
         match self {
             Action::TableView => crate::trino::queries::page_query(catalog, schema, table, 0, 100),
@@ -1153,6 +1434,8 @@ pub struct App {
     pub should_quit: bool,
     pub number_buffer: String,
     pub search_query: String,
+    /// Pane the current `search_query` was typed in; see `sync_search_scope`.
+    pub search_pane: Option<String>,
     pub loading: bool,
     pub trino_client: Option<TrinoClient>,
     pub config: ConnectionConfig,
@@ -1164,6 +1447,11 @@ pub struct App {
     pub active_panel: ActivePanel,
     pub partition_tree_lines: Vec<String>,
     pub partition_scroll: usize,
+    /// Characters the Partitions tree is scrolled to the left, for lines wider
+    /// than the pane (long storage locations). The renderer records the
+    /// largest useful value in `partition_max_h`.
+    pub partition_scroll_h: usize,
+    pub partition_max_h: Cell<usize>,
     pub vertical_schema_cols: Vec<VerticalColumn>,
     pub schema_scroll: usize,
     pub auto_connect: bool,
@@ -1173,17 +1461,43 @@ pub struct App {
     pub is_dragging_resizer: bool,
     pub is_dragging_query_select: bool,
     pub is_dragging_h_scrollbar: bool,
+    /// First visible line of the Executed Queries pane (0 = newest at top).
     pub query_inspector_scroll: usize,
+    /// Where the pane was last drawn (set by the renderer, read by the
+    /// mouse wheel hit-test and scroll clamping).
+    pub inspector_rect: Cell<ratatui::layout::Rect>,
+    /// The bottom help bar. Where it was last drawn, how far it is scrolled
+    /// sideways, how far it can scroll (all set by the renderer), and whether
+    /// it holds keyboard focus: while it does, it alone takes the scroll
+    /// keys, so the active pane never moves at the same time.
+    pub footer_rect: Cell<ratatui::layout::Rect>,
+    pub footer_scroll: Cell<usize>,
+    pub footer_max_scroll: Cell<usize>,
+    /// Identifies the hint the scroll offset belongs to, so a new hint
+    /// starts from its beginning.
+    pub footer_hint_key: Cell<usize>,
+    pub footer_focused: bool,
     pub mouse_selection_anchor: Option<(u16, u16)>,
     pub mouse_selection_current: Option<(u16, u16)>,
     pub is_selecting_text: bool,
+    /// A finished mouse selection (already copied) that stays highlighted
+    /// until the next click, scroll, key press or Esc.
+    pub mouse_selection_committed: bool,
     pub copied_toast: Option<(String, std::time::Instant)>,
+    pub notice_toast: Option<NoticeToast>,
+    /// Keyboard row-range selection in list views; see [`LineSelection`].
+    pub line_selection: Option<LineSelection>,
+    pub export_modal: Option<ExportModalState>,
+    /// Last fully rendered frame. Lets text selection fall back to "what is
+    /// on screen" for any view that has no dedicated extractor.
+    pub last_frame: ratatui::buffer::Buffer,
     pub filter_modal: Option<FilterModalState>,
     pub column_modal: Option<ColumnModalState>,
     pub help_modal: Option<HelpModalState>,
     pub help_scroll: usize,
     pub saved_views_modal: Option<SavedViewsModalState>,
     pub save_view_prompt: Option<SaveViewPromptState>,
+    pub restore: Option<RestorePlan>,
     pub applied_filters_modal: Option<AppliedFiltersModalState>,
     pub last_selected_catalog: usize,
     pub last_selected_schema: HashMap<String, usize>,
@@ -1208,6 +1522,7 @@ impl App {
             should_quit: false,
             number_buffer: String::new(),
             search_query: String::new(),
+            search_pane: None,
             loading: false,
             trino_client: None,
             config,
@@ -1219,6 +1534,8 @@ impl App {
             active_panel: ActivePanel::MainViewer,
             partition_tree_lines: Vec::new(),
             partition_scroll: 0,
+            partition_scroll_h: 0,
+            partition_max_h: Cell::new(0),
             vertical_schema_cols: Vec::new(),
             schema_scroll: 0,
             auto_connect,
@@ -1229,15 +1546,27 @@ impl App {
             is_dragging_query_select: false,
             is_dragging_h_scrollbar: false,
             query_inspector_scroll: 0,
+            inspector_rect: Cell::new(ratatui::layout::Rect::default()),
+            footer_rect: Cell::new(ratatui::layout::Rect::default()),
+            footer_scroll: Cell::new(0),
+            footer_max_scroll: Cell::new(0),
+            footer_hint_key: Cell::new(0),
+            footer_focused: false,
             mouse_selection_anchor: None,
             mouse_selection_current: None,
             is_selecting_text: false,
+            mouse_selection_committed: false,
             copied_toast: None,
+            notice_toast: None,
+            line_selection: None,
+            export_modal: None,
+            last_frame: ratatui::buffer::Buffer::default(),
             filter_modal: None,
             column_modal: None,
             help_modal: None,
             help_scroll: 0,
             saved_views_modal: None,
+            restore: None,
             save_view_prompt: None,
             applied_filters_modal: None,
             last_selected_catalog: 0,
@@ -1257,7 +1586,18 @@ impl App {
             duration_ms: None,
             row_count: None,
             error_msg: None,
+            cached: false,
         });
+        id
+    }
+
+    /// Like `add_query_log`, but flags the entry when `cached` (the query is
+    /// served from the client's cache, so nothing is sent to Trino).
+    pub fn add_query_log_with_cache(&mut self, sql: String, cached: bool) -> usize {
+        let id = self.add_query_log(sql);
+        if cached && let Some(entry) = self.query_logs.last_mut() {
+            entry.cached = true;
+        }
         id
     }
 
@@ -1284,6 +1624,92 @@ impl App {
     pub fn clear_mouse_selection(&mut self) {
         self.mouse_selection_anchor = None;
         self.mouse_selection_current = None;
+        self.mouse_selection_committed = false;
+        // A keyboard row selection is just as stale once focus or screen changes.
+        self.line_selection = None;
+    }
+
+    /// True if any kind of selection (mouse drag, list row range, or grid
+    /// visual mode) is currently showing. Esc clears these before doing
+    /// anything else.
+    pub fn has_active_selection(&self) -> bool {
+        // Only a drag in progress counts as a mouse selection: a bare click
+        // leaves anchors behind that aren't visible, and Esc must not be
+        // swallowed deselecting something the user can't see.
+        if self.mouse_highlight_active() || self.line_selection.is_some() {
+            return true;
+        }
+        matches!(&self.screen, Screen::Actions(s)
+            if s.results.as_ref().is_some_and(|r| r.is_in_visual_mode()))
+    }
+
+    /// True while a mouse selection should be painted: during the drag, and
+    /// after release until something invalidates it.
+    pub fn mouse_highlight_active(&self) -> bool {
+        self.is_selecting_text || self.mouse_selection_committed
+    }
+
+    /// Identifies the list pane a search applies to. Drilling into or backing
+    /// out of a pane yields a different id.
+    fn search_pane_id(&self) -> String {
+        match &self.screen {
+            Screen::Catalog(_) => "catalog".to_string(),
+            Screen::Schema(s) => format!("schema:{}", s.catalog),
+            Screen::Table(s) => format!("table:{}.{}", s.catalog, s.schema),
+            Screen::Help => "help".to_string(),
+            _ => "other".to_string(),
+        }
+    }
+
+    /// Records that the search query belongs to the pane currently shown.
+    pub fn bind_search_to_pane(&mut self) {
+        self.search_pane = Some(self.search_pane_id());
+    }
+
+    /// A search filters only the pane it was typed in: once another pane is
+    /// showing (drill-down or back), the query is dropped.
+    pub fn sync_search_scope(&mut self) {
+        if self.search_query.is_empty() {
+            self.search_pane = None;
+            return;
+        }
+        let here = self.search_pane_id();
+        match &self.search_pane {
+            Some(pane) if *pane != here => {
+                self.search_query.clear();
+                self.search_pane = None;
+                self.help_scroll = 0;
+            }
+            Some(_) => {}
+            None => self.search_pane = Some(here),
+        }
+    }
+
+    /// Vim mode of the query panel (`Insert` when there is no query state yet).
+    pub fn query_vim_mode(&self) -> VimMode {
+        match &self.screen {
+            Screen::Actions(s) => s.results.as_ref().map(|r| r.vim.mode).unwrap_or_default(),
+            _ => VimMode::Insert,
+        }
+    }
+
+    pub fn clear_all_selections(&mut self) {
+        self.clear_mouse_selection();
+        self.is_selecting_text = false;
+        self.mouse_selection_committed = false;
+        if let Screen::Actions(s) = &mut self.screen
+            && let Some(res) = s.results.as_mut()
+        {
+            res.exit_visual_mode();
+        }
+    }
+
+    pub fn set_notice(&mut self, kind: NoticeKind, text: impl Into<String>) {
+        self.notice_toast = Some(NoticeToast {
+            text: text.into(),
+            kind,
+            at: std::time::Instant::now(),
+        });
     }
 
     pub fn has_mouse_selection(&self) -> bool {
@@ -1320,7 +1746,7 @@ impl App {
         area_y: u16,
         area_h: u16,
     ) -> bool {
-        if !self.is_selecting_text {
+        if !self.mouse_highlight_active() {
             return false;
         }
         if let (Some((a_x, a_y)), Some((c_x, c_y))) =

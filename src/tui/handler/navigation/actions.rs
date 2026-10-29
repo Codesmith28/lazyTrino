@@ -15,7 +15,7 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::{
-    ACTIONS, Action, ActionState, ActivePanel, App, DrillDownState, Mode, ResultsState, Screen,
+    ACTIONS, Action, ActionState, ActivePanel, App, DrillDownState, ResultsState, Screen,
 };
 use crate::tui::handler::Command;
 
@@ -72,6 +72,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
             s.pending_action = Some(action_idx);
             s.results = None;
             s.drilldown = None;
+            s.custom_sql = None;
             let query = action.build_query(&s.catalog, &s.schema, &s.table);
             s.query_cursor = query.len();
             s.query_buffer = query;
@@ -87,6 +88,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
             s.pending_action = Some(action_idx);
             s.results = None;
             s.drilldown = None;
+            s.custom_sql = None;
             let query = action.build_query(&s.catalog, &s.schema, &s.table);
             s.query_cursor = query.len();
             s.query_buffer = query;
@@ -110,6 +112,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
             Action::Partitions | Action::Schema => {
                 s.results = None;
                 s.drilldown = None;
+                s.custom_sql = None;
                 let query = action.build_query(&s.catalog, &s.schema, &s.table);
                 s.query_cursor = query.len();
                 s.query_buffer = query;
@@ -122,6 +125,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                 if is_same_table_view {
                     return None;
                 }
+                s.custom_sql = None;
                 s.results = None;
                 s.drilldown = None;
                 let partition_cols = s
@@ -141,6 +145,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                         schema: s.schema.clone(),
                         table: s.table.clone(),
                         filters: Vec::new(),
+                        fresh: false,
                     })
                 } else {
                     let first_col = partition_cols[0].clone();
@@ -151,6 +156,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                         &[],
                         &first_col,
                         crate::tui::handler::commands::DRILLDOWN_LEVEL_LIMIT,
+                        &s.column_types,
                     );
                     let query_len = query.len();
                     s.query_buffer = query;
@@ -168,6 +174,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                         counts_cache: std::collections::HashMap::new(),
                         current_count_loading: true,
                         path_cursors: std::collections::HashMap::new(),
+                        focus_value: None,
                     });
                     Some(Command::FetchPartitionLevel {
                         catalog: s.catalog.clone(),
@@ -180,6 +187,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
             }
             Action::TableDDL if s.metadata.is_some() => {
                 s.drilldown = None;
+                s.custom_sql = None;
                 populate_table_ddl_results(s);
                 None
             }
@@ -187,6 +195,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                 let query = action.build_query(&s.catalog, &s.schema, &s.table);
                 s.results = None;
                 s.drilldown = None;
+                s.custom_sql = None;
                 let query_len = query.len();
                 s.query_buffer = query.clone();
                 s.query_cursor = query_len;
@@ -197,6 +206,7 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                     schema: s.schema.clone(),
                     table: s.table.clone(),
                     filters: Vec::new(),
+                    fresh: action.is_metadata(),
                 })
             }
         }
@@ -204,6 +214,9 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
         None
     }
 }
+
+/// Characters per h / l press (or horizontal wheel notch) in the Partitions tree.
+pub const PARTITION_HSCROLL_STEP: usize = 8;
 
 pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
     let code = normalize_key_code(key.code);
@@ -353,8 +366,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         KeyCode::Char('>') | KeyCode::Enter | KeyCode::Right => {
                             drilldown_drill_into_selected(s, &safe_columns)
                         }
-                        KeyCode::Char('<') | KeyCode::Left => {
-                            drilldown_go_up(s);
+                        KeyCode::Char('<') | KeyCode::Left => drilldown_go_up(s),
+                        KeyCode::Char('q') | KeyCode::Char(':') => {
+                            crate::tui::handler::query::begin_query_input(app);
                             None
                         }
                         KeyCode::Char('y') => {
@@ -387,11 +401,17 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
                                 app.schema_scroll = (app.schema_scroll + 1).min(max_cols);
                             } else if let Some(ref mut res) = s.results {
+                                if res.scroll_within_row(1) {
+                                    return None;
+                                }
+                                // Shift+↑/↓ selects at cell level (the current
+                                // cell, extended along the column); `V` is the
+                                // whole-row selection.
                                 if is_shift
                                     && code == KeyCode::Down
                                     && res.visual_mode == crate::app::VisualMode::None
                                 {
-                                    res.enter_visual_line();
+                                    res.enter_visual_block();
                                 }
                                 if !res.rows.is_empty() {
                                     res.selected_row = (res.selected_row + 1)
@@ -407,11 +427,17 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             } else if is_schema {
                                 app.schema_scroll = app.schema_scroll.saturating_sub(1);
                             } else if let Some(ref mut res) = s.results {
+                                if res.scroll_within_row(-1) {
+                                    return None;
+                                }
+                                // Shift+↑/↓ selects at cell level (the current
+                                // cell, extended along the column); `V` is the
+                                // whole-row selection.
                                 if is_shift
                                     && code == KeyCode::Up
                                     && res.visual_mode == crate::app::VisualMode::None
                                 {
-                                    res.enter_visual_line();
+                                    res.enter_visual_block();
                                 }
                                 res.selected_row = res.selected_row.saturating_sub(1);
                             }
@@ -427,6 +453,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                 let max_cols = app.vertical_schema_cols.len().saturating_sub(1);
                                 app.schema_scroll = (app.schema_scroll + 15).min(max_cols);
                             } else if let Some(ref mut res) = s.results {
+                                if res.scroll_within_row(res.row_scroll_page()) {
+                                    return None;
+                                }
                                 if !res.rows.is_empty() {
                                     res.selected_row = (res.selected_row + 15)
                                         .min(res.rows.len().saturating_sub(1));
@@ -443,11 +472,21 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             } else if is_schema {
                                 app.schema_scroll = app.schema_scroll.saturating_sub(15);
                             } else if let Some(ref mut res) = s.results {
+                                if res.scroll_within_row(-res.row_scroll_page()) {
+                                    return None;
+                                }
                                 res.selected_row = res.selected_row.saturating_sub(15);
                             }
                             None
                         }
                         KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Left => {
+                            if is_partitions {
+                                app.partition_scroll_h = app
+                                    .partition_scroll_h
+                                    .min(app.partition_max_h.get())
+                                    .saturating_sub(PARTITION_HSCROLL_STEP);
+                                return None;
+                            }
                             if let Some(ref mut res) = s.results {
                                 if is_shift && code == KeyCode::Left {
                                     match res.visual_mode {
@@ -461,11 +500,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                         crate::app::VisualMode::Block { .. } => {}
                                     }
                                 }
-                                let step = if is_ctrl
-                                    || is_shift
-                                    || is_alt
-                                    || code == KeyCode::Char('H')
-                                {
+                                // Shift+arrow extends a selection one column at a time;
+                                // Ctrl/Alt+arrow and H/L jump.
+                                let step = if is_ctrl || is_alt || code == KeyCode::Char('H') {
                                     5
                                 } else {
                                     1
@@ -477,6 +514,12 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Right => {
+                            if is_partitions {
+                                app.partition_scroll_h = (app.partition_scroll_h
+                                    + PARTITION_HSCROLL_STEP)
+                                    .min(app.partition_max_h.get());
+                                return None;
+                            }
                             if let Some(ref mut res) = s.results
                                 && !res.columns.is_empty()
                             {
@@ -492,11 +535,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                                         crate::app::VisualMode::Block { .. } => {}
                                     }
                                 }
-                                let step = if is_ctrl
-                                    || is_shift
-                                    || is_alt
-                                    || code == KeyCode::Char('L')
-                                {
+                                // Shift+arrow extends a selection one column at a time;
+                                // Ctrl/Alt+arrow and H/L jump.
+                                let step = if is_ctrl || is_alt || code == KeyCode::Char('L') {
                                     5
                                 } else {
                                     1
@@ -592,8 +633,9 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         }
                         KeyCode::Char('<') => {
                             if at_leaf {
-                                drilldown_go_up(s);
-                            } else if let Some(ref mut res) = s.results {
+                                return drilldown_go_up(s);
+                            }
+                            if let Some(ref mut res) = s.results {
                                 for _ in 0..5 {
                                     res.selected_col = res.prev_visible_col();
                                 }
@@ -702,7 +744,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                             None
                         }
                         KeyCode::Char('q') | KeyCode::Char(':') => {
-                            app.mode = Mode::QueryInput;
+                            crate::tui::handler::query::begin_query_input(app);
                             None
                         }
                         KeyCode::Char('y') => {

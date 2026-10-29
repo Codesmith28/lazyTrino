@@ -21,9 +21,17 @@ use crate::trino::queries;
 
 use super::{AsyncResult, Command};
 
-/// Cap on the number of distinct values fetched per drill-down level, to
-/// protect against extremely high-cardinality partition columns.
-pub const DRILLDOWN_LEVEL_LIMIT: usize = 200;
+pub use crate::trino::queries::DRILLDOWN_LEVEL_LIMIT;
+
+/// Adds the query to the Executed Queries log, flagged when the client will
+/// answer it from its cache instead of sending it to Trino.
+fn log_query(app: &mut App, sql: String) -> usize {
+    let cached = app
+        .trino_client
+        .as_ref()
+        .is_some_and(|client| client.is_cached(&sql));
+    app.add_query_log_with_cache(sql, cached)
+}
 
 pub fn dispatch_command(
     app: &mut App,
@@ -31,6 +39,11 @@ pub fn dispatch_command(
     tx: &tokio::sync::mpsc::UnboundedSender<AsyncResult>,
 ) {
     match cmd {
+        Command::Batch(cmds) => {
+            for cmd in cmds {
+                dispatch_command(app, cmd, tx);
+            }
+        }
         Command::Connect {
             url,
             user,
@@ -61,6 +74,22 @@ pub fn dispatch_command(
                     result: res,
                 });
             });
+        }
+        Command::FetchCatalogs => {
+            // Metadata lookups never use the query cache, so they are logged
+            // as plain queries.
+            let log_id = app.add_query_log(queries::show_catalogs());
+            app.loading = true;
+            if let Some(client) = app.trino_client.clone() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let res = client.fetch_catalogs().await;
+                    let _ = tx.send(AsyncResult::FetchCatalogs {
+                        log_id,
+                        result: res,
+                    });
+                });
+            }
         }
         Command::FetchSchemas { catalog } => {
             let sql = queries::show_schemas(&catalog);
@@ -112,7 +141,7 @@ pub fn dispatch_command(
                     // The table's partition layout is always derived directly
                     // from the table's DDL (`SHOW CREATE TABLE`).
                     let (partitioned_by, location, ddl_text, show_create_error) =
-                        match client.execute(&show_create_query).await {
+                        match client.execute_fresh(&show_create_query).await {
                             Ok(res) => {
                                 let ddl = res
                                     .data
@@ -144,7 +173,7 @@ pub fn dispatch_command(
                             Some(&location),
                         );
 
-                    let (columns, columns_error) = match client.execute(&desc_query).await {
+                    let (columns, columns_error) = match client.execute_fresh(&desc_query).await {
                         Ok(res) => {
                             let columns = res
                                 .data
@@ -205,8 +234,13 @@ pub fn dispatch_command(
             schema,
             table,
             filters,
+            fresh,
         } => {
-            let log_id = app.add_query_log(query.clone());
+            let log_id = if fresh {
+                app.add_query_log(query.clone())
+            } else {
+                log_query(app, query.clone())
+            };
             app.loading = true;
             // The query bar must always mirror exactly what's being
             // executed — whether the user typed it manually or a menu
@@ -287,7 +321,11 @@ pub fn dispatch_command(
                 let tbl = table.clone();
                 let filts = filters.clone();
                 tokio::spawn(async move {
-                    let res = client_page.execute(&query).await;
+                    let res = if fresh {
+                        client_page.execute_fresh(&query).await
+                    } else {
+                        client_page.execute(&query).await
+                    };
                     let _ = tx_page.send(AsyncResult::ExecuteQuery {
                         log_id,
                         query_buffer: query_buf,
@@ -302,7 +340,13 @@ pub fn dispatch_command(
                 });
 
                 if is_paginated && cached_total.is_none() {
-                    let count_query = queries::filtered_count(&catalog, &schema, &table, &filters);
+                    let count_query = queries::filtered_count(
+                        &catalog,
+                        &schema,
+                        &table,
+                        &filters,
+                        &table_column_types(app, &catalog, &schema, &table),
+                    );
                     let count_log_id = app.add_query_log(count_query.clone());
                     let tx_cnt = tx.clone();
                     let client_cnt = client;
@@ -311,7 +355,7 @@ pub fn dispatch_command(
                     let tbl_cnt = table;
                     let filts_cnt = filters;
                     tokio::spawn(async move {
-                        let res = client_cnt.execute(&count_query).await;
+                        let res = client_cnt.execute_fresh(&count_query).await;
                         let _ = tx_cnt.send(AsyncResult::FetchPartitionCount {
                             log_id: count_log_id,
                             catalog: cat_cnt,
@@ -341,8 +385,9 @@ pub fn dispatch_command(
                 offset,
                 limit,
                 &safe_columns,
+                &table_column_types(app, &catalog, &schema, &table),
             );
-            let log_id = app.add_query_log(query.clone());
+            let log_id = log_query(app, query.clone());
             if let Screen::Actions(ref mut action_state) = app.screen
                 && let Some(state) = action_state.results.as_mut()
             {
@@ -389,6 +434,7 @@ pub fn dispatch_command(
             filters,
             column,
         } => {
+            let types = table_column_types(app, &catalog, &schema, &table);
             let query = queries::distinct_partition_values(
                 &catalog,
                 &schema,
@@ -396,6 +442,7 @@ pub fn dispatch_command(
                 &filters,
                 &column,
                 DRILLDOWN_LEVEL_LIMIT,
+                &types,
             );
             let log_id = app.add_query_log(query.clone());
 
@@ -440,7 +487,7 @@ pub fn dispatch_command(
                 let filts1 = filters.clone();
                 let col1 = column.clone();
                 tokio::spawn(async move {
-                    let res = client1.execute(&query).await;
+                    let res = client1.execute_fresh(&query).await;
                     let _ = tx1.send(AsyncResult::FetchPartitionLevel {
                         log_id,
                         catalog: cat1,
@@ -454,7 +501,8 @@ pub fn dispatch_command(
 
                 // Task 2: Fetch count for current level in parallel
                 if need_count {
-                    let count_query = queries::filtered_count(&catalog, &schema, &table, &filters);
+                    let count_query =
+                        queries::filtered_count(&catalog, &schema, &table, &filters, &types);
                     let count_log_id = app.add_query_log(count_query.clone());
                     let tx2 = tx.clone();
                     let client2 = client;
@@ -463,7 +511,7 @@ pub fn dispatch_command(
                     let tbl2 = table;
                     let filts2 = filters;
                     tokio::spawn(async move {
-                        let res = client2.execute(&count_query).await;
+                        let res = client2.execute_fresh(&count_query).await;
                         let _ = tx2.send(AsyncResult::FetchPartitionCount {
                             log_id: count_log_id,
                             catalog: cat2,
@@ -482,12 +530,18 @@ pub fn dispatch_command(
             table,
             filters,
         } => {
-            let count_query = queries::filtered_count(&catalog, &schema, &table, &filters);
+            let count_query = queries::filtered_count(
+                &catalog,
+                &schema,
+                &table,
+                &filters,
+                &table_column_types(app, &catalog, &schema, &table),
+            );
             let count_log_id = app.add_query_log(count_query.clone());
             if let Some(client) = app.trino_client.clone() {
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    let res = client.execute(&count_query).await;
+                    let res = client.execute_fresh(&count_query).await;
                     let _ = tx.send(AsyncResult::FetchPartitionCount {
                         log_id: count_log_id,
                         catalog,
@@ -499,6 +553,16 @@ pub fn dispatch_command(
                 });
             }
         }
+    }
+}
+
+/// Known column types of the table on screen (empty for any other table).
+fn table_column_types(app: &App, catalog: &str, schema: &str, table: &str) -> queries::ColumnTypes {
+    match &app.screen {
+        Screen::Actions(a) if a.catalog == catalog && a.schema == schema && a.table == table => {
+            a.column_types.clone()
+        }
+        _ => queries::ColumnTypes::default(),
     }
 }
 
@@ -545,6 +609,27 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                 }
             }
         }
+        AsyncResult::FetchCatalogs { log_id, result } => {
+            app.loading = false;
+            match result {
+                Ok(catalogs) => {
+                    app.complete_query_log_success(log_id, 15, catalogs.len());
+                    app.catalogs = catalogs.iter().map(|c| c.trim().to_string()).collect();
+                    if let Screen::Catalog(s) = &mut app.screen {
+                        s.items = app.catalogs.clone();
+                        s.selected = s.selected.min(s.items.len().saturating_sub(1));
+                    }
+                }
+                Err(e) => {
+                    error!(error = %e, "Fetch catalogs failed");
+                    app.complete_query_log_error(log_id, e.to_string());
+                    app.set_notice(
+                        crate::app::NoticeKind::Error,
+                        format!("Could not refresh catalogs: {e}"),
+                    );
+                }
+            }
+        }
         AsyncResult::FetchSchemas {
             log_id,
             catalog,
@@ -557,9 +642,15 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                         schemas.iter().map(|s| s.trim().to_string()).collect();
                     app.complete_query_log_success(log_id, 25, trimmed.len());
                     app.schemas.insert(catalog.clone(), trimmed.clone());
+                    if let Some(next) = super::restore::on_list_loaded(app, &catalog, None) {
+                        return next;
+                    }
                     app.clear_mouse_selection();
-                    let saved_selected =
-                        app.last_selected_schema.get(&catalog).copied().unwrap_or(0);
+                    // Reloading the list already on screen keeps the cursor.
+                    let saved_selected = match &app.screen {
+                        Screen::Schema(s) if s.catalog == catalog => s.selected,
+                        _ => app.last_selected_schema.get(&catalog).copied().unwrap_or(0),
+                    };
                     let selected = saved_selected.min(trimmed.len().saturating_sub(1));
                     app.screen = Screen::Schema(SchemaState {
                         catalog: catalog.clone(),
@@ -570,6 +661,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                 Err(e) => {
                     error!(error = %e, "Fetch schemas failed");
                     app.complete_query_log_error(log_id, e.to_string());
+                    super::restore::on_list_failed(app, &catalog, None, &e.to_string());
                 }
             }
         }
@@ -587,12 +679,21 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                     app.complete_query_log_success(log_id, 35, trimmed.len());
                     app.tables
                         .insert((catalog.clone(), schema.clone()), trimmed.clone());
+                    if let Some(next) = super::restore::on_list_loaded(app, &catalog, Some(&schema))
+                    {
+                        return next;
+                    }
                     app.clear_mouse_selection();
-                    let saved_selected = app
-                        .last_selected_table
-                        .get(&(catalog.clone(), schema.clone()))
-                        .copied()
-                        .unwrap_or(0);
+                    let saved_selected = match &app.screen {
+                        Screen::Table(s) if s.catalog == catalog && s.schema == schema => {
+                            s.selected
+                        }
+                        _ => app
+                            .last_selected_table
+                            .get(&(catalog.clone(), schema.clone()))
+                            .copied()
+                            .unwrap_or(0),
+                    };
                     let selected = saved_selected.min(trimmed.len().saturating_sub(1));
                     app.screen = Screen::Table(TableState {
                         catalog: catalog.clone(),
@@ -604,6 +705,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                 Err(e) => {
                     error!(error = %e, "Fetch tables failed");
                     app.complete_query_log_error(log_id, e.to_string());
+                    super::restore::on_list_failed(app, &catalog, Some(&schema), &e.to_string());
                 }
             }
         }
@@ -628,13 +730,28 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                 && action_state.schema == schema
                 && action_state.table == table
             {
+                for (col, ty) in
+                    crate::tui::screens::partition_tree::parse_ddl_column_types(&ddl_text)
+                {
+                    action_state.column_types.insert(&col, &ty);
+                }
                 action_state.metadata = Some(TableRecon {
                     partitioned_by: partitioned_by.clone(),
                     location,
                     ddl_text,
                 });
                 action_state.ddl_loading = false;
-
+            }
+            if let Some(next) =
+                super::restore::on_table_ddl(app, &catalog, &schema, &table, &partitioned_by)
+            {
+                return next;
+            }
+            if let Screen::Actions(ref mut action_state) = app.screen
+                && action_state.catalog == catalog
+                && action_state.schema == schema
+                && action_state.table == table
+            {
                 let should_run_table_view = action_state.pending_action == Some(0)
                     || (action_state.selected == 0
                         && action_state.results.is_none()
@@ -648,6 +765,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                         action_state.query_buffer = query.clone();
                         action_state.query_cursor = query_len;
                         return Some(Command::ExecuteQuery {
+                            fresh: false,
                             query,
                             is_paginated: true,
                             catalog,
@@ -664,6 +782,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                             &[],
                             &first_col,
                             DRILLDOWN_LEVEL_LIMIT,
+                            &action_state.column_types,
                         );
                         let query_len = query.len();
                         action_state.query_buffer = query;
@@ -681,6 +800,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                             counts_cache: std::collections::HashMap::new(),
                             current_count_loading: true,
                             path_cursors: std::collections::HashMap::new(),
+                            focus_value: None,
                         });
                         return Some(Command::FetchPartitionLevel {
                             catalog,
@@ -729,6 +849,11 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                 && action_state.schema == schema
                 && action_state.table == table
             {
+                for col in &columns {
+                    action_state
+                        .column_types
+                        .insert_if_absent(&col.name, &col.data_type);
+                }
                 app.partition_tree_lines = partition_lines;
                 app.vertical_schema_cols = columns;
                 action_state.metadata_loading = false;
@@ -747,11 +872,23 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
             result,
         } => {
             app.loading = false;
+            let target = (catalog.clone(), schema.clone(), table.clone());
+            let mut applied_to_table = false;
+            let mut query_error: Option<String> = None;
             match result {
                 Ok(results) => {
                     app.complete_query_log_success(log_id, results.duration_ms, results.data.len());
                     let cols: Vec<String> =
                         results.columns.iter().map(|c| c.name.clone()).collect();
+                    if let Screen::Actions(ref mut a) = app.screen
+                        && a.catalog == catalog
+                        && a.schema == schema
+                        && a.table == table
+                    {
+                        for c in &results.columns {
+                            a.column_types.insert_if_absent(&c.name, &c.type_name);
+                        }
+                    }
                     let rows = results.data;
                     let has_more = if is_paginated {
                         rows.len() >= 100
@@ -844,6 +981,14 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                         ..Default::default()
                     };
 
+                    // Keep the grid's sort across re-runs of the same view
+                    // (filters, hidden columns, custom SQL), like its filters.
+                    if let Some((col, dir)) = existing_results.and_then(|r| r.sort.clone())
+                        && res_state.columns.contains(&col)
+                    {
+                        res_state.sort = Some((col, dir));
+                    }
+
                     if let Some(col_name) = res_state.columns.get(res_state.selected_col)
                         && !res_state.is_column_visible(col_name)
                     {
@@ -859,62 +1004,14 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                         if a.catalog == catalog && a.schema == schema && a.table == table {
                             let mut res = res_state;
                             res.auto_flatten(&app.vertical_schema_cols);
-                            if let Some(view) = a.pending_view_restore.take() {
-                                for (col, filter) in view.column_filters {
-                                    res.column_filters.insert(col, filter.to_column_filter());
-                                }
-                                for col in view.hidden_columns {
-                                    res.hidden_columns.insert(col);
-                                }
-                                if let Some((col, dir)) = view.sort {
-                                    res.sort = Some((col.clone(), dir.into()));
-                                    res.apply_sort(&app.vertical_schema_cols);
-                                    if let Some(pos) = res.columns.iter().position(|c| c == &col) {
-                                        res.selected_col = pos;
-                                    }
-                                }
-                                if let Some(col_name) = res.columns.get(res.selected_col)
-                                    && !res.is_column_visible(col_name)
-                                {
-                                    res.selected_col = res.first_visible_col();
-                                }
-                                if !res.column_filters.is_empty() {
-                                    if res.unfiltered_rows.is_none() {
-                                        res.unfiltered_rows = Some(res.rows.clone());
-                                    }
-                                    if let Some(ref unfilt) = res.unfiltered_rows {
-                                        res.rows = unfilt
-                                            .iter()
-                                            .filter(|row| {
-                                                for (filter_col, filter) in &res.column_filters {
-                                                    if let Some(idx) = res
-                                                        .columns
-                                                        .iter()
-                                                        .position(|c| c == filter_col)
-                                                    {
-                                                        let val = row
-                                                            .get(idx)
-                                                            .map(|s| s.as_str())
-                                                            .unwrap_or("");
-                                                        if !filter.matches(val) {
-                                                            return false;
-                                                        }
-                                                    }
-                                                }
-                                                true
-                                            })
-                                            .cloned()
-                                            .collect();
-                                    }
-                                }
-                                app.copied_toast = Some((
-                                    format!("Restored view: {}", view.name),
-                                    std::time::Instant::now(),
-                                ));
+                            if res.sort.is_some() {
+                                res.unsorted_rows = Some(res.rows.clone());
+                                res.apply_sort(&app.vertical_schema_cols);
                             }
                             a.query_buffer = res.query_buffer.clone();
                             a.query_cursor = res.query_cursor;
                             a.results = Some(res);
+                            applied_to_table = true;
                         }
                     } else {
                         let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
@@ -938,6 +1035,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                     error!(error = %e, "Execute query failed");
                     let err = e.to_string();
                     app.complete_query_log_error(log_id, err.clone());
+                    query_error = Some(err.clone());
                     let res_state = ResultsState {
                         query_buffer,
                         query_cursor,
@@ -974,6 +1072,7 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                             a.query_buffer = res_state.query_buffer.clone();
                             a.query_cursor = res_state.query_cursor;
                             a.results = Some(res_state);
+                            applied_to_table = true;
                         }
                     } else {
                         let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
@@ -991,6 +1090,15 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                         });
                     }
                 }
+            }
+            if applied_to_table {
+                return super::restore::on_query_result(
+                    app,
+                    &target.0,
+                    &target.1,
+                    &target.2,
+                    query_error.as_deref(),
+                );
             }
         }
         AsyncResult::FetchNextPage {
@@ -1077,6 +1185,13 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
             Ok(results) => {
                 app.complete_query_log_success(log_id, results.duration_ms, results.data.len());
                 let truncated = results.data.len() >= DRILLDOWN_LEVEL_LIMIT;
+                // The type Trino reports for the listed expression is the
+                // most reliable one (it covers transforms like `day(ts)`).
+                let level_type = results
+                    .columns
+                    .first()
+                    .map(|c| c.type_name.clone())
+                    .unwrap_or_default();
                 let values: Vec<String> = results
                     .data
                     .into_iter()
@@ -1099,13 +1214,24 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                     && drilldown.path == filters
                     && drilldown.next_column() == Some(column.as_str())
                 {
+                    // `levels_cache[d]` holds the values for `path[..d]`. A
+                    // restored view starts deep in the hierarchy with no
+                    // ancestor levels loaded, so pad instead of pushing.
+                    action_state.column_types.insert(&column, &level_type);
+                    let drilldown = action_state.drilldown.as_mut().unwrap();
                     let depth = drilldown.depth();
-                    if depth < drilldown.levels_cache.len() {
-                        drilldown.levels_cache[depth] = values;
-                    } else {
-                        drilldown.levels_cache.push(values);
+                    if drilldown.levels_cache.len() <= depth {
+                        drilldown.levels_cache.resize(depth + 1, Vec::new());
                     }
-                    drilldown.selected = 0;
+                    let remembered = drilldown.path_cursors.get(&drilldown.path).copied();
+                    drilldown.selected = drilldown
+                        .focus_value
+                        .take()
+                        .and_then(|v| values.iter().position(|x| *x == v))
+                        .or(remembered)
+                        .unwrap_or(0)
+                        .min(values.len().saturating_sub(1));
+                    drilldown.levels_cache[depth] = values;
                     drilldown.loading = false;
                     drilldown.truncated = truncated;
                     drilldown.error = None;
@@ -1288,6 +1414,7 @@ mod tests {
         dispatch_command(
             &mut app,
             Command::ExecuteQuery {
+                fresh: false,
                 query: programmatic_query.clone(),
                 is_paginated: false,
                 catalog: "iceberg".to_string(),
@@ -1357,6 +1484,7 @@ mod tests {
         let count_results = crate::trino::types::QueryResults {
             columns: vec![crate::trino::types::Column {
                 name: "total_records".to_string(),
+                type_name: String::new(),
             }],
             data: vec![vec!["45120".to_string()]],
             duration_ms: 35,
@@ -1394,6 +1522,7 @@ mod tests {
         let table_count_results = crate::trino::types::QueryResults {
             columns: vec![crate::trino::types::Column {
                 name: "total_records".to_string(),
+                type_name: String::new(),
             }],
             data: vec![vec!["1234567".to_string()]],
             duration_ms: 50,
@@ -1505,9 +1634,11 @@ mod tests {
                     columns: vec![
                         crate::trino::types::Column {
                             name: "id".to_string(),
+                            type_name: String::new(),
                         },
                         crate::trino::types::Column {
                             name: "name".to_string(),
+                            type_name: String::new(),
                         },
                     ],
                     data: next_100_rows,
@@ -1567,9 +1698,11 @@ mod tests {
                     columns: vec![
                         crate::trino::types::Column {
                             name: "id".to_string(),
+                            type_name: String::new(),
                         },
                         crate::trino::types::Column {
                             name: "name".to_string(),
+                            type_name: String::new(),
                         },
                     ],
                     data: last_35_rows,
@@ -1711,15 +1844,19 @@ mod tests {
                     columns: vec![
                         crate::trino::types::Column {
                             name: "_hoodie_commit_time".to_string(),
+                            type_name: String::new(),
                         },
                         crate::trino::types::Column {
                             name: "_hoodie_record_key".to_string(),
+                            type_name: String::new(),
                         },
                         crate::trino::types::Column {
                             name: "user_id".to_string(),
+                            type_name: String::new(),
                         },
                         crate::trino::types::Column {
                             name: "username".to_string(),
+                            type_name: String::new(),
                         },
                     ],
                     data: vec![vec![
@@ -1766,6 +1903,7 @@ mod tests {
                 counts_cache: std::collections::HashMap::new(),
                 current_count_loading: true,
                 path_cursors: std::collections::HashMap::new(),
+                focus_value: None,
             }),
             ..Default::default()
         });
@@ -1782,6 +1920,7 @@ mod tests {
                 result: Ok(crate::trino::types::QueryResults {
                     columns: vec![crate::trino::types::Column {
                         name: "dt".to_string(),
+                        type_name: String::new(),
                     }],
                     data: vec![
                         vec!["2026-10-14".to_string()],

@@ -28,6 +28,81 @@ use crate::tui::theme;
 /// from the live DDL response for that specific table, never hardcoded by
 /// table/schema name. Returns an empty `Vec` for `partition_cols` when the
 /// table is unpartitioned (or the clause is absent).
+/// Column names and types from a `SHOW CREATE TABLE` statement, e.g.
+/// `account_id varchar COMMENT ''` → `("account_id", "varchar")`. Handles
+/// quoted names and nested types such as `map(varchar, bigint)`.
+pub fn parse_ddl_column_types(ddl: &str) -> Vec<(String, String)> {
+    // The column list is the first top-level parenthesised group.
+    let mut in_quotes = false;
+    let mut start = None;
+    for (i, c) in ddl.char_indices() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            '(' if !in_quotes => {
+                start = Some(i + 1);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let Some(start) = start else {
+        return Vec::new();
+    };
+
+    let mut defs = Vec::new();
+    let (mut depth, mut in_dq, mut in_sq) = (0usize, false, false);
+    let mut current = String::new();
+    for c in ddl[start..].chars() {
+        match c {
+            '"' if !in_sq => in_dq = !in_dq,
+            '\'' if !in_dq => in_sq = !in_sq,
+            '(' if !in_dq && !in_sq => depth += 1,
+            ')' if !in_dq && !in_sq => {
+                if depth == 0 {
+                    defs.push(std::mem::take(&mut current));
+                    break;
+                }
+                depth -= 1;
+            }
+            ',' if depth == 0 && !in_dq && !in_sq => {
+                defs.push(std::mem::take(&mut current));
+                continue;
+            }
+            _ => {}
+        }
+        current.push(c);
+    }
+
+    defs.iter()
+        .filter_map(|def| {
+            let def = def.trim();
+            let (name, rest) = if let Some(quoted) = def.strip_prefix('"') {
+                let end = quoted.find('"')?;
+                (quoted[..end].to_string(), &quoted[end + 1..])
+            } else {
+                let end = def.find(char::is_whitespace)?;
+                (def[..end].to_string(), &def[end..])
+            };
+            // The type runs until COMMENT / NOT NULL / WITH at depth 0.
+            let mut depth = 0usize;
+            let mut ty = String::new();
+            for word in rest.split_whitespace() {
+                let upper = word.to_ascii_uppercase();
+                if depth == 0 && matches!(upper.as_str(), "COMMENT" | "NOT" | "WITH") {
+                    break;
+                }
+                depth += word.matches('(').count();
+                depth = depth.saturating_sub(word.matches(')').count());
+                if !ty.is_empty() {
+                    ty.push(' ');
+                }
+                ty.push_str(word);
+            }
+            (!name.is_empty() && !ty.is_empty()).then_some((name, ty))
+        })
+        .collect()
+}
+
 pub fn parse_partitioned_by(ddl: &str) -> (Vec<String>, String) {
     let mut location = "s3://warehouse/table_data/".to_string();
     let mut partition_cols: Vec<String> = Vec::new();
@@ -142,6 +217,23 @@ fn split_tree_line(line: &str) -> (String, String) {
     (branch_part, content_part)
 }
 
+/// Drops the first `n` characters of `branch + content`, keeping which part
+/// each remaining character belongs to (so the colors survive scrolling).
+fn scroll_parts(branch: String, content: String, n: usize) -> (String, String) {
+    if n == 0 {
+        return (branch, content);
+    }
+    let branch_len = branch.chars().count();
+    if n >= branch_len {
+        (
+            String::new(),
+            content.chars().skip(n - branch_len).collect(),
+        )
+    } else {
+        (branch.chars().skip(n).collect(), content)
+    }
+}
+
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -168,6 +260,16 @@ pub fn render(
 
     let tree_lines = raw_partitions;
 
+    // Lines wider than the pane (long storage locations) scroll sideways.
+    let widest = tree_lines
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0);
+    let max_h = widest.saturating_sub((inner.width as usize).saturating_sub(1));
+    app.partition_max_h.set(max_h);
+    let hscroll = app.partition_scroll_h.min(max_h);
+
     let items: Vec<ListItem> = tree_lines
         .iter()
         .skip(scroll)
@@ -180,9 +282,10 @@ pub fn render(
                 is_active && app.is_area_mouse_selected(inner.x, inner.width, line_y);
 
             let (branch_part, content_part) = split_tree_line(line_str);
+            let (branch_part, content_part) = scroll_parts(branch_part, content_part, hscroll);
 
             let content_style = if is_mouse_sel {
-                theme::selection_style()
+                theme::text_selection_style()
             } else if content_part.contains("s3://")
                 || content_part.contains("hdfs://")
                 || content_part.starts_with('/')
@@ -209,21 +312,107 @@ pub fn render(
     let list = List::new(items);
     frame.render_stateful_widget(list, inner, &mut state);
 
-    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+    use ratatui::widgets::{ScrollbarOrientation, ScrollbarState};
     let mut scroll_state = ScrollbarState::new(tree_lines.len().saturating_sub(1)).position(scroll);
     frame.render_stateful_widget(
-        Scrollbar::default()
+        crate::tui::theme::scrollbar()
             .orientation(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("▲"))
             .end_symbol(Some("▼")),
         inner,
         &mut scroll_state,
     );
+    if max_h > 0 {
+        let mut h_state = ScrollbarState::new(max_h).position(hscroll);
+        frame.render_stateful_widget(
+            crate::tui::theme::scrollbar()
+                .orientation(ScrollbarOrientation::HorizontalBottom)
+                .thumb_symbol("▄")
+                .begin_symbol(Some("◄"))
+                .end_symbol(Some("►")),
+            inner,
+            &mut h_state,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn draw(app: &crate::app::App, lines: &[String], w: u16) -> Vec<String> {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut term = Terminal::new(TestBackend::new(w, 8)).unwrap();
+        term.draw(|f| render(f, Rect::new(0, 0, w, 8), lines, "t", 0, true, app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..8)
+            .map(|y| (0..w).map(|x| buf.cell((x, y)).unwrap().symbol()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn wide_lines_scroll_sideways_and_keep_their_colors() {
+        let location = format!(" s3://bucket/{}/END", "very-long-path/".repeat(8));
+        let lines = vec![
+            location.clone(),
+            " ├── Level 1: date=<YYYY>".to_string(),
+            " └── .hoodie/".to_string(),
+        ];
+        let mut app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        let screen = draw(&app, &lines, 40).join("\n");
+        assert!(screen.contains("s3://bucket"), "{screen}");
+        assert!(!screen.contains("END"), "the tail is off-screen");
+        let max = app.partition_max_h.get();
+        assert!(
+            max > 0 && screen.contains('►'),
+            "horizontal scrollbar: {screen}"
+        );
+
+        app.partition_scroll_h = max;
+        let screen = draw(&app, &lines, 40).join("\n");
+        assert!(
+            screen.contains("END") && !screen.contains("s3://bucket"),
+            "{screen}"
+        );
+
+        // past the end clamps; the tree branches scroll away with the text
+        app.partition_scroll_h = 10_000;
+        assert!(draw(&app, &lines, 40).join("\n").contains("END"));
+        assert_eq!(
+            scroll_parts(" ├── ".to_string(), "Level".to_string(), 2),
+            ("── ".to_string(), "Level".to_string())
+        );
+        assert_eq!(
+            scroll_parts(" ├── ".to_string(), "Level".to_string(), 7),
+            (String::new(), "vel".to_string())
+        );
+    }
+
+    #[test]
+    fn narrow_content_has_no_sideways_scroll() {
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        let lines = vec![" s3://b/t/".to_string()];
+        let screen = draw(&app, &lines, 40).join("\n");
+        assert_eq!(app.partition_max_h.get(), 0);
+        assert!(!screen.contains('►'));
+    }
+
+    #[test]
+    fn ddl_column_types_are_parsed() {
+        // Abbreviated from the table in the bug report.
+        let ddl = "CREATE TABLE datalake.\"customers-2_tenant (x)\".events (\n   _hoodie_commit_time varchar COMMENT '',\n   all_event_timestamps array(bigint) COMMENT '',\n   event_evaluation_info map(varchar, bigint) COMMENT 'a, b (c)',\n   \"odd name\" decimal(10, 2) NOT NULL,\n   timestamp bigint COMMENT '',\n   account_id varchar COMMENT ''\n)\nWITH (\n   partitioned_by = ARRAY['date','service','account_id']\n)";
+        let cols = parse_ddl_column_types(ddl);
+        let get = |n: &str| cols.iter().find(|(c, _)| c == n).map(|(_, t)| t.as_str());
+        assert_eq!(get("_hoodie_commit_time"), Some("varchar"));
+        assert_eq!(get("all_event_timestamps"), Some("array(bigint)"));
+        assert_eq!(get("event_evaluation_info"), Some("map(varchar, bigint)"));
+        assert_eq!(get("odd name"), Some("decimal(10, 2)"));
+        assert_eq!(get("timestamp"), Some("bigint"));
+        assert_eq!(get("account_id"), Some("varchar"));
+        assert_eq!(cols.len(), 6);
+        assert!(parse_ddl_column_types("garbage").is_empty());
+    }
 
     #[test]
     fn parse_partitioned_by_extracts_ordered_columns_and_location() {

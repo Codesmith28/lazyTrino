@@ -104,6 +104,7 @@ pub(super) fn handle_search_mode(app: &mut App, key: KeyEvent) -> Option<Command
     match key.code {
         KeyCode::Char(c) if !c.is_ascii_control() => {
             app.search_query.push(c);
+            app.bind_search_to_pane();
             app.help_scroll = 0;
             super::navigation::reset_list_selected_for_search(app);
         }
@@ -208,10 +209,13 @@ fn next_word_pos(s: &str, cursor: usize) -> usize {
     i
 }
 
+pub(crate) fn try_copy_to_clipboard(text: &str) -> Result<(), String> {
+    let mut board = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    board.set_text(text).map_err(|e| e.to_string())
+}
+
 pub(crate) fn copy_to_clipboard(text: &str) {
-    if let Ok(mut board) = arboard::Clipboard::new() {
-        let _ = board.set_text(text);
-    }
+    let _ = try_copy_to_clipboard(text);
 }
 
 pub(super) fn paste_from_clipboard() -> Option<String> {
@@ -352,6 +356,7 @@ fn set_query_cursor(state: &mut ResultsState, new_cursor: usize, selecting: bool
 }
 
 fn insert_query_text(state: &mut ResultsState, text: &str) {
+    super::query_vim::begin_insert_edit(state);
     state.delete_selection();
     state.query_buffer.insert_str(state.query_cursor, text);
     state.query_cursor += text.len();
@@ -363,10 +368,40 @@ fn query_selection_text(state: &ResultsState) -> Option<String> {
     Some(state.query_buffer[start..end].to_string())
 }
 
+/// Opens the query panel in a fresh insert session (a click on the panel while
+/// it is already open keeps the current vim mode).
+pub(super) fn begin_query_input(app: &mut App) {
+    if app.mode != Mode::QueryInput
+        && let Some(state) = active_query_state_mut(app)
+    {
+        state.vim.reset();
+    }
+    app.mode = Mode::QueryInput;
+}
+
+/// Removes `from..to` (byte offsets) from the query and puts the cursor at `from`.
+fn delete_query_range(state: &mut ResultsState, from: usize, to: usize) {
+    let (from, to) = (from.min(to), from.max(to).min(state.query_buffer.len()));
+    if from < to {
+        super::query_vim::begin_insert_edit(state);
+        state.query_buffer.drain(from..to);
+        state.query_cursor = from;
+        state.clear_selection();
+        state.invalid_query_error = None;
+    }
+}
+
 pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Command> {
     let mut copied_text = None;
     let mut exit_mode = false;
     let mut command = None;
+    let mut ran_custom_sql = None;
+    let vim_ctx = {
+        let (w, h) = crossterm::terminal::size().unwrap_or((120, 40));
+        super::query_vim::Ctx {
+            inner_w: query_bar_layout(app, w, h).map(|l| l.4).unwrap_or(80),
+        }
+    };
 
     {
         let Some(state) = active_query_state_mut(app) else {
@@ -376,7 +411,14 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
 
         let code = key.code;
         let selecting = key.modifiers.contains(KeyModifiers::SHIFT);
-        let word_jump = key.modifiers.contains(KeyModifiers::ALT);
+        // Option/Alt+arrows and Ctrl+arrows hop words; Cmd+arrows hop to the
+        // line (query) ends. Terminals that send Option+arrow as ESC b / ESC f
+        // arrive as Alt+b / Alt+f, handled below.
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let word_jump = key
+            .modifiers
+            .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL);
+        let line_jump = key.modifiers.contains(KeyModifiers::SUPER);
         let command_modifier = key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER);
@@ -397,6 +439,13 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
                     }
                     return None;
                 }
+                KeyCode::Char('r') | KeyCode::Char('R')
+                    if state.vim.mode != VimMode::Insert
+                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    super::query_vim::redo(state);
+                    return None;
+                }
                 _ => {}
             }
         }
@@ -414,8 +463,12 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
                 Ok(full_sql) => {
                     state.invalid_query_error = None;
                     state.clear_selection();
+                    // Column filters / hidden columns now build on this SQL.
+                    state.base_query = None;
+                    ran_custom_sql = Some(full_sql.clone());
                     exit_mode = true;
                     command = Some(Command::ExecuteQuery {
+                        fresh: false,
                         query: full_sql,
                         is_paginated,
                         catalog: cat,
@@ -428,14 +481,18 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
                     state.invalid_query_error = Some(err_msg);
                 }
             }
+        } else if state.vim.mode != VimMode::Insert {
+            let outcome =
+                super::query_vim::handle_key(state, key, &vim_ctx, &mut || paste_from_clipboard());
+            exit_mode = outcome.exit;
+            copied_text = outcome.yanked;
         } else {
             match code {
-                KeyCode::Esc => {
-                    state.clear_selection();
-                    exit_mode = true;
-                }
+                KeyCode::Esc => super::query_vim::enter_normal(state),
                 KeyCode::Left => {
-                    let new_cursor = if word_jump {
+                    let new_cursor = if line_jump {
+                        0
+                    } else if word_jump {
                         prev_word_pos(&state.query_buffer, state.query_cursor)
                     } else {
                         prev_char_boundary(&state.query_buffer, state.query_cursor)
@@ -443,16 +500,61 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
                     set_query_cursor(state, new_cursor, selecting);
                 }
                 KeyCode::Right => {
-                    let new_cursor = if word_jump {
+                    let new_cursor = if line_jump {
+                        state.query_buffer.len()
+                    } else if word_jump {
                         next_word_pos(&state.query_buffer, state.query_cursor)
                     } else {
                         next_char_boundary(&state.query_buffer, state.query_cursor)
                     };
                     set_query_cursor(state, new_cursor, selecting);
                 }
+                KeyCode::Up | KeyCode::Down => {
+                    let new_cursor = if line_jump {
+                        if code == KeyCode::Up {
+                            0
+                        } else {
+                            state.query_buffer.len()
+                        }
+                    } else {
+                        super::query_vim::move_rows(
+                            &state.query_buffer,
+                            state.query_cursor,
+                            if code == KeyCode::Up { -1 } else { 1 },
+                            vim_ctx.inner_w.max(8),
+                        )
+                    };
+                    set_query_cursor(state, new_cursor, selecting);
+                }
                 KeyCode::Home => set_query_cursor(state, 0, selecting),
                 KeyCode::End => set_query_cursor(state, state.query_buffer.len(), selecting),
+                // Option+arrow on terminals that send ESC b / ESC f
+                KeyCode::Char('b') | KeyCode::Char('B') if alt => {
+                    let to = prev_word_pos(&state.query_buffer, state.query_cursor);
+                    set_query_cursor(state, to, selecting);
+                }
+                KeyCode::Char('f') | KeyCode::Char('F') if alt => {
+                    let to = next_word_pos(&state.query_buffer, state.query_cursor);
+                    set_query_cursor(state, to, selecting);
+                }
+                KeyCode::Char('d') | KeyCode::Char('D') if alt => {
+                    let to = next_word_pos(&state.query_buffer, state.query_cursor);
+                    delete_query_range(state, state.query_cursor, to);
+                }
+                // Option+Backspace deletes a word, Cmd+Backspace to the start
+                KeyCode::Backspace if alt || line_jump => {
+                    if !state.delete_selection() {
+                        let from = if line_jump {
+                            0
+                        } else {
+                            prev_word_pos(&state.query_buffer, state.query_cursor)
+                        };
+                        delete_query_range(state, from, state.query_cursor);
+                    }
+                    state.invalid_query_error = None;
+                }
                 KeyCode::Backspace => {
+                    super::query_vim::begin_insert_edit(state);
                     if !state.delete_selection() && state.query_cursor > 0 {
                         let prev = prev_char_boundary(&state.query_buffer, state.query_cursor);
                         state.query_buffer.drain(prev..state.query_cursor);
@@ -461,6 +563,7 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
                     state.invalid_query_error = None;
                 }
                 KeyCode::Delete => {
+                    super::query_vim::begin_insert_edit(state);
                     if !state.delete_selection() && state.query_cursor < state.query_buffer.len() {
                         let next = next_char_boundary(&state.query_buffer, state.query_cursor);
                         state.query_buffer.drain(state.query_cursor..next);
@@ -488,9 +591,15 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
     {
         a.query_buffer = r.query_buffer.clone();
         a.query_cursor = r.query_cursor;
+        if ran_custom_sql.is_some() {
+            a.custom_sql = ran_custom_sql;
+        }
     }
 
     if exit_mode {
+        if let Some(state) = active_query_state_mut(app) {
+            state.vim.reset();
+        }
         app.mode = Mode::Normal;
     }
 
@@ -702,6 +811,131 @@ mod tests {
         }
     }
 
+    fn panel(query: &str) -> App {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.screen = Screen::Actions(ActionState {
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            selected: 0,
+            query_buffer: query.to_string(),
+            query_cursor: query.len(),
+            ..Default::default()
+        });
+        begin_query_input(&mut app);
+        app
+    }
+
+    fn send(app: &mut App, code: KeyCode, mods: KeyModifiers) {
+        handle_query_input_mode(app, KeyEvent::new(code, mods));
+    }
+
+    fn typed(app: &mut App, text: &str) {
+        for c in text.chars() {
+            send(app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+    }
+
+    fn query(app: &App) -> (String, usize) {
+        let Screen::Actions(s) = &app.screen else {
+            panic!()
+        };
+        let r = s.results.as_ref().unwrap();
+        (r.query_buffer.clone(), r.query_cursor)
+    }
+
+    #[test]
+    fn panel_opens_in_insert_and_esc_goes_normal_then_leaves() {
+        let mut app = panel("SELECT 1");
+        assert_eq!(app.query_vim_mode(), VimMode::Insert);
+        typed(&mut app, "0");
+        assert_eq!(query(&app).0, "SELECT 10");
+
+        send(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.query_vim_mode(), VimMode::Normal);
+        assert_eq!(app.mode, Mode::QueryInput);
+        // vim keys edit, they do not type
+        typed(&mut app, "x");
+        assert_eq!(query(&app).0, "SELECT 1");
+
+        send(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.mode, Mode::Normal);
+        // a later open starts in insert again
+        begin_query_input(&mut app);
+        assert_eq!(app.query_vim_mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn insert_mode_alt_cmd_and_ctrl_navigation() {
+        let mut app = panel("SELECT * FROM orders");
+        let word = |app: &mut App, code, mods| {
+            send(app, code, mods);
+            query(app).1
+        };
+        // Option/Alt+arrows and the ESC b / ESC f form
+        assert_eq!(word(&mut app, KeyCode::Left, KeyModifiers::ALT), 14);
+        assert_eq!(word(&mut app, KeyCode::Char('b'), KeyModifiers::ALT), 9);
+        assert_eq!(word(&mut app, KeyCode::Char('f'), KeyModifiers::ALT), 14);
+        assert_eq!(word(&mut app, KeyCode::Right, KeyModifiers::ALT), 20);
+        assert_eq!(word(&mut app, KeyCode::Left, KeyModifiers::CONTROL), 14);
+        // Cmd+arrows go to the ends
+        assert_eq!(word(&mut app, KeyCode::Left, KeyModifiers::SUPER), 0);
+        assert_eq!(word(&mut app, KeyCode::Right, KeyModifiers::SUPER), 20);
+        assert_eq!(word(&mut app, KeyCode::Up, KeyModifiers::SUPER), 0);
+        assert_eq!(word(&mut app, KeyCode::Down, KeyModifiers::SUPER), 20);
+        // nothing was typed by those chords
+        assert_eq!(query(&app).0, "SELECT * FROM orders");
+    }
+
+    #[test]
+    fn insert_mode_word_and_line_deletion() {
+        let mut app = panel("SELECT * FROM orders");
+        send(&mut app, KeyCode::Backspace, KeyModifiers::ALT);
+        assert_eq!(query(&app).0, "SELECT * FROM ");
+        send(&mut app, KeyCode::Backspace, KeyModifiers::SUPER);
+        assert_eq!(query(&app), (String::new(), 0));
+        // and the whole edit session undoes from normal mode
+        send(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        typed(&mut app, "u");
+        assert_eq!(query(&app).0, "SELECT * FROM orders");
+    }
+
+    #[test]
+    fn normal_mode_navigation_matches_insert_mode_chords() {
+        let mut app = panel("SELECT * FROM orders");
+        send(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        send(&mut app, KeyCode::Left, KeyModifiers::SUPER);
+        assert_eq!(query(&app).1, 0);
+        send(&mut app, KeyCode::Right, KeyModifiers::ALT);
+        assert_eq!(query(&app).1, 7);
+        send(&mut app, KeyCode::Char('f'), KeyModifiers::ALT);
+        assert_eq!(query(&app).1, 9);
+        send(&mut app, KeyCode::Right, KeyModifiers::SUPER);
+        assert_eq!(query(&app).1, 19); // last character, not past it
+        assert_eq!(query(&app).0, "SELECT * FROM orders");
+    }
+
+    #[test]
+    fn yank_in_normal_mode_reports_text_and_ctrl_r_redoes() {
+        let mut app = panel("SELECT 1");
+        send(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        typed(&mut app, "0dw");
+        assert_eq!(query(&app).0, "1");
+        typed(&mut app, "u");
+        assert_eq!(query(&app).0, "SELECT 1");
+        send(&mut app, KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(query(&app).0, "1");
+    }
+
+    #[test]
+    fn enter_runs_the_query_from_any_vim_mode() {
+        let mut app = panel("SELECT * FROM t");
+        send(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        let cmd = handle_query_input_mode(&mut app, KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(cmd, Some(Command::ExecuteQuery { .. })));
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
     #[test]
     fn test_edit_query_in_sample_view() {
         let sample_query = "SELECT * FROM \"iceberg\".\"sales\".\"orders\" LIMIT 20";
@@ -710,7 +944,7 @@ mod tests {
                 url: "http://localhost:8080".to_string(),
                 user: "test".to_string(),
                 password: "".to_string(),
-                query_cache_limit: 10,
+                query_cache_limit: crate::config::DEFAULT_QUERY_CACHE_LIMIT,
             },
             false,
         );

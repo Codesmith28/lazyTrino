@@ -22,7 +22,82 @@ use ratatui::{
 
 use crate::{app::ResultsState, tui::theme};
 
+/// Word-wraps `text` to `max_width` terminal cells. Widths are measured in
+/// display cells (so `é` is 1 and `界` is 2), and over-long words are split
+/// between characters — never inside one.
+/// Draws logical `(text, style)` lines wrapped to the pane, as a window of
+/// `row_line_offset` lines with a scrollbar and a `lines a–b of n` marker when
+/// there is more than fits. The same state `scroll_within_row` moves, so j/k,
+/// the page keys and the wheel scroll error / message panels too.
+fn render_scrollable_text(
+    frame: &mut Frame,
+    area: Rect,
+    inner: Rect,
+    state: &ResultsState,
+    logical: &[(String, ratatui::style::Style)],
+    is_active: bool,
+) {
+    // one column is left for the scrollbar
+    let width = (inner.width as usize).saturating_sub(1).max(1);
+    let mut rows: Vec<(String, ratatui::style::Style)> = Vec::new();
+    for (text, style) in logical {
+        if text.is_empty() {
+            rows.push((String::new(), *style));
+        }
+        for line in wrap_text(text, width) {
+            rows.push((line, *style));
+        }
+    }
+    let total = rows.len();
+    let height = (inner.height as usize).max(1);
+    // geometry for scroll_within_row / the clamping below
+    state.sel_row_height.set(total);
+    state.viewport_lines.set(height);
+    state.row_offset_for.set(state.selected_row);
+    let offset = state
+        .row_line_offset
+        .get()
+        .min(total.saturating_sub(height));
+    state.row_line_offset.set(offset);
+
+    let lines: Vec<Line> = rows
+        .into_iter()
+        .skip(offset)
+        .take(height)
+        .map(|(t, st)| Line::from(Span::styled(t, st)))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+
+    if total > height {
+        use ratatui::widgets::{ScrollbarOrientation, ScrollbarState};
+        let mut bar = ScrollbarState::new(total - height).position(offset);
+        frame.render_stateful_widget(
+            crate::tui::theme::scrollbar()
+                .orientation(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("▲"))
+                .end_symbol(Some("▼")),
+            inner,
+            &mut bar,
+        );
+        let label = format!(
+            " lines {}–{} of {} · j/k scroll ",
+            offset + 1,
+            (offset + height).min(total),
+            total
+        );
+        let w = (label.chars().count() as u16).min(area.width.saturating_sub(4));
+        if w > 0 && area.height > 2 {
+            frame.render_widget(
+                Paragraph::new(Span::styled(label, theme::border_style(is_active))),
+                Rect::new(area.right().saturating_sub(w + 2), area.bottom() - 1, w, 1),
+            );
+        }
+    }
+}
+
 pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
     if max_width == 0 {
         return vec![text.to_string()];
     }
@@ -38,26 +113,38 @@ pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
             continue;
         }
         let mut current_line = String::new();
+        let mut current_width = 0;
         for word in words {
-            if word.len() > max_width {
+            let word_width = word.width();
+            if word_width > max_width {
                 if !current_line.is_empty() {
-                    lines.push(current_line);
-                    current_line = String::new();
+                    lines.push(std::mem::take(&mut current_line));
+                    current_width = 0;
                 }
-                let mut start = 0;
-                while start < word.len() {
-                    let end = (start + max_width).min(word.len());
-                    lines.push(word[start..end].to_string());
-                    start = end;
+                let mut piece = String::new();
+                let mut piece_width = 0;
+                for ch in word.chars() {
+                    let ch_width = ch.width().unwrap_or(0);
+                    if piece_width + ch_width > max_width && !piece.is_empty() {
+                        lines.push(std::mem::take(&mut piece));
+                        piece_width = 0;
+                    }
+                    piece.push(ch);
+                    piece_width += ch_width;
+                }
+                if !piece.is_empty() {
+                    lines.push(piece);
                 }
             } else if current_line.is_empty() {
                 current_line.push_str(word);
-            } else if current_line.len() + 1 + word.len() <= max_width {
+                current_width = word_width;
+            } else if current_width + 1 + word_width <= max_width {
                 current_line.push(' ');
                 current_line.push_str(word);
+                current_width += 1 + word_width;
             } else {
-                lines.push(current_line);
-                current_line = word.to_string();
+                lines.push(std::mem::replace(&mut current_line, word.to_string()));
+                current_width = word_width;
             }
         }
         if !current_line.is_empty() {
@@ -724,41 +811,46 @@ pub fn render(
     }
 
     if let Some(invalid_msg) = &state.invalid_query_error {
-        let err_lines = vec![
-            Line::from(Span::styled(
-                "✖ Invalid query for this view",
+        let err_lines = [
+            (
+                "✖ Invalid query for this view".to_string(),
                 theme::error_bold_style(),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(invalid_msg.as_str(), theme::error_style())),
-            Line::from(""),
-            Line::from(Span::styled(
+            ),
+            (String::new(), theme::text_style()),
+            (invalid_msg.clone(), theme::error_style()),
+            (String::new(), theme::text_style()),
+            (
                 format!(
                     "Current View Scope: {}.{}.{}",
                     state.catalog, state.schema, state.table
                 ),
                 theme::info_style(),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Note: Queries in this view can only target data inside the current table.",
+            ),
+            (String::new(), theme::text_style()),
+            (
+                "Note: Queries in this view can only target data inside the current table."
+                    .to_string(),
                 theme::muted_style(),
-            )),
-            Line::from(Span::styled(
-                "Enter full SQL queries operating on this table (e.g. 'SELECT * FROM table WHERE col = val').",
+            ),
+            (
+                "Enter full SQL queries operating on this table (e.g. 'SELECT * FROM table WHERE col = val')."
+                    .to_string(),
                 theme::muted_style(),
-            )),
+            ),
         ];
-        let p = Paragraph::new(err_lines).wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(p, inner);
+        render_scrollable_text(frame, area, inner, state, &err_lines, is_active);
         return;
     }
 
     if let Some(err) = &state.error {
-        let err = Paragraph::new(err.as_str())
-            .style(theme::error_style())
-            .wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(err, inner);
+        render_scrollable_text(
+            frame,
+            area,
+            inner,
+            state,
+            &[(err.clone(), theme::error_style())],
+            is_active,
+        );
         return;
     }
 
@@ -772,14 +864,17 @@ pub fn render(
     }
 
     if state.columns.is_empty() && !state.rows.is_empty() && state.rows[0].len() == 1 {
-        let err = Paragraph::new(state.rows[0][0].as_str())
-            .style(theme::error_style())
-            .wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(err, inner);
+        render_scrollable_text(
+            frame,
+            area,
+            inner,
+            state,
+            &[(state.rows[0][0].clone(), theme::error_style())],
+            is_active,
+        );
         return;
     }
 
-    let cell_style = theme::text_style();
     let header_style = theme::warning_bold_style();
 
     let available_width = inner.width.saturating_sub(4) as usize;
@@ -842,6 +937,27 @@ pub fn render(
         &row_visual_heights,
         state.rows.len(),
     );
+    // A row taller than the viewport is read by scrolling inside it, so it
+    // must start at the top of the view.
+    let sel_row_height = row_visual_heights
+        .get(state.selected_row)
+        .map_or(0, |h| *h as usize);
+    let effective_scroll_v = if sel_row_height > viewport_lines {
+        state.selected_row
+    } else {
+        effective_scroll_v
+    };
+    if state.row_offset_for.get() != state.selected_row {
+        state.row_offset_for.set(state.selected_row);
+        state.row_line_offset.set(0);
+    }
+    let line_skip = state
+        .row_line_offset
+        .get()
+        .min(sel_row_height.saturating_sub(viewport_lines));
+    state.row_line_offset.set(line_skip);
+    state.sel_row_height.set(sel_row_height);
+    state.viewport_lines.set(viewport_lines);
     state.scroll_v.set(effective_scroll_v);
     state.last_selected_row.set(state.selected_row);
 
@@ -943,6 +1059,17 @@ pub fn render(
                 if wrapped_lines.is_empty() {
                     wrapped_lines.push(String::new());
                 }
+                if row_idx == state.selected_row && sel_row_height > viewport_lines {
+                    // The table widget drops a row that does not fit, so show
+                    // exactly the window of lines being scrolled through.
+                    let skip = line_skip.min(wrapped_lines.len().saturating_sub(1));
+                    wrapped_lines.drain(..skip);
+                }
+                if row_idx == effective_scroll_v {
+                    // The first row on screen always gets drawn, even when it
+                    // alone is taller than the view.
+                    wrapped_lines.truncate(viewport_lines);
+                }
                 let cell_h = wrapped_lines.len() as u16;
                 max_row_height = max_row_height.max(cell_h);
 
@@ -951,8 +1078,11 @@ pub fn render(
                 let is_cursor_cell =
                     row_idx == state.selected_row && *col_idx == state.selected_col;
                 let is_vim_sel = state.is_cell_selected(row_idx, *col_idx);
-                let is_highlighted = is_mouse_sel || is_vim_sel || is_cursor_cell;
-                let style = if is_highlighted {
+                let is_selected_text = is_mouse_sel || is_vim_sel;
+                let is_highlighted = is_selected_text || is_cursor_cell;
+                let style = if is_selected_text {
+                    theme::text_selection_style()
+                } else if is_cursor_cell {
                     theme::selection_style_for(is_active)
                 } else if is_summary {
                     if *col_idx == 0 {
@@ -963,7 +1093,7 @@ pub fn render(
                         theme::muted_style()
                     }
                 } else {
-                    cell_style
+                    theme::value_style(display_val)
                 };
 
                 let cell_content = if is_highlighted {
@@ -988,15 +1118,21 @@ pub fn render(
         .header(header)
         .column_spacing(2);
 
-    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+    use ratatui::widgets::{ScrollbarOrientation, ScrollbarState};
 
     frame.render_widget(table, inner);
 
     if !state.rows.is_empty() {
-        let mut v_scroll_state =
-            ScrollbarState::new(state.rows.len().saturating_sub(1)).position(effective_scroll_v);
+        // Inside a row taller than the viewport the bar tracks lines of that
+        // row, not rows.
+        let in_tall_row = sel_row_height > viewport_lines;
+        let mut v_scroll_state = if in_tall_row {
+            ScrollbarState::new(sel_row_height - viewport_lines).position(line_skip)
+        } else {
+            ScrollbarState::new(state.rows.len().saturating_sub(1)).position(effective_scroll_v)
+        };
         frame.render_stateful_widget(
-            Scrollbar::default()
+            crate::tui::theme::scrollbar()
                 .orientation(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("▲"))
                 .end_symbol(Some("▼")),
@@ -1005,12 +1141,31 @@ pub fn render(
         );
     }
 
+    if sel_row_height > viewport_lines && area.height > 2 {
+        // "lines 25–48 of 118" on the bottom border, right-aligned
+        let shown_end = (line_skip + viewport_lines).min(sel_row_height);
+        let label = format!(
+            " lines {}–{} of {} · j/k scroll ",
+            line_skip + 1,
+            shown_end,
+            sel_row_height
+        );
+        let w = (label.chars().count() as u16).min(area.width.saturating_sub(4));
+        if w > 0 {
+            let rect = Rect::new(area.right().saturating_sub(w + 2), area.bottom() - 1, w, 1);
+            frame.render_widget(
+                Paragraph::new(Span::styled(label, theme::border_style(is_active))),
+                rect,
+            );
+        }
+    }
+
     let all_vis_len = state.visible_columns().len();
     if all_vis_len > 1 {
         let mut h_scroll_state =
             ScrollbarState::new(all_vis_len.saturating_sub(1)).position(effective_scroll_h);
         frame.render_stateful_widget(
-            Scrollbar::default()
+            crate::tui::theme::scrollbar()
                 .orientation(ScrollbarOrientation::HorizontalBottom)
                 .thumb_symbol("▄")
                 .begin_symbol(Some("◄"))
@@ -2019,6 +2174,249 @@ mod tests {
             content.contains("iceberg › sales › orders"),
             "Title should show table breadcrumb: {content}"
         );
+    }
+
+    fn ddl_state(lines: usize) -> ResultsState {
+        let ddl = (0..lines)
+            .map(|i| format!("   column_{i:03} varchar"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        ResultsState {
+            columns: vec!["Create Table".to_string()],
+            rows: vec![vec![ddl]],
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn render_grid(state: &ResultsState, width: u16, height: u16) -> Vec<String> {
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                render(
+                    f,
+                    Rect::new(0, 0, width, height),
+                    state,
+                    String::new(),
+                    true,
+                    &app,
+                )
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buf.cell((x, y)).unwrap().symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_row_taller_than_the_view_can_be_scrolled_line_by_line() {
+        // The reported case: one huge DDL cell in a 14-row pane.
+        let state = ddl_state(100);
+        let screen = render_grid(&state, 60, 14);
+        let text = screen.join("\n");
+        assert!(text.contains("column_000"));
+        assert!(!text.contains("column_050"), "still at the top");
+        assert!(text.contains("lines 1–"), "{text}");
+        let viewport = state.viewport_lines.get();
+        assert!(state.sel_row_height.get() > viewport);
+
+        // scrolling moves the window; the last line becomes reachable
+        assert!(state.scroll_within_row(10));
+        let text = render_grid(&state, 60, 14).join("\n");
+        assert!(
+            !text.contains("column_000") && text.contains("column_010"),
+            "{text}"
+        );
+        assert!(state.scroll_within_row(10_000), "clamps to the end");
+        let text = render_grid(&state, 60, 14).join("\n");
+        assert!(text.contains("column_099"), "last line reachable: {text}");
+        assert!(
+            !state.scroll_within_row(1),
+            "at the bottom: the key moves on"
+        );
+
+        // and back to the top
+        assert!(state.scroll_within_row(-10_000));
+        assert!(!state.scroll_within_row(-1));
+        assert!(
+            render_grid(&state, 60, 14)
+                .join("\n")
+                .contains("column_000")
+        );
+    }
+
+    #[test]
+    fn a_long_error_message_can_be_scrolled_to_its_end() {
+        let message = (0..60)
+            .map(|i| format!("stack frame {i:02}: something failed here"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let state = ResultsState {
+            error: Some(message),
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            ..Default::default()
+        };
+        let top = render_grid(&state, 60, 12).join("\n");
+        assert!(top.contains("stack frame 00") && !top.contains("stack frame 59"));
+        assert!(top.contains("lines 1–"), "{top}");
+
+        assert!(state.scroll_within_row(10_000));
+        let end = render_grid(&state, 60, 12).join("\n");
+        assert!(end.contains("stack frame 59"), "last line reachable: {end}");
+        assert!(!end.contains("stack frame 00"));
+        assert!(!state.scroll_within_row(1), "at the end");
+    }
+
+    #[test]
+    fn the_invalid_query_note_and_one_row_error_results_scroll_too() {
+        let tall = "x".repeat(2_000);
+        let state = ResultsState {
+            invalid_query_error: Some(tall.clone()),
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            ..Default::default()
+        };
+        let screen = render_grid(&state, 50, 12).join("\n");
+        assert!(screen.contains("Invalid query"), "{screen}");
+        assert!(state.sel_row_height.get() > state.viewport_lines.get());
+        assert!(state.scroll_within_row(10_000));
+        assert!(
+            render_grid(&state, 50, 12)
+                .join("\n")
+                .contains("Current View Scope"),
+            "the scope note under a huge message is reachable"
+        );
+
+        let state = ResultsState {
+            rows: vec![vec![format!("Error: {tall}")]],
+            ..Default::default()
+        };
+        render_grid(&state, 50, 12);
+        assert!(state.scroll_within_row(5));
+    }
+
+    #[test]
+    fn short_messages_do_not_scroll() {
+        let state = ResultsState {
+            error: Some("boom".to_string()),
+            ..Default::default()
+        };
+        let screen = render_grid(&state, 50, 12).join("\n");
+        assert!(screen.contains("boom") && !screen.contains("lines 1–"));
+        assert!(!state.scroll_within_row(1));
+    }
+
+    #[test]
+    fn rows_that_fit_are_not_scrolled_internally() {
+        let state = ddl_state(3);
+        render_grid(&state, 60, 14);
+        assert!(!state.scroll_within_row(1));
+        assert!(!state.scroll_within_row(-1));
+        let screen = render_grid(&state, 60, 14).join("\n");
+        assert!(!screen.contains("lines 1–"));
+    }
+
+    #[test]
+    fn the_in_row_offset_resets_when_another_row_is_selected() {
+        let mut state = ddl_state(100);
+        state.rows.push(vec!["short".to_string()]);
+        render_grid(&state, 60, 14);
+        state.scroll_within_row(20);
+        render_grid(&state, 60, 14);
+        assert_eq!(state.row_line_offset.get(), 20);
+        state.selected_row = 1;
+        render_grid(&state, 60, 14);
+        assert_eq!(state.row_line_offset.get(), 0);
+        state.selected_row = 0;
+        render_grid(&state, 60, 14);
+        assert_eq!(state.row_line_offset.get(), 0, "back at the top of row 0");
+    }
+
+    #[test]
+    fn visual_mode_never_scrolls_inside_a_row() {
+        let mut state = ddl_state(100);
+        render_grid(&state, 60, 14);
+        state.enter_visual_line();
+        assert!(!state.scroll_within_row(1));
+    }
+
+    /// Regression: a long unbroken value whose multi-byte character straddles
+    /// the column width used to panic ("byte index … is not a char boundary").
+    #[test]
+    fn wrap_text_never_splits_inside_a_character() {
+        // 88 ASCII bytes, then a 3-byte char occupying bytes 88..91 — the
+        // exact shape of the reported crash at width 89.
+        let value = format!("{}［{}", "a".repeat(88), "b".repeat(20));
+        for width in [1, 2, 3, 10, 88, 89, 90, 200] {
+            let lines = wrap_text(&value, width);
+            assert_eq!(lines.concat(), value, "content lost at width {width}");
+            for line in &lines {
+                let w = unicode_width::UnicodeWidthStr::width(line.as_str());
+                // a single double-width char may exceed a width of 1
+                assert!(
+                    w <= width.max(2),
+                    "{line:?} is {w} cells wide at width {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wrap_text_measures_terminal_cells_not_bytes() {
+        // "é" is 2 bytes but 1 cell; "界" is 3 bytes but 2 cells.
+        assert_eq!(wrap_text("café café", 9), vec!["café café"]);
+        assert_eq!(wrap_text("世界世界", 4), vec!["世界", "世界"]);
+        assert_eq!(wrap_text("a 世界", 5), vec!["a", "世界"]);
+        assert_eq!(wrap_text("a 世界", 3), vec!["a", "世", "界"]);
+        // emoji, combining marks and mixed scripts never panic
+        for text in ["🙂🙂🙂🙂🙂", "e\u{301}e\u{301}e\u{301}", "ab👍🏽cd€€€ffff"]
+        {
+            for width in 1..8 {
+                assert_eq!(wrap_text(text, width).concat(), text);
+            }
+        }
+    }
+
+    #[test]
+    fn grid_renders_multibyte_values_at_every_width() {
+        let state = ResultsState {
+            columns: vec!["id".to_string(), "path".to_string()],
+            rows: vec![vec![
+                "1".to_string(),
+                format!("{}［／〜€é世界🙂{}", "x".repeat(87), "y".repeat(40)),
+            ]],
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            ..Default::default()
+        };
+        let app = crate::app::App::new(crate::config::ConnectionConfig::default(), false);
+        for width in [20u16, 40, 60, 89, 90, 91, 92, 120, 200] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+            terminal
+                .draw(|f| {
+                    render(
+                        f,
+                        Rect::new(0, 0, width, 12),
+                        &state,
+                        String::new(),
+                        true,
+                        &app,
+                    )
+                })
+                .unwrap();
+        }
     }
 
     #[test]

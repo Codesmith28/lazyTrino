@@ -16,6 +16,85 @@ use std::collections::{HashMap, HashSet};
 
 use crate::app::ColumnFilter;
 
+/// Cap on the number of distinct values fetched per drill-down level, to
+/// protect against extremely high-cardinality partition columns.
+pub const DRILLDOWN_LEVEL_LIMIT: usize = 200;
+
+/// Trino types of a table's columns and partition expressions, used to write
+/// each predicate value as a literal of the right type. Keys are normalised
+/// (`"Account_ID"` and `account_id` are the same column).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ColumnTypes(HashMap<String, String>);
+
+impl ColumnTypes {
+    /// Records `column`'s type, replacing a previous one.
+    pub fn insert(&mut self, column: &str, ty: &str) {
+        let ty = ty.trim();
+        if !ty.is_empty() {
+            self.0.insert(column_key(column), ty.to_ascii_lowercase());
+        }
+    }
+
+    /// Records `column`'s type unless one is already known.
+    pub fn insert_if_absent(&mut self, column: &str, ty: &str) {
+        if self.get(column).is_none() {
+            self.insert(column, ty);
+        }
+    }
+
+    pub fn get(&self, column: &str) -> Option<&str> {
+        self.0.get(&column_key(column)).map(String::as_str)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+fn column_key(column: &str) -> String {
+    column
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '"')
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// `value` as a SQL literal for a column of type `ty`.
+///
+/// Text columns are always quoted — `account_id = '66349'`, never
+/// `account_id = 66349` (Trino rejects `varchar = integer`). Numbers stay
+/// bare, booleans become keywords, and other types (`date`, `timestamp(3)`,
+/// …) are cast from a string, which Trino folds to a constant so partition
+/// pruning still applies. Without a known type the value's shape decides.
+pub fn sql_literal(value: &str, ty: Option<&str>) -> String {
+    let value = value.trim();
+    let quoted = || format!("'{}'", value.replace('\'', "''"));
+    let Some(ty) = ty else {
+        return if value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") {
+            value.to_lowercase()
+        } else if is_numeric_literal(value) {
+            value.to_string()
+        } else {
+            quoted()
+        };
+    };
+    let base = ty.split('(').next().unwrap_or(ty).trim();
+    match base {
+        "varchar" | "char" => quoted(),
+        "tinyint" | "smallint" | "integer" | "int" | "bigint" | "real" | "double" | "decimal" => {
+            if is_numeric_literal(value) {
+                value.to_string()
+            } else {
+                quoted()
+            }
+        }
+        "boolean" if value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") => {
+            value.to_lowercase()
+        }
+        _ => format!("CAST({} AS {ty})", quoted()),
+    }
+}
+
 fn q(id: &str) -> String {
     format!("\"{}\"", id.trim().replace('"', "\"\""))
 }
@@ -66,8 +145,9 @@ pub fn filtered_count(
     schema: &str,
     table: &str,
     filters: &[(String, String)],
+    types: &ColumnTypes,
 ) -> String {
-    let where_clause = build_where_clause(filters)
+    let where_clause = build_where_clause(filters, types)
         .map(|c| format!(" WHERE {c}"))
         .unwrap_or_default();
     format!(
@@ -79,7 +159,7 @@ pub fn filtered_count(
 }
 
 pub fn count(catalog: &str, schema: &str, table: &str) -> String {
-    filtered_count(catalog, schema, table, &[])
+    filtered_count(catalog, schema, table, &[], &ColumnTypes::default())
 }
 
 pub fn sample(catalog: &str, schema: &str, table: &str) -> String {
@@ -132,20 +212,12 @@ pub fn is_partition_column(partitioned_by: &[String], col_name: &str) -> bool {
     })
 }
 
-pub(crate) fn format_predicate(col: &str, val: &str) -> String {
+pub(crate) fn format_predicate(col: &str, val: &str, ty: Option<&str>) -> String {
     let col = col.trim();
-    let val = val.trim();
-    if val.eq_ignore_ascii_case("null") {
+    if val.trim().eq_ignore_ascii_case("null") {
         format!("{col} IS NULL")
-    } else if val.eq_ignore_ascii_case("true") || val.eq_ignore_ascii_case("false") {
-        format!("{col} = {}", val.to_lowercase())
-    } else if (col.contains('(') || is_numeric_literal(val)) && is_numeric_literal(val) {
-        // If col is an expression like year(shipdate), month(orderdate), bucket(N, x)
-        // or a numeric value, format as numeric literal in SQL without quotes so Trino
-        // does not fail with "Cannot apply operator: bigint = varchar(4)".
-        format!("{col} = {val}")
     } else {
-        format!("{} = '{}'", col, val.replace('\'', "''"))
+        format!("{col} = {}", sql_literal(val, ty))
     }
 }
 
@@ -154,14 +226,14 @@ pub(crate) fn format_predicate(col: &str, val: &str) -> String {
 /// each value appropriately (e.g. numeric literals for expressions/numbers,
 /// quoted string literals for varchars, IS NULL for nulls).
 /// Returns `None` when there are no filters.
-fn build_where_clause(filters: &[(String, String)]) -> Option<String> {
+fn build_where_clause(filters: &[(String, String)], types: &ColumnTypes) -> Option<String> {
     if filters.is_empty() {
         return None;
     }
     Some(
         filters
             .iter()
-            .map(|(col, val)| format_predicate(col, val))
+            .map(|(col, val)| format_predicate(col, val, types.get(col)))
             .collect::<Vec<_>>()
             .join(" AND "),
     )
@@ -180,8 +252,9 @@ pub fn distinct_partition_values(
     filters: &[(String, String)],
     column: &str,
     limit: usize,
+    types: &ColumnTypes,
 ) -> String {
-    let where_clause = build_where_clause(filters)
+    let where_clause = build_where_clause(filters, types)
         .map(|c| format!(" WHERE {c}"))
         .unwrap_or_default();
     format!(
@@ -206,6 +279,7 @@ pub fn distinct_partition_values(
 /// read (e.g. `map`/`row` columns hitting a schema mismatch), which would
 /// otherwise fail the entire query with an "Unsupported ... Parquet
 /// column" error. Pass an empty slice to fall back to `SELECT *`.
+#[allow(clippy::too_many_arguments)]
 pub fn filtered_page_query(
     catalog: &str,
     schema: &str,
@@ -214,8 +288,9 @@ pub fn filtered_page_query(
     offset: usize,
     limit: usize,
     columns: &[String],
+    types: &ColumnTypes,
 ) -> String {
-    let where_clause = build_where_clause(filters)
+    let where_clause = build_where_clause(filters, types)
         .map(|c| format!(" WHERE {c}"))
         .unwrap_or_default();
     let select_list = if columns.is_empty() {
@@ -257,13 +332,14 @@ pub fn resolve_column_sql_ref(col: &str) -> String {
 }
 
 pub fn format_column_filter_predicate(col: &str, filter: &ColumnFilter) -> String {
-    format_column_filter_predicate_with_overrides(col, filter, None)
+    format_column_filter_predicate_with_overrides(col, filter, None, None)
 }
 
 pub fn format_column_filter_predicate_with_overrides(
     col: &str,
     filter: &ColumnFilter,
     expr_overrides: Option<&HashMap<String, String>>,
+    ty: Option<&str>,
 ) -> String {
     let col_ref = if let Some(map) = expr_overrides
         && let Some(expr) = map.get(col)
@@ -278,7 +354,7 @@ pub fn format_column_filter_predicate_with_overrides(
             format!("{col_ref} {} {}", num.op.as_str(), num.raw_value)
         }
         ColumnFilter::Values(selected_values) => {
-            format_column_filter_values_predicate_with_ref(&col_ref, selected_values)
+            format_column_filter_values_predicate_with_ref(&col_ref, selected_values, ty)
         }
     }
 }
@@ -288,12 +364,13 @@ pub fn format_column_filter_values_predicate(
     selected_values: &HashSet<String>,
 ) -> String {
     let col_ref = resolve_column_sql_ref(col);
-    format_column_filter_values_predicate_with_ref(&col_ref, selected_values)
+    format_column_filter_values_predicate_with_ref(&col_ref, selected_values, None)
 }
 
 pub fn format_column_filter_values_predicate_with_ref(
     col_ref: &str,
     selected_values: &HashSet<String>,
+    ty: Option<&str>,
 ) -> String {
     if selected_values.is_empty() {
         return "1 = 0".to_string();
@@ -313,31 +390,14 @@ pub fn format_column_filter_values_predicate_with_ref(
     let non_null_predicate = if non_nulls.is_empty() {
         None
     } else if non_nulls.len() == 1 {
-        let v = non_nulls[0];
-        if v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false") {
-            Some(format!("{col_ref} = {}", v.to_lowercase()))
-        } else if is_numeric_literal(v) {
-            Some(format!("{col_ref} = {v}"))
-        } else {
-            Some(format!("{col_ref} = '{}'", v.replace('\'', "''")))
-        }
+        Some(format!("{col_ref} = {}", sql_literal(non_nulls[0], ty)))
     } else {
-        let all_numeric = non_nulls.iter().all(|v| is_numeric_literal(v));
-        if all_numeric {
-            let joined = non_nulls
-                .iter()
-                .map(|v| v.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            Some(format!("{col_ref} IN ({joined})"))
-        } else {
-            let joined = non_nulls
-                .iter()
-                .map(|v| format!("'{}'", v.replace('\'', "''")))
-                .collect::<Vec<_>>()
-                .join(", ");
-            Some(format!("{col_ref} IN ({joined})"))
-        }
+        let joined = non_nulls
+            .iter()
+            .map(|v| sql_literal(v, ty))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!("{col_ref} IN ({joined})"))
     };
 
     match (non_null_predicate, has_null) {
@@ -393,7 +453,10 @@ pub fn split_sql_clauses(sql: &str) -> (&str, Option<&str>, &str) {
                 i == 0 || bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b')';
             if at_word_start {
                 let rest = &sql[i..];
-                if where_pos.is_none() && rest.len() >= 5 && rest[..5].eq_ignore_ascii_case("WHERE")
+                if where_pos.is_none()
+                    && rest
+                        .get(..5)
+                        .is_some_and(|w| w.eq_ignore_ascii_case("WHERE"))
                 {
                     let after = &rest[5..];
                     if after.is_empty()
@@ -408,7 +471,10 @@ pub fn split_sql_clauses(sql: &str) -> (&str, Option<&str>, &str) {
 
                 let mut found_trailing = false;
                 for kw in &trailing_keywords {
-                    if rest.len() >= kw.len() && rest[..kw.len()].eq_ignore_ascii_case(kw) {
+                    if rest
+                        .get(..kw.len())
+                        .is_some_and(|w| w.eq_ignore_ascii_case(kw))
+                    {
                         let after = &rest[kw.len()..];
                         if after.is_empty()
                             || after.as_bytes()[0].is_ascii_whitespace()
@@ -535,6 +601,7 @@ pub fn build_query_with_all_filters(
         column_filters,
         col_distinct_values,
         None,
+        None,
     )
 }
 
@@ -545,6 +612,7 @@ pub fn build_query_with_all_filters_and_overrides(
     column_filters: &HashMap<String, ColumnFilter>,
     col_distinct_values: &HashMap<String, Vec<String>>,
     expr_overrides: Option<&HashMap<String, String>>,
+    types: Option<&ColumnTypes>,
 ) -> String {
     let mut predicates = Vec::new();
     let mut cols: Vec<&String> = column_filters.keys().collect();
@@ -563,6 +631,7 @@ pub fn build_query_with_all_filters_and_overrides(
                     col,
                     filter,
                     expr_overrides,
+                    types.and_then(|t| t.get(col)),
                 ));
             }
             ColumnFilter::Numeric(_) => {
@@ -570,6 +639,7 @@ pub fn build_query_with_all_filters_and_overrides(
                     col,
                     filter,
                     expr_overrides,
+                    None,
                 ));
             }
         }
@@ -743,6 +813,105 @@ mod tests {
     use super::*;
 
     #[test]
+    fn clause_splitting_handles_non_ascii_words() {
+        // A word starting at a word boundary whose 5th byte is inside "à"
+        // used to panic when compared against "WHERE".
+        let sql = "SELECT città, naïve FROM t WHERE città = 'Zürich' ORDER BY naïve LIMIT 5";
+        let (head, where_clause, tail) = split_sql_clauses(sql);
+        assert_eq!(head, "SELECT città, naïve FROM t");
+        assert_eq!(where_clause, Some("città = 'Zürich'"));
+        assert_eq!(tail, "ORDER BY naïve LIMIT 5");
+        for sql in [
+            "SELECT 世界 FROM t",
+            "SELECT é FROM t WHERE é > 1",
+            "ÀÀÀÀÀÀ",
+        ] {
+            split_sql_clauses(sql);
+        }
+    }
+
+    #[test]
+    fn varchar_partition_values_that_look_numeric_stay_quoted() {
+        // The reported failure: `account_id` is varchar, the value is 66349.
+        let mut types = ColumnTypes::default();
+        types.insert("date", "varchar");
+        types.insert("service", "varchar");
+        types.insert("account_id", "varchar");
+        let filters = vec![
+            ("date".to_string(), "2026-10-13".to_string()),
+            ("service".to_string(), "onedrivebiz".to_string()),
+            ("account_id".to_string(), "66349".to_string()),
+        ];
+        assert_eq!(
+            filtered_count(
+                "datalake",
+                "customers-2_customers-2_tenant_10003",
+                "events",
+                &filters,
+                &types
+            ),
+            "SELECT COUNT(*) AS total_records FROM \"datalake\".\"customers-2_customers-2_tenant_10003\".\"events\" \
+             WHERE date = '2026-10-13' AND service = 'onedrivebiz' AND account_id = '66349'"
+        );
+    }
+
+    #[test]
+    fn literals_follow_the_column_type() {
+        assert_eq!(sql_literal("66349", Some("varchar")), "'66349'");
+        assert_eq!(sql_literal("66349", Some("varchar(32)")), "'66349'");
+        assert_eq!(sql_literal("o'neil", Some("char(8)")), "'o''neil'");
+        assert_eq!(sql_literal("42", Some("bigint")), "42");
+        assert_eq!(sql_literal("4.5", Some("decimal(10,2)")), "4.5");
+        assert_eq!(sql_literal("TRUE", Some("boolean")), "true");
+        assert_eq!(
+            sql_literal("2026-10-13", Some("date")),
+            "CAST('2026-10-13' AS date)"
+        );
+        assert_eq!(
+            sql_literal("2026-10-13 01:02:03.000", Some("timestamp(3)")),
+            "CAST('2026-10-13 01:02:03.000' AS timestamp(3))"
+        );
+        // unknown type: the value's shape decides (the old behaviour)
+        assert_eq!(sql_literal("42", None), "42");
+        assert_eq!(sql_literal("abc", None), "'abc'");
+        assert_eq!(format_predicate("x", "NULL", Some("varchar")), "x IS NULL");
+    }
+
+    #[test]
+    fn column_types_are_matched_loosely() {
+        let mut types = ColumnTypes::default();
+        types.insert("\"Account_ID\"", "VARCHAR");
+        assert_eq!(types.get("account_id"), Some("varchar"));
+        types.insert_if_absent("account_id", "bigint");
+        assert_eq!(types.get("account_id"), Some("varchar"));
+        types.insert("day( ts )", "date");
+        assert_eq!(types.get("day(ts)"), Some("date"));
+        types.insert("ignored", "  ");
+        assert_eq!(types.get("ignored"), None);
+    }
+
+    #[test]
+    fn column_filters_quote_numeric_looking_text() {
+        let mut set = HashSet::new();
+        set.insert("10".to_string());
+        set.insert("20".to_string());
+        let mut types = ColumnTypes::default();
+        types.insert("code", "varchar");
+        let mut filters = HashMap::new();
+        filters.insert("code".to_string(), ColumnFilter::Values(set));
+        let sql = build_query_with_all_filters_and_overrides(
+            "SELECT * FROM t",
+            &[],
+            &HashSet::new(),
+            &filters,
+            &HashMap::new(),
+            None,
+            Some(&types),
+        );
+        assert!(sql.contains("\"code\" IN ('10', '20')"), "{sql}");
+    }
+
+    #[test]
     fn metadata_queries_quote_identifiers() {
         assert_eq!(show_catalogs(), "SHOW CATALOGS");
         assert_eq!(show_schemas("ice berg"), "SHOW SCHEMAS FROM \"ice berg\"");
@@ -776,7 +945,13 @@ mod tests {
         );
         let filters = vec![("date".to_string(), "2026-08-06".to_string())];
         assert_eq!(
-            filtered_count(catalog, schema, table, &filters),
+            filtered_count(
+                catalog,
+                schema,
+                table,
+                &filters,
+                &crate::trino::queries::ColumnTypes::default()
+            ),
             "SELECT COUNT(*) AS total_records FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\" WHERE date = '2026-08-06'"
         );
         assert_eq!(
@@ -796,7 +971,15 @@ mod tests {
     #[test]
     fn distinct_partition_values_builds_query_without_filters() {
         assert_eq!(
-            distinct_partition_values("ice berg", "sales", "orders", &[], "date", 200),
+            distinct_partition_values(
+                "ice berg",
+                "sales",
+                "orders",
+                &[],
+                "date",
+                200,
+                &crate::trino::queries::ColumnTypes::default()
+            ),
             "SELECT DISTINCT date FROM \"ice berg\".\"sales\".\"orders\" ORDER BY date DESC LIMIT 200"
         );
     }
@@ -808,7 +991,15 @@ mod tests {
             ("service".to_string(), "o'brien".to_string()),
         ];
         assert_eq!(
-            distinct_partition_values("datalake", "tenant", "events", &filters, "account_id", 200),
+            distinct_partition_values(
+                "datalake",
+                "tenant",
+                "events",
+                &filters,
+                "account_id",
+                200,
+                &crate::trino::queries::ColumnTypes::default()
+            ),
             "SELECT DISTINCT account_id FROM \"datalake\".\"tenant\".\"events\" \
              WHERE date = '2026-08-06' AND service = 'o''brien' ORDER BY account_id DESC LIMIT 200"
         );
@@ -817,7 +1008,16 @@ mod tests {
     #[test]
     fn filtered_page_query_builds_query_without_filters() {
         assert_eq!(
-            filtered_page_query("ice berg", "sales", "orders", &[], 0, 100, &[]),
+            filtered_page_query(
+                "ice berg",
+                "sales",
+                "orders",
+                &[],
+                0,
+                100,
+                &[],
+                &crate::trino::queries::ColumnTypes::default()
+            ),
             "SELECT * FROM \"ice berg\".\"sales\".\"orders\" OFFSET 0 LIMIT 100"
         );
     }
@@ -830,7 +1030,16 @@ mod tests {
             ("account_id".to_string(), "58bfaed0".to_string()),
         ];
         assert_eq!(
-            filtered_page_query("datalake", "tenant", "events", &filters, 0, 100, &[]),
+            filtered_page_query(
+                "datalake",
+                "tenant",
+                "events",
+                &filters,
+                0,
+                100,
+                &[],
+                &crate::trino::queries::ColumnTypes::default()
+            ),
             "SELECT * FROM \"datalake\".\"tenant\".\"events\" \
              WHERE date = '2026-08-06' AND service = 'smb3' AND account_id = '58bfaed0' \
              OFFSET 0 LIMIT 100"
@@ -841,7 +1050,16 @@ mod tests {
     fn filtered_page_query_uses_explicit_column_list_when_provided() {
         let columns = vec!["event_type".to_string(), "source_id".to_string()];
         assert_eq!(
-            filtered_page_query("datalake", "tenant", "events", &[], 0, 100, &columns),
+            filtered_page_query(
+                "datalake",
+                "tenant",
+                "events",
+                &[],
+                0,
+                100,
+                &columns,
+                &crate::trino::queries::ColumnTypes::default()
+            ),
             "SELECT \"event_type\", \"source_id\" FROM \"datalake\".\"tenant\".\"events\" \
              OFFSET 0 LIMIT 100"
         );
@@ -857,7 +1075,8 @@ mod tests {
                 "lineitem_partitioned",
                 &filters,
                 "shipmode",
-                200
+                200,
+                &crate::trino::queries::ColumnTypes::default()
             ),
             "SELECT DISTINCT shipmode FROM \"iceberg\".\"demo\".\"lineitem_partitioned\" \
              WHERE year(shipdate) = 1998 ORDER BY shipmode DESC LIMIT 200"
@@ -880,7 +1099,8 @@ mod tests {
                 &filters,
                 0,
                 100,
-                &[]
+                &[],
+                &crate::trino::queries::ColumnTypes::default()
             ),
             "SELECT * FROM \"iceberg\".\"demo\".\"lineitem_partitioned\" \
              WHERE year(shipdate) = 1998 AND shipmode = 'AIR' AND is_active = true AND deleted_at IS NULL \
@@ -1180,6 +1400,7 @@ mod tests {
             &filters,
             &distinct,
             Some(&expr_overrides),
+            None,
         );
 
         assert_eq!(

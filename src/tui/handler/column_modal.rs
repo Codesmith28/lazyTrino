@@ -45,17 +45,18 @@ pub fn open_column_modal(app: &mut App) {
         } else {
             res.selected_col.min(tree_nodes.len().saturating_sub(1))
         };
-        let scroll = if cursor >= 10 {
-            cursor.saturating_sub(9)
-        } else {
-            0
-        };
+        let (w, h) = crossterm::terminal::size().unwrap_or((80, 24));
+        let visible = crate::app::estimated_modal_list_rows(
+            crate::tui::screens::modal::modal_medium(ratatui::layout::Rect::new(0, 0, w, h)).height,
+        );
+        let scroll = crate::app::scroll_into_view(cursor, 0, visible);
 
         app.column_modal = Some(ColumnModalState {
             columns,
             selected_columns,
             cursor,
             scroll,
+            visible_rows: std::cell::Cell::new(visible),
             search_query: String::new(),
             is_searching: false,
             tree_nodes,
@@ -118,9 +119,8 @@ pub fn handle_column_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
                 let matched = m.filtered_indices();
                 if !matched.is_empty() {
                     m.cursor = (m.cursor + 1).min(matched.len() - 1);
-                    if m.cursor >= m.scroll + 10 {
-                        m.scroll = m.cursor.saturating_sub(9);
-                    }
+                    m.scroll =
+                        crate::app::scroll_into_view(m.cursor, m.scroll, m.visible_rows.get());
                 }
             }
             None
@@ -144,9 +144,8 @@ pub fn handle_column_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
                 let matched = m.filtered_indices();
                 if !matched.is_empty() {
                     m.cursor = (m.cursor + 10).min(matched.len() - 1);
-                    if m.cursor >= m.scroll + 10 {
-                        m.scroll = m.cursor.saturating_sub(9);
-                    }
+                    m.scroll =
+                        crate::app::scroll_into_view(m.cursor, m.scroll, m.visible_rows.get());
                 }
             }
             None
@@ -177,9 +176,8 @@ pub fn handle_column_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
                 let matched = m.filtered_indices();
                 if !matched.is_empty() {
                     m.cursor = matched.len() - 1;
-                    if m.cursor >= 10 {
-                        m.scroll = m.cursor.saturating_sub(9);
-                    }
+                    m.scroll =
+                        crate::app::scroll_into_view(m.cursor, m.scroll, m.visible_rows.get());
                 }
             }
             None
@@ -310,6 +308,7 @@ pub fn apply_column_modal(app: &mut App) -> Option<Command> {
             &res.column_filters,
             &res.col_distinct_values,
             Some(&expr_map),
+            Some(&action_state.column_types),
         );
 
         res.query_buffer = updated_query.clone();

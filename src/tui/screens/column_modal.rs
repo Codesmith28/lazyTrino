@@ -95,6 +95,7 @@ pub fn render(
 
     let matched_indices = modal.filtered_indices();
     let visible_count = list_area.height as usize;
+    modal.visible_rows.set(visible_count.max(1));
     let mut lines = Vec::new();
 
     if matched_indices.is_empty() {
@@ -305,6 +306,7 @@ mod tests {
             selected_columns: selected,
             cursor: 1,
             scroll: 0,
+            visible_rows: std::cell::Cell::new(10),
             search_query: String::new(),
             is_searching: false,
             tree_nodes,

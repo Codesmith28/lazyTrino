@@ -29,6 +29,9 @@ pub struct TrinoResponse {
 #[derive(Debug, Deserialize, Clone)]
 pub struct Column {
     pub name: String,
+    /// Trino type of the column (`varchar`, `bigint`, `date`, …).
+    #[serde(rename = "type", default)]
+    pub type_name: String,
 }
 
 #[derive(Debug, Deserialize)]

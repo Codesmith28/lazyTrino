@@ -27,7 +27,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &ConnectState, spinner: Stri
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(theme::style(theme::ACCENT_BORDER));
+        .border_style(theme::style(theme::accent_border_color()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);

@@ -16,9 +16,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{
-        Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    },
+    widgets::{Block, BorderType, Borders, Paragraph, ScrollbarOrientation, ScrollbarState},
 };
 
 use crate::app::{FilterModalState, FilterMode, NumericOp};
@@ -304,6 +302,7 @@ fn render_values_mode(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
 
     let matched_indices = modal.filtered_indices();
     let visible_count = list_area.height as usize;
+    modal.visible_rows.set(visible_count.max(1));
     let mut lines = Vec::new();
 
     if matched_indices.is_empty() {
@@ -362,7 +361,7 @@ fn render_values_mode(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
             ScrollbarState::new(matched_indices.len().saturating_sub(visible_count))
                 .position(modal.scroll);
         frame.render_stateful_widget(
-            Scrollbar::default()
+            crate::tui::theme::scrollbar()
                 .orientation(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("▲"))
                 .end_symbol(Some("▼")),
@@ -432,6 +431,7 @@ mod tests {
             selected_values: HashSet::new(),
             cursor: 0,
             scroll: 0,
+            visible_rows: std::cell::Cell::new(10),
             search_query: String::new(),
             is_searching: false,
             numeric_op: NumericOp::Lt,
@@ -456,6 +456,7 @@ mod tests {
             selected_values: ["10".to_string()].into_iter().collect(),
             cursor: 0,
             scroll: 0,
+            visible_rows: std::cell::Cell::new(10),
             search_query: "< 25".to_string(),
             is_searching: false,
             numeric_op: NumericOp::Lt,

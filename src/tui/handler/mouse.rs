@@ -36,6 +36,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
         return None;
     }
 
+    if app.export_modal.is_some() {
+        // Keyboard-only modal: don't let clicks fall through to the view behind it.
+        return None;
+    }
     if app.filter_modal.is_some() {
         return handle_filter_modal_mouse(app, mouse, term_width, term_height);
     }
@@ -70,15 +74,32 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
         );
     }
 
+    // A finished selection stays painted only until the next mouse gesture;
+    // clicking or scrolling moves content out from under it.
+    if matches!(
+        mouse.kind,
+        MouseEventKind::Down(_)
+            | MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight
+    ) {
+        app.mouse_selection_committed = false;
+    }
+
+    // The help bar owns clicks and the wheel over it: no pane sees them.
+    if super::footer::handle_mouse(app, mouse) {
+        return None;
+    }
+
     let bottom_y = term_height.saturating_sub(7);
     let is_in_table = matches!(app.screen, Screen::Actions(_));
-    let is_table_screen = matches!(app.screen, Screen::Table(_));
+    // Only the Actions screen has a pane divider; the Connect / Catalog /
+    // Schema / Table screens are full width.
     let border_pct = if is_in_table {
         app.actions_panel_pct.clamp(10, 60)
-    } else if is_table_screen {
-        100
     } else {
-        app.main_panel_pct.clamp(20, 80)
+        100
     };
     let border_x = ((term_width as u32 * border_pct as u32) / 100) as u16;
 
@@ -104,7 +125,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     );
                     let is_actions_screen = matches!(&app.screen, Screen::Actions(_));
                     if is_actions_screen {
-                        app.mode = Mode::QueryInput;
+                        super::query::begin_query_input(app);
                     }
                     app.set_active_panel(ActivePanel::MainViewer);
                     app.is_dragging_query_select = true;
@@ -120,11 +141,13 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 }
             }
 
+            // A new mouse gesture supersedes any keyboard row selection.
+            app.line_selection = None;
             app.mouse_selection_anchor = Some((mouse.column, mouse.row));
             app.mouse_selection_current = Some((mouse.column, mouse.row));
             app.is_selecting_text = false;
 
-            let is_on_border = !is_table_screen
+            let is_on_border = is_in_table
                 && mouse.row < bottom_y
                 && (mouse.column as i32 - border_x as i32).abs() <= 1;
 
@@ -343,8 +366,6 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 let pct = ((mouse.column as u32 * 100) / term_width as u32) as u16;
                 if is_in_table {
                     app.actions_panel_pct = pct.clamp(10, 60);
-                } else if !is_table_screen {
-                    app.main_panel_pct = pct.clamp(20, 80);
                 }
             }
         }
@@ -389,6 +410,8 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                     let text = extract_selected_text(app, anchor, current);
                     if !text.is_empty() {
                         copy_to_clipboard(&text);
+                        // Keep the copied region highlighted after release.
+                        app.mouse_selection_committed = true;
                         app.copied_toast =
                             Some((text.chars().take(30).collect(), std::time::Instant::now()));
                     }
@@ -428,6 +451,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::ScrollDown => {
+            if crate::tui::screens::query_inspector::contains(app, mouse.column, mouse.row) {
+                crate::tui::screens::query_inspector::scroll_by(app, 1);
+                return None;
+            }
             if app.help_modal.is_some() || matches!(app.screen, Screen::Help) {
                 if let Some(ref mut m) = app.help_modal {
                     m.scroll = m.scroll.saturating_add(1);
@@ -452,6 +479,12 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 };
                 let action = ACTIONS.get(selected_idx).map(|(_, _, a)| a);
                 if matches!(action, Some(Action::Partitions)) {
+                    if is_horizontal {
+                        app.partition_scroll_h = (app.partition_scroll_h
+                            + crate::tui::handler::navigation::PARTITION_HSCROLL_STEP)
+                            .min(app.partition_max_h.get());
+                        return None;
+                    }
                     let max_lines = app.partition_tree_lines.len().saturating_sub(1);
                     app.partition_scroll = (app.partition_scroll + 3).min(max_lines);
                 } else if matches!(action, Some(Action::Schema)) {
@@ -476,6 +509,8 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                             res,
                             avail_width,
                         );
+                    } else if res.scroll_within_row(3) {
+                        return None;
                     } else if !res.rows.is_empty() {
                         let delta = 3;
                         let new_scroll_v =
@@ -496,6 +531,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::ScrollUp => {
+            if crate::tui::screens::query_inspector::contains(app, mouse.column, mouse.row) {
+                crate::tui::screens::query_inspector::scroll_by(app, -1);
+                return None;
+            }
             if app.help_modal.is_some() || matches!(app.screen, Screen::Help) {
                 if let Some(ref mut m) = app.help_modal {
                     m.scroll = m.scroll.saturating_sub(1);
@@ -523,6 +562,15 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                 };
                 let action = ACTIONS.get(selected_idx).map(|(_, _, a)| a);
                 if matches!(action, Some(Action::Partitions)) {
+                    if is_horizontal {
+                        app.partition_scroll_h = app
+                            .partition_scroll_h
+                            .min(app.partition_max_h.get())
+                            .saturating_sub(
+                                crate::tui::handler::navigation::PARTITION_HSCROLL_STEP,
+                            );
+                        return None;
+                    }
                     app.partition_scroll = app.partition_scroll.saturating_sub(3);
                 } else if matches!(action, Some(Action::Schema)) {
                     app.schema_scroll = app.schema_scroll.saturating_sub(3);
@@ -540,6 +588,8 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                             res,
                             avail_width,
                         );
+                    } else if res.scroll_within_row(-3) {
+                        return None;
                     } else {
                         let delta = 3;
                         let new_scroll_v = res.scroll_v.get().saturating_sub(delta);
@@ -557,6 +607,17 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::ScrollRight => {
+            if let Screen::Actions(a) = &app.screen
+                && matches!(
+                    ACTIONS.get(a.selected).map(|(_, _, act)| act),
+                    Some(Action::Partitions)
+                )
+            {
+                app.partition_scroll_h = (app.partition_scroll_h
+                    + crate::tui::handler::navigation::PARTITION_HSCROLL_STEP)
+                    .min(app.partition_max_h.get());
+                return None;
+            }
             let avail_width = results_table_inner_rect(app, term_width, term_height)
                 .map(|r| (r.width as usize).saturating_sub(4).max(1))
                 .unwrap_or(80);
@@ -568,6 +629,18 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::ScrollLeft => {
+            if let Screen::Actions(a) = &app.screen
+                && matches!(
+                    ACTIONS.get(a.selected).map(|(_, _, act)| act),
+                    Some(Action::Partitions)
+                )
+            {
+                app.partition_scroll_h = app
+                    .partition_scroll_h
+                    .min(app.partition_max_h.get())
+                    .saturating_sub(crate::tui::handler::navigation::PARTITION_HSCROLL_STEP);
+                return None;
+            }
             let avail_width = results_table_inner_rect(app, term_width, term_height)
                 .map(|r| (r.width as usize).saturating_sub(4).max(1))
                 .unwrap_or(80);
@@ -584,7 +657,6 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
 }
 
 pub(crate) fn phase1_list_inner_rect(app: &App, term_width: u16, term_height: u16) -> Option<Rect> {
-    let is_table_screen = matches!(app.screen, Screen::Table(_));
     let is_phase1 = matches!(
         app.screen,
         Screen::Catalog(_) | Screen::Schema(_) | Screen::Table(_)
@@ -593,12 +665,7 @@ pub(crate) fn phase1_list_inner_rect(app: &App, term_width: u16, term_height: u1
         return None;
     }
     let bottom_y = term_height.saturating_sub(7);
-    let list_width = if is_table_screen {
-        term_width
-    } else {
-        let pct = app.main_panel_pct.clamp(20, 80);
-        ((term_width as u32 * pct as u32) / 100) as u16
-    };
+    let list_width = term_width;
     let inner_w = list_width.saturating_sub(2).max(1) as usize;
     let search_active = matches!(app.mode, Mode::Search) && !matches!(app.screen, Screen::Help);
     let search_height = if search_active {
@@ -820,7 +887,26 @@ pub fn results_table_inner_rect(app: &App, term_width: u16, term_height: u16) ->
     })
 }
 
+/// Text under a mouse selection. Views with a dedicated extractor (lists,
+/// results grid, schema…) yield structured text such as proper CSV; for
+/// everything else (partition counts, DDL, banners, modals) it falls back
+/// to whatever is on screen in the selected rectangle.
 pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -> String {
+    let text = extract_structured_text(app, anchor, current);
+    if text.is_empty() {
+        crate::tui::handler::screen_text::extract(&app.last_frame, anchor, current)
+    } else {
+        text
+    }
+}
+
+/// True when the selection has no dedicated extractor, i.e. its text comes
+/// from the rendered screen and needs a frame-level highlight.
+pub fn selection_uses_screen_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -> bool {
+    extract_structured_text(app, anchor, current).is_empty()
+}
+
+fn extract_structured_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -> String {
     let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
     if term_width == 0 || term_height == 0 {
         return String::new();
@@ -835,31 +921,26 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
 
     // 1. Selection in Bottom Query Inspector Pane
     if anchor.1 >= bottom_y || current.1 >= bottom_y {
-        let mut lines = Vec::new();
         let inner_y = bottom_y + 1;
-        let rev_logs: Vec<&QueryLogEntry> = app.query_logs.iter().rev().collect();
-        for r in start_row..=end_row {
-            if r >= inner_y && r < term_height.saturating_sub(1) {
-                let idx = (r - inner_y) as usize + app.query_inspector_scroll;
-                if idx < rev_logs.len() {
-                    lines.push(rev_logs[idx].sql.clone());
-                }
-            }
+        let last_row = term_height.saturating_sub(2);
+        let from = start_row.max(inner_y);
+        let to = end_row.min(last_row);
+        if from > to {
+            return String::new();
         }
-        return lines.join("\n");
+        return crate::tui::screens::query_inspector::selected_text(
+            app,
+            crate::tui::screens::query_inspector::wrap_width(term_width.saturating_sub(2)),
+            (from - inner_y) as usize,
+            (to - inner_y) as usize,
+        );
     }
 
     let is_in_table = matches!(app.screen, Screen::Actions(_));
 
     if !is_in_table {
         // Phase 1 screens: Catalog, Schema, Table
-        let is_table_screen = matches!(app.screen, Screen::Table(_));
-        let list_pct = if is_table_screen {
-            100
-        } else {
-            app.main_panel_pct.clamp(20, 80)
-        };
-        let border_x = ((term_width as u32 * list_pct as u32) / 100) as u16;
+        let border_x = term_width;
 
         let inner_w = border_x.saturating_sub(2).max(1) as usize;
         let search_active = matches!(app.mode, Mode::Search);
@@ -994,7 +1075,11 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
         } else if let Some(ref res) = state.results {
             // Results table view
             let mut lines = Vec::new();
-            if let Some(inner) = results_table_inner_rect(app, term_width, term_height) {
+            if let Some(inner) = results_table_inner_rect(app, term_width, term_height)
+                // A drag that stays above the table (query bar, Dataset
+                // Records box) is plain screen text, not a grid selection.
+                && end_row >= inner.y
+            {
                 let available_width = inner.width.saturating_sub(4) as usize;
                 let (visible_cols, col_width_sizes, _) =
                     crate::tui::screens::results::visible_columns_layout(res, available_width);
@@ -1064,19 +1149,31 @@ pub fn extract_selected_text(app: &App, anchor: (u16, u16), current: (u16, u16))
                     &row_visual_heights,
                     res.rows.len(),
                 );
+                // Same rule as the renderer: a row taller than the viewport
+                // starts at the top and is read by scrolling inside it.
+                let selected_height = row_visual_heights
+                    .get(res.selected_row)
+                    .map_or(0, |h| *h as usize);
+                let effective_scroll_v = if selected_height > viewport_lines {
+                    res.selected_row
+                } else {
+                    effective_scroll_v
+                };
 
-                if start_row <= inner.y + 1 && end_row >= inner.y {
-                    let header = format_csv_row(
-                        sel_cols
-                            .iter()
-                            .map(|&i| res.columns.get(i).map(|s| s.as_str()).unwrap_or("")),
-                    );
-                    lines.push(header);
-                }
+                // The header always travels with copied cells, wherever the drag started.
+                let header = format_csv_row(
+                    sel_cols
+                        .iter()
+                        .map(|&i| res.columns.get(i).map(|s| s.as_str()).unwrap_or("")),
+                );
+                lines.push(header);
 
                 let mut cur_y = inner.y + 2;
                 for (row_idx, row) in res.rows.iter().enumerate().skip(effective_scroll_v) {
-                    let h = row_visual_heights.get(row_idx).copied().unwrap_or(1);
+                    let mut h = row_visual_heights.get(row_idx).copied().unwrap_or(1);
+                    if row_idx == res.selected_row {
+                        h = h.saturating_sub(res.row_line_offset.get() as u16).max(1);
+                    }
                     if cur_y <= end_row && cur_y + h > start_row {
                         let row_line = format_csv_row(
                             sel_cols
@@ -1211,9 +1308,8 @@ fn handle_filter_modal_mouse(
                 let matched_len = m.filtered_indices().len();
                 if matched_len > 0 {
                     m.cursor = (m.cursor + 1).min(matched_len - 1);
-                    if m.cursor >= m.scroll + 10 {
-                        m.scroll = m.cursor.saturating_sub(9);
-                    }
+                    m.scroll =
+                        crate::app::scroll_into_view(m.cursor, m.scroll, m.visible_rows.get());
                 }
             }
             None
@@ -1299,11 +1395,9 @@ fn handle_column_modal_mouse(
             if let Some(ref mut m) = app.column_modal {
                 let matched_len = m.filtered_indices().len();
                 if matched_len > 0 {
-                    let vis_h = (popup_area.height.saturating_sub(6) as usize).max(1);
                     m.cursor = (m.cursor + 2).min(matched_len - 1);
-                    if m.cursor >= m.scroll + vis_h {
-                        m.scroll = m.cursor.saturating_sub(vis_h.saturating_sub(1));
-                    }
+                    m.scroll =
+                        crate::app::scroll_into_view(m.cursor, m.scroll, m.visible_rows.get());
                 }
             }
             None
@@ -1342,8 +1436,11 @@ fn handle_help_modal_mouse(
         }
         MouseEventKind::ScrollDown => {
             if let Some(ref mut m) = app.help_modal {
-                let total_lines =
-                    crate::tui::screens::help::build_help_lines(&m.search_query).len();
+                let total_lines = crate::tui::screens::help::wrapped_help_lines(
+                    &m.search_query,
+                    ratatui::layout::Rect::new(0, 0, term_width, term_height),
+                )
+                .len();
                 let content_h = (popup_area.height.saturating_sub(6) as usize).max(1);
                 let max_scroll = total_lines.saturating_sub(content_h);
                 m.scroll = (m.scroll + 3).min(max_scroll);
@@ -1403,6 +1500,39 @@ mod tests {
     }
 
     #[test]
+    fn the_wheel_over_executed_queries_scrolls_it_and_nothing_else() {
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+        let mut app = sample_app();
+        for i in 0..40 {
+            let id = app.add_query_log(format!("SELECT {i}"));
+            app.complete_query_log_success(id, 5, 1);
+        }
+        let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        term.draw(|f| {
+            crate::tui::screens::query_inspector::render(f, Rect::new(0, 17, 100, 7), &app)
+        })
+        .unwrap();
+        let selected_before = get_selected(&app.screen);
+        let wheel = |kind, row| MouseEvent {
+            kind,
+            column: 10,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        handle_mouse_sync(&mut app, wheel(MouseEventKind::ScrollDown, 20));
+        handle_mouse_sync(&mut app, wheel(MouseEventKind::ScrollDown, 20));
+        assert_eq!(app.query_inspector_scroll, 2);
+        handle_mouse_sync(&mut app, wheel(MouseEventKind::ScrollUp, 20));
+        assert_eq!(app.query_inspector_scroll, 1);
+        assert_eq!(get_selected(&app.screen), selected_before, "list untouched");
+
+        // above the pane the wheel keeps doing what it did
+        handle_mouse_sync(&mut app, wheel(MouseEventKind::ScrollDown, 5));
+        assert_eq!(app.query_inspector_scroll, 1);
+    }
+
+    #[test]
     fn test_extract_selected_text_actions_results() {
         let mut app = sample_app();
         let res_state = ResultsState {
@@ -1452,6 +1582,22 @@ mod tests {
         // Header line (inner.y = 7) and first row (inner.y + 2 = 9)
         let text = extract_selected_text(&app, (menu_x, 7), (menu_x, 9));
         assert_eq!(text, "id,status\n1,OK");
+
+        // A drag inside the Dataset Records box (above the table) is not a
+        // grid selection: it must be painted and copied as plain screen text.
+        assert!(selection_uses_screen_text(
+            &app,
+            (menu_x, 4),
+            (menu_x + 8, 4)
+        ));
+        assert_eq!(
+            extract_structured_text(&app, (menu_x, 4), (menu_x + 8, 4)),
+            ""
+        );
+
+        // Dragging over data rows only still copies the header
+        let text = extract_selected_text(&app, (menu_x, 9), (menu_x, 10));
+        assert!(text.starts_with("id,status\n"), "{text}");
     }
 
     #[test]
@@ -1957,6 +2103,7 @@ mod tests {
                 .collect(),
             cursor: 0,
             scroll: 0,
+            visible_rows: std::cell::Cell::new(10),
             search_query: String::new(),
             is_searching: false,
             tree_nodes: Vec::new(),
@@ -2088,7 +2235,115 @@ mod tests {
         };
         handle_mouse_sync(&mut app, right_click);
         let toast = app.copied_toast.as_ref().unwrap().0.clone();
-        assert!(toast.contains("cell block (CSV)"));
+        assert!(toast.contains("cell block with header (CSV)"));
+    }
+
+    #[test]
+    fn test_drag_selection_stays_highlighted_until_the_next_gesture() {
+        use crate::tui::handler::handle_key_sync;
+        use crossterm::event::{KeyCode, KeyEvent};
+        use ratatui::style::Modifier;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        fn drag_select(app: &mut App, x: u16, y0: u16, y1: u16) {
+            let ev = |kind, row| MouseEvent {
+                kind,
+                column: x,
+                row,
+                modifiers: KeyModifiers::NONE,
+            };
+            handle_mouse_sync(app, ev(MouseEventKind::Down(MouseButton::Left), y0));
+            handle_mouse_sync(app, ev(MouseEventKind::Drag(MouseButton::Left), y1));
+            handle_mouse_sync(app, ev(MouseEventKind::Up(MouseButton::Left), y1));
+        }
+
+        fn catalog_app() -> App {
+            let mut app = sample_app();
+            app.screen = Screen::Catalog(CatalogState {
+                items: vec!["hive".into(), "iceberg".into(), "delta".into()],
+                selected: 0,
+            });
+            app
+        }
+
+        let inner = phase1_list_inner_rect(&catalog_app(), 80, 24).expect("inner rect");
+        let name_x = inner.x + 4; // after the "  1 " number prefix
+        let reversed_rows = |app: &App| -> Vec<bool> {
+            let mut t = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            t.draw(|f| crate::tui::draw::ui(f, app)).unwrap();
+            let buf = t.backend().buffer().clone();
+            (0..3)
+                .map(|i| {
+                    let c = buf.cell((name_x, inner.y + i)).unwrap();
+                    c.modifier.contains(Modifier::REVERSED)
+                })
+                .collect()
+        };
+
+        // Released selection is committed and stays painted: terminal colors, reverse video.
+        let mut app = catalog_app();
+        drag_select(&mut app, name_x, inner.y, inner.y + 1);
+        assert!(app.mouse_selection_committed && !app.is_selecting_text);
+        assert_eq!(reversed_rows(&app), vec![true, true, false]);
+        let cell = {
+            let mut t = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            t.draw(|f| crate::tui::draw::ui(f, &app)).unwrap();
+            t.backend()
+                .buffer()
+                .cell((name_x, inner.y))
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(
+            (cell.fg, cell.bg),
+            (ratatui::style::Color::Reset, ratatui::style::Color::Reset),
+            "selection must use the terminal's own colors"
+        );
+
+        // `y` acts on the selection, so it stays.
+        handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('y')));
+        assert!(app.mouse_selection_committed);
+
+        // Esc deselects without leaving the screen.
+        handle_key_sync(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert!(!app.mouse_selection_committed);
+        assert_eq!(reversed_rows(&app), vec![false, false, false]);
+        assert!(matches!(app.screen, Screen::Catalog(_)));
+
+        // Anything that could move content under it clears the highlight.
+        for clear in ["key", "scroll", "click"] {
+            let mut app = catalog_app();
+            drag_select(&mut app, name_x, inner.y, inner.y + 1);
+            assert!(app.mouse_selection_committed, "{clear}");
+            match clear {
+                "key" => {
+                    handle_key_sync(&mut app, KeyEvent::from(KeyCode::Char('j')));
+                }
+                "scroll" => {
+                    handle_mouse_sync(
+                        &mut app,
+                        MouseEvent {
+                            kind: MouseEventKind::ScrollDown,
+                            column: name_x,
+                            row: inner.y,
+                            modifiers: KeyModifiers::NONE,
+                        },
+                    );
+                }
+                _ => {
+                    handle_mouse_sync(
+                        &mut app,
+                        MouseEvent {
+                            kind: MouseEventKind::Down(MouseButton::Left),
+                            column: name_x,
+                            row: inner.y + 2,
+                            modifiers: KeyModifiers::NONE,
+                        },
+                    );
+                }
+            }
+            assert!(!app.mouse_selection_committed, "{clear} should clear it");
+        }
     }
 
     #[test]

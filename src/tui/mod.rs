@@ -18,9 +18,15 @@ pub mod theme;
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+        supports_keyboard_enhancement,
+    },
 };
 use ratatui::Terminal;
 use std::io::stdout;
@@ -34,6 +40,7 @@ mod screens {
     pub mod column_modal;
     pub mod connect;
     pub mod drilldown;
+    pub mod export_modal;
     pub mod filter_modal;
     pub mod help;
     pub mod modal;
@@ -46,16 +53,63 @@ mod screens {
     pub mod vertical_schema;
 }
 
+/// Set once the kitty keyboard flags were pushed, so they are popped on exit.
+static KEYBOARD_ENHANCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Puts the terminal back the way the shell expects it. Used by the panic
+/// hook: without it a crash leaves raw mode, mouse reporting and the kitty
+/// keyboard protocol on, and the shell fills with escape-sequence garbage.
+fn restore_terminal() {
+    let mut out = stdout();
+    if KEYBOARD_ENHANCED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        let _ = execute!(out, PopKeyboardEnhancementFlags);
+    }
+    let _ = disable_raw_mode();
+    let _ = execute!(
+        out,
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        crossterm::cursor::Show
+    );
+}
+
+/// Restores the terminal before the default hook prints the panic message,
+/// so the message is readable and the shell keeps working.
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        previous(info);
+    }));
+}
+
 pub async fn run(app: &mut App) -> Result<()> {
+    install_panic_hook();
     enable_raw_mode()?;
     let mut stderr = stdout();
     execute!(stderr, EnterAlternateScreen, EnableMouseCapture)?;
+
+    // On terminals speaking the kitty keyboard protocol, ask for unambiguous
+    // key reports. Without this Ctrl+Shift+C is indistinguishable from Ctrl+C
+    // (which quits) and Cmd+C is never reported at all. Unsupported terminals
+    // are left untouched.
+    let enhanced_keys = supports_keyboard_enhancement().unwrap_or(false);
+    if enhanced_keys {
+        execute!(
+            stderr,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+        KEYBOARD_ENHANCED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 
     let backend = ratatui::backend::CrosstermBackend::new(stderr);
     let mut terminal = Terminal::new(backend)?;
 
     let res = run_loop(&mut terminal, app).await;
 
+    if KEYBOARD_ENHANCED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    }
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -97,7 +151,9 @@ async fn run_loop(
             }
         }
 
-        terminal.draw(|frame| draw::ui(frame, app))?;
+        app.sync_search_scope();
+        let frame = terminal.draw(|frame| draw::ui(frame, app))?;
+        app.last_frame = frame.buffer.clone();
 
         if app.should_quit {
             break Ok(());

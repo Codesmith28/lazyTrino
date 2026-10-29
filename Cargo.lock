@@ -930,7 +930,7 @@ dependencies = [
 
 [[package]]
 name = "lazyTrino"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -947,6 +947,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]

@@ -36,6 +36,11 @@ pub fn render(
     app: &crate::app::App,
 ) {
     let depth = dd.depth();
+    let line_sel = if is_active {
+        crate::tui::handler::live_line_selection(app)
+    } else {
+        None
+    };
 
     let table_count_str = if let Some(tc) = dd.table_count {
         format!(" [{}]", crate::app::format_count(tc))
@@ -106,10 +111,17 @@ pub fn render(
             "unknown".to_string()
         };
 
-        let mut banner_spans = vec![
+        let mut banner_spans = Vec::new();
+        if let Some(sel) = line_sel {
+            banner_spans.push(Span::styled(
+                format!(" -- {} -- ", sel.kind.label()),
+                theme::warning_bold_style(),
+            ));
+        }
+        banner_spans.extend([
             Span::styled(" Total Table: ", theme::muted_style()),
             Span::styled(table_total_display, theme::info_bold_style()),
-        ];
+        ]);
 
         if depth > 0
             && let Some((curr_col, curr_val)) = dd.path.last()
@@ -184,6 +196,8 @@ pub fn render(
     let fixed_gap = 4;
     let name_col_width = max_val_len + fixed_gap;
 
+    // See catalog.rs: `highlight_style` must not be patched over a selection.
+    let mut cursor_in_selection = false;
     let items: Vec<ListItem> = values
         .iter()
         .enumerate()
@@ -192,7 +206,12 @@ pub fn render(
             // See actions.rs for why this must be gated by pane focus.
             let is_mouse_sel =
                 is_active && app.is_area_mouse_selected(items_area.x, items_area.width, item_y);
+            let is_line_sel = line_sel.is_some_and(|sel| sel.contains(dd.selected, i));
+            let is_mouse_sel = is_mouse_sel || is_line_sel;
             let is_selected = i == dd.selected;
+            if is_selected && is_mouse_sel {
+                cursor_in_selection = true;
+            }
             let prefix = if is_selected { "▸ " } else { "  " };
 
             let mut item_filter = dd.path.clone();
@@ -213,16 +232,18 @@ pub fn render(
             let padding = " ".repeat(pad_len);
 
             let name_style = if is_mouse_sel {
-                theme::selection_style()
+                theme::text_selection_style()
             } else if is_selected {
                 theme::selection_style_for(is_active)
             } else {
                 theme::text_style()
             };
 
-            let count_style = if is_mouse_sel || is_selected {
-                theme::style(ratatui::style::Color::Cyan)
-                    .add_modifier(ratatui::style::Modifier::ITALIC)
+            let count_style = if is_mouse_sel {
+                // the whole row, count included, is part of the selection
+                theme::text_selection_style()
+            } else if is_selected {
+                theme::info_style().add_modifier(ratatui::style::Modifier::ITALIC)
             } else {
                 theme::muted_style().add_modifier(ratatui::style::Modifier::ITALIC)
             };
@@ -232,7 +253,14 @@ pub fn render(
             } else {
                 Line::from(vec![
                     Span::styled(name_text, name_style),
-                    Span::raw(padding),
+                    Span::styled(
+                        padding,
+                        if is_mouse_sel {
+                            name_style
+                        } else {
+                            ratatui::style::Style::default()
+                        },
+                    ),
                     Span::styled(count_text, count_style),
                 ])
             };
@@ -242,15 +270,19 @@ pub fn render(
         .collect();
 
     let mut list_state = ListState::default().with_selected(Some(dd.selected));
-    let list = List::new(items).highlight_style(theme::selection_style_for(is_active));
+    let list = List::new(items).highlight_style(if cursor_in_selection {
+        ratatui::style::Style::default()
+    } else {
+        theme::selection_style_for(is_active)
+    });
     frame.render_stateful_widget(list, items_area, &mut list_state);
 
-    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+    use ratatui::widgets::{ScrollbarOrientation, ScrollbarState};
     if values.len() > 1 {
         let mut scrollbar_state =
             ScrollbarState::new(values.len().saturating_sub(1)).position(dd.selected);
         frame.render_stateful_widget(
-            Scrollbar::default()
+            crate::tui::theme::scrollbar()
                 .orientation(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("▲"))
                 .end_symbol(Some("▼")),
@@ -288,6 +320,7 @@ mod tests {
             counts_cache: counts,
             current_count_loading: false,
             path_cursors: HashMap::new(),
+            focus_value: None,
         };
 
         let app = App::new(crate::config::ConnectionConfig::default(), false);

@@ -16,18 +16,29 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{ActionState, ActivePanel, App, Mode, Screen};
-use crate::saved_views::{SavedView, delete_saved_view};
+use crate::app::{App, Mode, Screen};
+use crate::saved_views::{GridState, SavedView, delete_saved_view};
 use crate::tui::handler::{Command, navigation};
+use crate::view_location::ViewLocation;
 
 pub fn open_saved_views_modal(app: &mut App) {
-    let views = crate::saved_views::load_saved_views();
+    let views = match crate::saved_views::load_saved_views() {
+        Ok(views) => views,
+        Err(err) => {
+            app.set_notice(
+                crate::app::NoticeKind::Error,
+                format!("Saved views unavailable: {err:#} (file left untouched)"),
+            );
+            return;
+        }
+    };
     app.saved_views_modal = Some(crate::app::SavedViewsModalState {
         views,
         selected: 0,
         scroll: 0,
         selected_ids: std::collections::HashSet::new(),
         pending_delete_ids: Vec::new(),
+        current_url: app.config.url.clone(),
     });
     app.mode = Mode::SavedViewsModal;
 }
@@ -147,49 +158,11 @@ pub fn handle_saved_views_modal_key(app: &mut App, key: KeyEvent) -> Option<Comm
     }
 }
 
+/// Rebuilds the saved view step by step so every pane before and after it
+/// can be navigated (see `restore`).
 pub fn restore_saved_view(app: &mut App, view: SavedView) -> Option<Command> {
     close_saved_views_modal(app);
-    app.active_panel = ActivePanel::MainViewer;
-
-    let catalog = view.catalog.clone();
-    let schema = view.schema.clone();
-    let table = view.table.clone();
-    let action_idx = view.action_idx;
-    let query_buf = view.query.clone();
-    let query_len = query_buf.len();
-
-    let mut action_state = ActionState {
-        catalog: catalog.clone(),
-        schema: schema.clone(),
-        table: table.clone(),
-        selected: action_idx,
-        query_buffer: query_buf.clone(),
-        query_cursor: query_len,
-        pending_view_restore: Some(view.clone()),
-        ..Default::default()
-    };
-
-    if !view.partition_path.is_empty() {
-        action_state.drilldown = Some(crate::app::DrillDownState {
-            partition_cols: Vec::new(),
-            path: view.partition_path.clone(),
-            levels_cache: Vec::new(),
-            selected: 0,
-            ..Default::default()
-        });
-    }
-
-    app.screen = Screen::Actions(action_state);
-    app.loading = true;
-
-    Some(Command::ExecuteQuery {
-        query: query_buf,
-        catalog,
-        schema,
-        table,
-        is_paginated: action_idx == 0,
-        filters: view.partition_path,
-    })
+    crate::tui::handler::restore::begin(app, view)
 }
 
 pub fn save_current_view(app: &mut App) {
@@ -197,68 +170,42 @@ pub fn save_current_view(app: &mut App) {
 }
 
 pub fn open_save_view_prompt(app: &mut App) {
-    let Screen::Actions(ref a) = app.screen else {
+    let Some((location, query)) = ViewLocation::capture(app) else {
         app.copied_toast = Some((
             "Open a table view first to save it".to_string(),
             Instant::now(),
         ));
         return;
     };
+    let grid = match &app.screen {
+        Screen::Actions(a) => a.results.as_ref().map(GridState::capture),
+        _ => None,
+    }
+    .unwrap_or_default();
 
-    let catalog = a.catalog.clone();
-    let schema = a.schema.clone();
-    let table = a.table.clone();
-    let action_idx = a.selected;
-    let query = if let Some(ref res) = a.results {
-        res.query_buffer.clone()
-    } else if !a.query_buffer.is_empty() {
-        a.query_buffer.clone()
-    } else {
-        crate::app::ACTIONS[action_idx]
-            .2
-            .build_query(&catalog, &schema, &table)
-    };
-
-    let (column_filters, hidden_columns, sort) = if let Some(ref res) = a.results {
-        let filters: Vec<(String, crate::saved_views::StoredColumnFilter)> = res
-            .column_filters
-            .iter()
-            .map(|(k, v)| (k.clone(), v.into()))
-            .collect();
-        let hidden: Vec<String> = res.hidden_columns.iter().cloned().collect();
-        let s = res.sort.as_ref().map(|(c, d)| (c.clone(), (*d).into()));
-        (filters, hidden, s)
-    } else {
-        (Vec::new(), Vec::new(), None)
-    };
-
-    let partition_path = if let Some(ref dd) = a.drilldown {
-        dd.path.clone()
-    } else {
-        Vec::new()
-    };
-
-    let now_ts = crate::saved_views::current_timestamp_str();
     let epoch_millis = std::time::SystemTime::now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let id = format!("{catalog}_{schema}_{table}_{epoch_millis}");
-    let default_name = format!("{catalog}.{schema}.{table}");
+    let id = format!(
+        "{}_{}_{}_{epoch_millis}",
+        location.catalog, location.schema, location.table
+    );
+    let default_name = format!(
+        "{}.{}.{}",
+        location.catalog, location.schema, location.table
+    );
+    let connection = (!app.config.url.is_empty()).then(|| app.config.url.clone());
 
     let view = SavedView {
+        version: crate::saved_views::SAVED_VIEWS_VERSION,
         id,
         name: default_name.clone(),
-        catalog,
-        schema,
-        table,
-        action_idx,
+        saved_at: crate::saved_views::current_timestamp_str(),
+        connection,
+        location,
         query,
-        column_filters,
-        hidden_columns,
-        sort,
-        partition_path,
-        saved_at: now_ts,
+        grid,
     };
 
     app.save_view_prompt = Some(crate::app::SaveViewPromptState {
@@ -320,7 +267,10 @@ pub fn confirm_save_view_prompt(app: &mut App) {
                 app.copied_toast = Some((format!("Saved view: {name}"), Instant::now()));
             }
             Err(e) => {
-                app.copied_toast = Some((format!("Failed to save view: {e}"), Instant::now()));
+                app.set_notice(
+                    crate::app::NoticeKind::Error,
+                    format!("Failed to save view: {e:#}"),
+                );
             }
         }
     }
@@ -482,21 +432,27 @@ mod tests {
 
     fn sample_view(id: &str, name: &str) -> SavedView {
         SavedView {
+            version: crate::saved_views::SAVED_VIEWS_VERSION,
             id: id.to_string(),
             name: name.to_string(),
-            catalog: "iceberg".to_string(),
-            schema: "sales".to_string(),
-            table: "orders".to_string(),
-            action_idx: 0,
-            query: "SELECT * FROM iceberg.sales.orders".to_string(),
-            column_filters: vec![(
-                "status".to_string(),
-                StoredColumnFilter::Values(vec!["OK".to_string()]),
-            )],
-            hidden_columns: vec!["internal_id".to_string()],
-            sort: Some(("id".to_string(), StoredSortDirection::Asc)),
-            partition_path: Vec::new(),
             saved_at: "2026-10-14 08:00:00 UTC".to_string(),
+            connection: None,
+            location: ViewLocation {
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                action: crate::app::Action::TableView,
+                partition_path: Vec::new(),
+            },
+            query: crate::view_location::QuerySource::Generated,
+            grid: GridState {
+                column_filters: vec![(
+                    "status".to_string(),
+                    StoredColumnFilter::Values(vec!["OK".to_string()]),
+                )],
+                hidden_columns: vec!["internal_id".to_string()],
+                sort: Some(("id".to_string(), StoredSortDirection::Asc)),
+            },
         }
     }
 
@@ -509,6 +465,7 @@ mod tests {
             scroll: 0,
             selected_ids: std::collections::HashSet::new(),
             pending_delete_ids: Vec::new(),
+            ..Default::default()
         });
         app.mode = Mode::SavedViewsModal;
 
@@ -538,6 +495,7 @@ mod tests {
             scroll: 0,
             selected_ids: std::collections::HashSet::new(),
             pending_delete_ids: Vec::new(),
+            ..Default::default()
         });
 
         // Press 'd' to initiate delete confirmation
@@ -589,6 +547,7 @@ mod tests {
             scroll: 0,
             selected_ids: std::collections::HashSet::new(),
             pending_delete_ids: Vec::new(),
+            ..Default::default()
         });
 
         // 1. Space toggles item 0
@@ -682,34 +641,46 @@ mod tests {
     }
 
     #[test]
-    fn test_restore_saved_view_populates_action_state_and_emits_command() {
+    fn test_restore_saved_view_closes_the_modal_and_starts_the_plan() {
         let mut app = make_test_app();
-        let view = sample_view("v_xyz", "orders_view");
-        let cmd = restore_saved_view(&mut app, view.clone());
+        app.catalogs = vec!["iceberg".to_string()];
+        app.saved_views_modal = Some(SavedViewsModalState::default());
+        app.mode = Mode::SavedViewsModal;
+        let cmd = restore_saved_view(&mut app, sample_view("v_xyz", "orders_view"));
+        assert!(app.saved_views_modal.is_none());
+        assert_eq!(app.mode, Mode::Normal);
+        // schemas of the catalog are not cached yet: fetch them first
+        assert!(matches!(cmd, Some(Command::FetchSchemas { ref catalog }) if catalog == "iceberg"));
+        assert_eq!(app.restore.as_ref().unwrap().view.id, "v_xyz");
+    }
 
-        assert!(cmd.is_some());
-        if let Some(Command::ExecuteQuery {
-            query,
-            catalog,
-            schema,
-            table,
-            is_paginated,
-            ..
-        }) = cmd
-        {
-            assert_eq!(query, view.query);
-            assert_eq!(catalog, "iceberg");
-            assert_eq!(schema, "sales");
-            assert_eq!(table, "orders");
-            assert!(is_paginated);
-        } else {
-            panic!("Expected Command::ExecuteQuery");
-        }
-
-        if let Screen::Actions(a) = &app.screen {
-            assert_eq!(a.pending_view_restore.as_ref().unwrap().id, "v_xyz");
-        } else {
-            panic!("Expected Screen::Actions");
-        }
+    #[test]
+    fn save_prompt_captures_location_query_and_grid() {
+        let mut app = make_test_app();
+        app.config.url = "https://trino.example".into();
+        let mut res = crate::app::ResultsState::default();
+        res.hidden_columns.insert("secret".into());
+        app.screen = Screen::Actions(crate::app::ActionState {
+            catalog: "c".into(),
+            schema: "s".into(),
+            table: "t".into(),
+            selected: crate::app::Action::Sample.index(),
+            custom_sql: Some("SELECT a FROM t".into()),
+            results: Some(res),
+            ..Default::default()
+        });
+        open_save_view_prompt(&mut app);
+        let prompt = app.save_view_prompt.as_ref().unwrap();
+        assert_eq!(prompt.name_input, "c.s.t");
+        let v = &prompt.view;
+        assert_eq!(v.location.action, crate::app::Action::Sample);
+        assert_eq!(
+            v.query,
+            crate::view_location::QuerySource::Custom {
+                sql: "SELECT a FROM t".into()
+            }
+        );
+        assert_eq!(v.grid.hidden_columns, vec!["secret"]);
+        assert_eq!(v.connection.as_deref(), Some("https://trino.example"));
     }
 }

@@ -16,7 +16,7 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Paragraph, ScrollbarOrientation, ScrollbarState},
 };
 
 use crate::app::{AppliedFilterKind, AppliedFiltersModalState};
@@ -86,14 +86,8 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &AppliedFiltersModalState) {
             .map(|(idx, item)| {
                 let is_sel = idx == selected;
                 let (badge_text, badge_style) = match item.kind {
-                    AppliedFilterKind::Partition => (
-                        " [Partition] ",
-                        theme::bold_style(ratatui::style::Color::Cyan),
-                    ),
-                    AppliedFilterKind::Column => (
-                        " [Column]    ",
-                        theme::bold_style(ratatui::style::Color::Yellow),
-                    ),
+                    AppliedFilterKind::Partition => (" [Partition] ", theme::info_bold_style()),
+                    AppliedFilterKind::Column => (" [Column]    ", theme::warning_bold_style()),
                 };
 
                 let line_spans = if is_sel {
@@ -122,7 +116,7 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &AppliedFiltersModalState) {
         if total > visible_height && visible_height > 0 {
             let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll);
             frame.render_stateful_widget(
-                Scrollbar::default()
+                crate::tui::theme::scrollbar()
                     .orientation(ScrollbarOrientation::VerticalRight)
                     .begin_symbol(Some("▲"))
                     .end_symbol(Some("▼")),

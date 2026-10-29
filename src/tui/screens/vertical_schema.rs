@@ -52,9 +52,9 @@ pub fn render(
         Cell::from(" # ").style(theme::warning_bold_style()),
         Cell::from("Column Name").style(theme::info_bold_style()),
         Cell::from("Data Type").style(theme::header_style()),
-        Cell::from("Nullable").style(theme::bold_style(theme::DETAIL_FG)),
-        Cell::from("Key / Partition").style(theme::bold_style(theme::DETAIL_FG)),
-        Cell::from("Description").style(theme::bold_style(theme::SECONDARY_FG)),
+        Cell::from("Nullable").style(theme::bold_style(theme::detail_color())),
+        Cell::from("Key / Partition").style(theme::bold_style(theme::detail_color())),
+        Cell::from("Description").style(theme::bold_style(theme::secondary_color())),
     ];
     let header = Row::new(header_cells).bottom_margin(1);
 
@@ -101,7 +101,7 @@ pub fn render(
             current_row_y += max_h;
 
             let row_style = if is_mouse_sel {
-                theme::selection_style()
+                theme::text_selection_style()
             } else {
                 theme::text_style()
             };
@@ -159,10 +159,10 @@ pub fn render(
 
     frame.render_widget(table, inner);
 
-    use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+    use ratatui::widgets::{ScrollbarOrientation, ScrollbarState};
     let mut scroll_state = ScrollbarState::new(columns.len().saturating_sub(1)).position(scroll);
     frame.render_stateful_widget(
-        Scrollbar::default()
+        crate::tui::theme::scrollbar()
             .orientation(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("▲"))
             .end_symbol(Some("▼")),

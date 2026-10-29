@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::{ACTIONS, ActivePanel, App, Screen};
+use crate::app::{ACTIONS, ActivePanel, App, NoticeKind, Screen};
 use crate::tui::handler::{mouse, query};
 
+use super::line_select;
 use super::list::filter_items;
 
 pub fn format_csv_cell(val: &str) -> String {
@@ -36,6 +37,29 @@ pub fn format_csv_row<'a>(cells: impl IntoIterator<Item = &'a str>) -> String {
             .collect::<Vec<_>>()
             .join(",")
     }
+}
+
+/// CSV of a grid selection: the header row of `cols` always comes first, then
+/// the rows in `min_r..=max_r`.
+fn grid_selection_csv(
+    res: &crate::app::ResultsState,
+    min_r: usize,
+    max_r: usize,
+    cols: &[usize],
+) -> String {
+    let mut lines =
+        vec![format_csv_row(cols.iter().map(|c| {
+            res.columns.get(*c).map(|s| s.as_str()).unwrap_or("")
+        }))];
+    for r in min_r..=max_r {
+        if let Some(row) = res.rows.get(r) {
+            lines.push(format_csv_row(
+                cols.iter()
+                    .map(|c| row.get(*c).map(|s| s.as_str()).unwrap_or("")),
+            ));
+        }
+    }
+    lines.join("\n")
 }
 
 pub fn copy_active_pane_content(app: &mut App) {
@@ -116,6 +140,60 @@ pub fn copy_active_pane_content(app: &mut App) {
     }
 }
 
+/// The native copy shortcut (`Cmd+C` / `Ctrl+Shift+C`): copies whatever is
+/// selected, most specific first — a list row range, a mouse drag, a grid
+/// visual selection or cell, then the focused list row.
+pub fn copy_current_selection(app: &mut App) {
+    if line_select::copy_range(app) {
+        return;
+    }
+
+    if let (Some(anchor), Some(current)) = (app.mouse_selection_anchor, app.mouse_selection_current)
+        && anchor != current
+    {
+        let text = mouse::extract_selected_text(app, anchor, current);
+        if !text.is_empty() {
+            match query::try_copy_to_clipboard(&text) {
+                Ok(()) => app.set_notice(
+                    NoticeKind::Success,
+                    format!("Copied selection ({})", toast_summary(&text)),
+                ),
+                Err(err) => {
+                    app.set_notice(NoticeKind::Error, format!("Clipboard copy failed: {err}"))
+                }
+            }
+            return;
+        }
+    }
+
+    if grid_has_focus(app) {
+        copy_results_selection_or_cell(app);
+        return;
+    }
+
+    if line_select::copy_focused(app) {
+        return;
+    }
+
+    app.set_notice(
+        NoticeKind::Error,
+        "Nothing selected — drag, or press v / V to select, or Ctrl+E to copy the whole view",
+    );
+}
+
+/// True when the main viewer is showing the results grid and has focus.
+fn grid_has_focus(app: &App) -> bool {
+    let Screen::Actions(s) = &app.screen else {
+        return false;
+    };
+    app.active_panel == ActivePanel::MainViewer
+        && s.results.as_ref().is_some_and(|r| !r.columns.is_empty())
+        && !matches!(
+            ACTIONS.get(s.selected).map(|(_, _, a)| a),
+            Some(crate::app::Action::Partitions | crate::app::Action::Schema)
+        )
+}
+
 pub fn copy_results_selection_or_cell(app: &mut App) {
     let Screen::Actions(ref mut s) = app.screen else {
         return;
@@ -134,23 +212,12 @@ pub fn copy_results_selection_or_cell(app: &mut App) {
             let max_r = anchor_row
                 .max(res.selected_row)
                 .min(res.rows.len().saturating_sub(1));
-            let vis_cols = res.visible_columns();
-            let mut lines = Vec::new();
-            for r in min_r..=max_r {
-                if let Some(row) = res.rows.get(r) {
-                    let line = format_csv_row(
-                        vis_cols
-                            .iter()
-                            .map(|(c, _)| row.get(*c).map(|s| s.as_str()).unwrap_or("")),
-                    );
-                    lines.push(line);
-                }
-            }
-            let text = lines.join("\n");
+            let cols: Vec<usize> = res.visible_columns().iter().map(|(c, _)| *c).collect();
+            let text = grid_selection_csv(res, min_r, max_r, &cols);
             query::copy_to_clipboard(&text);
             let count = max_r.saturating_sub(min_r) + 1;
             app.copied_toast = Some((
-                format!("Copied {count} selected row(s) (CSV)"),
+                format!("Copied {count} selected row(s) with header (CSV)"),
                 std::time::Instant::now(),
             ));
             res.exit_visual_mode();
@@ -165,28 +232,18 @@ pub fn copy_results_selection_or_cell(app: &mut App) {
                 .min(res.rows.len().saturating_sub(1));
             let min_c = anchor_col.min(res.selected_col);
             let max_c = anchor_col.max(res.selected_col);
-            let vis_cols: Vec<_> = res
+            let cols: Vec<usize> = res
                 .visible_columns()
                 .into_iter()
-                .filter(|(c, _)| *c >= min_c && *c <= max_c)
+                .map(|(c, _)| c)
+                .filter(|c| *c >= min_c && *c <= max_c)
                 .collect();
-            let mut lines = Vec::new();
-            for r in min_r..=max_r {
-                if let Some(row) = res.rows.get(r) {
-                    let line = format_csv_row(
-                        vis_cols
-                            .iter()
-                            .map(|(c, _)| row.get(*c).map(|s| s.as_str()).unwrap_or("")),
-                    );
-                    lines.push(line);
-                }
-            }
-            let text = lines.join("\n");
+            let text = grid_selection_csv(res, min_r, max_r, &cols);
             query::copy_to_clipboard(&text);
             let r_count = max_r.saturating_sub(min_r) + 1;
-            let c_count = vis_cols.len();
+            let c_count = cols.len();
             app.copied_toast = Some((
-                format!("Copied {r_count}x{c_count} cell block (CSV)"),
+                format!("Copied {r_count}x{c_count} cell block with header (CSV)"),
                 std::time::Instant::now(),
             ));
             res.exit_visual_mode();
@@ -199,13 +256,18 @@ pub fn copy_results_selection_or_cell(app: &mut App) {
                 .cloned()
                 .unwrap_or_default();
             query::copy_to_clipboard(&cell_val);
-            let summary = if cell_val.len() > 30 {
-                format!("{}...", &cell_val[..27])
-            } else {
-                cell_val
-            };
+            let summary = cell_summary(&cell_val);
             app.copied_toast = Some((format!("Copied cell: {summary}"), std::time::Instant::now()));
         }
+    }
+}
+
+/// Short preview of a copied value for the toast (cut on a character, not a byte).
+fn cell_summary(value: &str) -> String {
+    if value.chars().count() > 30 {
+        format!("{}...", value.chars().take(27).collect::<String>())
+    } else {
+        value.to_string()
     }
 }
 
@@ -230,23 +292,12 @@ pub fn yank_whole_row(app: &mut App) {
         crate::app::VisualMode::None => (res.selected_row, res.selected_row),
     };
     let max_r = max_r.min(res.rows.len().saturating_sub(1));
-    let vis_cols = res.visible_columns();
-    let mut lines = Vec::new();
-    for r in min_r..=max_r {
-        if let Some(row) = res.rows.get(r) {
-            let line = format_csv_row(
-                vis_cols
-                    .iter()
-                    .map(|(c, _)| row.get(*c).map(|s| s.as_str()).unwrap_or("")),
-            );
-            lines.push(line);
-        }
-    }
-    let text = lines.join("\n");
+    let cols: Vec<usize> = res.visible_columns().iter().map(|(c, _)| *c).collect();
+    let text = grid_selection_csv(res, min_r, max_r, &cols);
     query::copy_to_clipboard(&text);
     let count = max_r.saturating_sub(min_r) + 1;
     app.copied_toast = Some((
-        format!("Copied {count} visible row(s) (CSV)"),
+        format!("Copied {count} visible row(s) with header (CSV)"),
         std::time::Instant::now(),
     ));
     res.exit_visual_mode();
@@ -264,6 +315,34 @@ pub fn toast_summary(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_grid_selection_csv_always_leads_with_the_header() {
+        let res = crate::app::ResultsState {
+            columns: vec!["id".into(), "name, full".into(), "n".into()],
+            rows: vec![
+                vec!["1".into(), "a".into(), "x".into()],
+                vec!["2".into(), "b".into(), "y".into()],
+            ],
+            ..Default::default()
+        };
+        // a block of cells from the second data row only, columns 0..=1
+        assert_eq!(
+            grid_selection_csv(&res, 1, 1, &[0, 1]),
+            "id,\"name, full\"\n2,b"
+        );
+        // a single column keeps its header too
+        assert_eq!(grid_selection_csv(&res, 0, 1, &[2]), "n\nx\ny");
+    }
+
+    #[test]
+    fn cell_summary_cuts_on_characters() {
+        // byte 27 falls inside "€" here; slicing bytes used to panic
+        let value = format!("{}€{}", "a".repeat(26), "b".repeat(10));
+        assert_eq!(cell_summary(&value), format!("{}€...", "a".repeat(26)));
+        assert_eq!(cell_summary("short"), "short");
+        assert_eq!(cell_summary(&"界".repeat(40)).chars().count(), 30);
+    }
 
     #[test]
     fn test_format_csv_row_single_col_is_raw() {

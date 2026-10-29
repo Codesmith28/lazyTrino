@@ -86,17 +86,3 @@ pub fn help_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
     }
     None
 }
-
-#[allow(dead_code)]
-pub fn query_inspector_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
-    match key.code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            app.query_inspector_scroll = app.query_inspector_scroll.saturating_add(1);
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            app.query_inspector_scroll = app.query_inspector_scroll.saturating_sub(1);
-        }
-        _ => {}
-    }
-    None
-}

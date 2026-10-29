@@ -16,9 +16,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{
-        List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    },
+    widgets::{List, ListItem, ListState, Paragraph, ScrollbarOrientation, ScrollbarState},
 };
 
 use crate::app::{SaveViewPromptState, SavedViewsModalState};
@@ -105,16 +103,29 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &SavedViewsModalState) {
                     Span::styled(format!("  [{}]", view.saved_at), theme::muted_style()),
                 ]);
 
-                let q_preview = if view.query.len() > 60 {
-                    format!("{}...", &view.query[..57])
+                // Where the view opens, so similar names can be told apart.
+                let mut details = view.location.breadcrumb();
+                if let crate::view_location::QuerySource::Custom { sql } = &view.query {
+                    details.push_str(" · SQL: ");
+                    details.push_str(sql);
+                }
+                let details: String = if details.chars().count() > 90 {
+                    details.chars().take(87).chain("...".chars()).collect()
                 } else {
-                    view.query.clone()
+                    details
                 };
+                let mut badges = view.summary();
+                if let Some(url) = &view.connection
+                    && !modal.current_url.is_empty()
+                    && *url != modal.current_url
+                {
+                    badges.push_str(" | saved on another cluster");
+                }
 
                 let detail_line = Line::from(vec![
                     Span::raw("      "),
-                    Span::styled(view.summary(), theme::text_style()),
-                    Span::styled(format!(" | SQL: {q_preview}"), theme::muted_style()),
+                    Span::styled(badges, theme::text_style()),
+                    Span::styled(format!(" | {details}"), theme::muted_style()),
                 ]);
 
                 let item_style = if is_selected {
@@ -135,7 +146,7 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &SavedViewsModalState) {
             let mut scroll_state =
                 ScrollbarState::new(modal.views.len().saturating_sub(1)).position(modal.selected);
             frame.render_stateful_widget(
-                Scrollbar::default()
+                crate::tui::theme::scrollbar()
                     .orientation(ScrollbarOrientation::VerticalRight)
                     .begin_symbol(Some("▲"))
                     .end_symbol(Some("▼")),

@@ -118,15 +118,16 @@ lazyTrino --profile prod
 
 - 🗂️ **Catalog & Schema Hierarchy**: Drill down from Catalogs $\rightarrow$ Schemas $\rightarrow$ Tables $\rightarrow$ Actions.
 - 🌲 **Partition Drill-Down (`cd`/`ls` style)**: Browse partitioned tables one partition level at a time with instant counts and no split errors.
-- 📑 **Saved Table Views (`Ctrl+S` / `Ctrl+O` / `B`)**: Name and persist custom view states (filters, hidden columns, sort orders) with multi-select and batch deletion.
+- 📑 **Saved Table Views (`Ctrl+S` / `Ctrl+O` / `B`)**: Save *where* you are (catalog › schema › table › action › partition path), your custom SQL if any, and the grid state (filters, hidden columns, sort). Restoring walks there like you would, so Back / Esc / `<` and drilling deeper keep working, and generated queries are rebuilt against the table's current partition layout.
 - 🔍 **Nested JSON & Map Flattening (`C`)**: Interactive column modal with tree-view drilldown that generates unnesting Trino SQL queries.
 - 🎯 **Advanced Vim Visual Modes**: Visual Line (`V`), Visual Block (`Ctrl+V`), cursor/anchor swap (`o`/`O`), and Shift-drag mouse selection.
-- 📋 **Context-Aware Clipboard & Export**: Single cell copy, multi-cell/row CSV export (`y`), and full dataset CSV file dump (`Y`).
+- 📋 **Copy Anything, Export Everything**: Select with the mouse or `v`/`V`/`Ctrl+V`/`Shift+arrows` and copy (`y`, `Cmd+C`); `Ctrl+E` copies or exports the *entire* view (to the clipboard, or to `~/Downloads/lazytrino/*.csv`).
 - 🔃 **Column-wise Sorting (`S`)**: Cycle active column sort: Ascending (`▲`) $\rightarrow$ Descending (`▼`) $\rightarrow$ None.
 - 🎛️ **Column Filtering (`F`)**: Numeric comparator filters (`>`, `<`, `>=`, `<=`, `=`, `!=`, `BETWEEN`) and distinct categorical value checklists.
 - 👁️ **Column Visibility Manager (`C`)**: Hide or display specific columns in wide tables.
 - ✍️ **Interactive SQL Query Bar (`q` / `:`)**: Buffer editing with text selection, clipboard support, and instant query execution.
 - 🖱️ **Mouse & Resizable Split**: Click-to-select, wheel scrolling, and draggable vertical pane divider.
+- 🎨 **Terminal-Native Colors**: Uses only your terminal's own colors (default text plus its 16 ANSI colors), so it follows your light or dark profile. Catalogs, schemas and tables get their own colors; grid values are tinted by type (numbers, booleans, dates, NULL); the SQL bar is syntax-highlighted; footer keys stand out.
 - 📊 **Audit Logs & Status Bar**: Real-time query execution monitoring, latency (ms), row counts, and traceback errors.
 
 ---
@@ -146,7 +147,12 @@ lazyTrino --profile prod
 | `g` / `G` | Jump to top / bottom of list |
 | `<number> + Enter` | Jump directly to item number |
 | `/` | Focus search bar (in menus and modals) |
+| `r` | **Refresh** the current view: drops every cached query result and reloads the catalog / schema / table list, or the table's DDL, columns, partition level and the rows behind the grid |
 | `Tab` / `Shift+H` / `Shift+L` | Toggle focus between Menu Pane (left) and Preview Pane (right) |
+| Click / wheel on the bottom help bar | Scroll the key hints sideways when the terminal is too narrow for them (`‹` / `›` mark more). Clicking gives the bar focus: `←`/`→` (`h`/`l`), `Home`/`End` then scroll *it* and not the pane; `Esc` or any other key hands focus back |
+| `{` / `}` or mouse wheel over it | Scroll the **Executed Queries** pane when the log, a long query or an error is taller than it |
+| `j`/`k`, `PgUp`/`PgDn`, wheel | In the results grid, scroll *inside* a row taller than the pane (e.g. **Table DDL**, or a long error message) before moving to the next row; the border shows `lines 25–48 of 118` |
+| `h`/`l`, `←`/`→`, `Shift`+wheel | In **Partitions**, scroll the tree sideways when a line (such as a long `s3://…` location) is wider than the pane |
 | `?` | Toggle Help overlay |
 | `Ctrl+C` | Quit lazyTrino |
 
@@ -179,26 +185,35 @@ When a table is selected in the menu, press the action hotkey:
 | `Ctrl+S` | Save active view state (prompt for view name) |
 | `Ctrl+O` or `B` | Browse and restore saved views |
 | `q` or `:` | Focus Interactive SQL Query Bar |
-| `Esc` | Return focus to Menu Pane / exit drilldown level / close modal |
+| `Esc` | Clear selection if any; otherwise return focus to Menu Pane / exit drilldown level / close modal |
+| `Ctrl+E` | Copy or export the entire current view (clipboard / CSV file) |
 
-### Vim Visual Modes & Clipboard
+### Selection, Copy & Export
+
+Works in the catalog / schema / table lists, partition drill-down, and the results grid. The Partitions tree and Schema views have no row cursor, so use mouse drag there.
 
 | Key | Mode / Action |
 | --- | --- |
-| `V` | Enter **Visual Line** mode (select entire rows) |
-| `Ctrl+V` | Enter **Visual Block** mode (rectangular cell block selection) |
-| `Shift + Arrow keys` | Automatically enter and extend visual selection |
-| `o` / `O` | Swap cursor and anchor end in visual selection |
-| `y` | Yank selection to clipboard (CSV format for multi-cell/multi-row, raw string for single cell) |
-| `Y` | Yank active row to clipboard / export results to CSV file |
-| `Esc` | Cancel visual mode |
+| Mouse drag | Select anything visible (including record counts, DDL, banners); copied on release and kept highlighted (reverse video in your terminal's own colors) until you click, scroll, type or press `Esc` |
+| `V` | **Visual Line**: select whole rows |
+| `v` / `Ctrl+V` | **Visual / Visual Block**: select a range (grid: rectangular cell block) |
+| `Shift + Arrow keys` | Start and extend a selection (grid: one cell per press; `Ctrl/Alt + ←/→` or `H`/`L` jump 5 columns) |
+| `o` / `O` | Swap cursor and anchor end (grid) |
+| `y` | Copy selection (grid selections are CSV and always include the column header) and leave visual mode |
+| `Y` | Copy the active grid row(s) as CSV |
+| `Cmd+C` / `Ctrl+Shift+C` | Copy selection, else the focused cell / row. Only reaches lazyTrino if your terminal forwards it (kitty protocol terminals: kitty, WezTerm, Ghostty, foot, recent iTerm2/Alacritty) |
+| `Shift`/`Option` + drag | Your terminal's native selection, with its native copy shortcut |
+| `Esc` | Deselect. Only when something is selected; otherwise `Esc` keeps its usual meaning |
+| `Ctrl+E` | **Copy / export entire view**: choose *Copy to clipboard* or *Export to CSV* (`<Downloads>/lazytrino/<name>_<UTC timestamp>.csv`, never overwrites). Large views default to CSV because a big clipboard copy can freeze the UI |
 
 ### Saved Views Modal (`Ctrl+O` / `B`)
+
+Saved views are stored in `saved_views.json` in the lazyTrino config directory. Files from older versions are migrated automatically (the original is kept as `saved_views.v1.json`), and a file that cannot be read is never overwritten. If the table's partition columns changed since saving, the matching prefix of the partition path is restored and the notification says what was dropped.
 
 | Key | Action |
 | --- | --- |
 | `j` / `k` or `↓` / `↑` | Move through saved views |
-| `Enter` | Restore selected saved view (filters, sorting, column visibility) |
+| `Enter` | Restore the selected view: loads the schema and table lists on the way (so every pane before it is navigable), reopens the table, then its partition path, query and grid state. Any key cancels a restore in progress |
 | `Space` | Toggle multi-selection checkbox on active view |
 | `a` | Select all / Deselect all views |
 | `d` | Delete selected view(s) (prompts `y/n` confirmation) |
@@ -209,10 +224,28 @@ When a table is selected in the menu, press the action hotkey:
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Execute SQL query |
+| `Enter` | Execute SQL query (from any mode) |
+| `← → ↑ ↓` / `Home` / `End` | Move the cursor (`↑ ↓` walk wrapped rows); works in every vim mode |
+| `Opt/Alt + ← / →`, `Ctrl + ← / →` | Hop words (also `Opt+b` / `Opt+f`, which is what macOS terminals send for Option+arrow) |
+| `Cmd + ← / →` | Jump to the start / end of the query (needs a terminal that forwards Cmd, e.g. kitty-protocol terminals) |
+| `Opt+Backspace` / `Cmd+Backspace` | Delete previous word / delete to the start (insert mode) |
 | `Shift + ← / →` | Select text within query buffer |
 | `Ctrl+C` / `Ctrl+V` | Copy selected SQL text / paste clipboard text |
-| `Esc` | Return to results grid / cancel query editing |
+| `Esc` | Insert → Normal mode; in Normal mode leave the query bar (cancels a pending `d`/`c`/`y` or count first) |
+
+The query bar is a small vim editor. It opens in **INSERT** mode so you can type right away; `Esc` switches to **NORMAL**:
+
+| Normal mode | Action |
+| --- | --- |
+| `h j k l`, `w b e`, `W B E`, `0 ^ $`, `gg G`, `f F t T` + char, `;` `,` | Motions (`j`/`k` move between wrapped rows). Counts work: `3w` |
+| `d` / `c` / `y` + motion | Delete / change / yank; `dd`, `cc`, `yy` act on the whole query |
+| `iw aw i" a" i' a' i( a( i[ a[ i{ a{` | Text objects, e.g. `ci'`, `di(`, `daw` |
+| `x X D C s S r ~` | Quick edits |
+| `i a I A` (`o O` too) | Enter insert mode |
+| `p` / `P` | Paste (the vim register, else the clipboard) |
+| `u` / `Ctrl+R` | Undo / redo |
+| `v` | Visual mode: extend with motions or text objects, then `y` / `d` / `c`; `o` swaps ends |
+| `y` | Also copies to the system clipboard |
 
 ### Mouse Controls
 
@@ -242,6 +275,7 @@ When a table is selected in the menu, press the action hotkey:
 | `--user` | | `$USER` (or `trino`) | Trino username |
 | `--password` | `--pass` | *(none)* | Trino password |
 | `--profile <NAME>` | | *(none)* | Load connection defaults from named profile |
+| `--query-cache-limit <COUNT>` | `--cache-limit` | `30` | How many query results to keep in memory. A repeated query is answered from the cache (nothing is sent to Trino) and shows as `[cached]` in the Executed Queries pane; `0` disables caching. Cached results expire after 2 minutes, and `r` clears them at any time. Catalog, schema, table, partition and count lookups are never cached. Also settable as `query_cache_limit` in the config file or a profile |
 | `--log-level <LEVEL>` | | `info` | Set file log level (`trace`, `debug`, `info`, `warn`, `error`) |
 | `--no-log` | | `false` | Disable file logging entirely |
 | `--update` | `-u` | | Check for and install latest GitHub release |

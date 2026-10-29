@@ -13,15 +13,26 @@
 // limitations under the License.
 
 use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
 use super::types::QueryResults;
 
-pub const DEFAULT_QUERY_CACHE_LIMIT: usize = 10;
+pub const DEFAULT_QUERY_CACHE_LIMIT: usize = 30;
+
+/// How long a cached result is served before Trino is asked again.
+pub const DEFAULT_QUERY_CACHE_TTL: Duration = Duration::from_secs(120);
+
+#[derive(Debug, Clone)]
+struct Entry {
+    results: QueryResults,
+    stored_at: Instant,
+}
 
 #[derive(Debug, Clone)]
 pub struct QueryCache {
     capacity: usize,
-    entries: HashMap<String, QueryResults>,
+    ttl: Duration,
+    entries: HashMap<String, Entry>,
     order: VecDeque<String>,
 }
 
@@ -33,28 +44,57 @@ impl Default for QueryCache {
 
 impl QueryCache {
     pub fn new(capacity: usize) -> Self {
+        Self::with_ttl(capacity, DEFAULT_QUERY_CACHE_TTL)
+    }
+
+    pub fn with_ttl(capacity: usize, ttl: Duration) -> Self {
         Self {
             capacity,
+            ttl,
             entries: HashMap::with_capacity(capacity),
             order: VecDeque::with_capacity(capacity),
         }
     }
 
+    fn is_fresh(&self, entry: &Entry) -> bool {
+        entry.stored_at.elapsed() < self.ttl
+    }
+
+    fn remove(&mut self, sql: &str) {
+        self.entries.remove(sql);
+        if let Some(pos) = self.order.iter().position(|k| k == sql) {
+            self.order.remove(pos);
+        }
+    }
+
+    /// Returns a fresh copy of the cached results. An entry older than the
+    /// TTL is dropped and reported as a miss.
     pub fn get(&mut self, sql: &str) -> Option<QueryResults> {
         if self.capacity == 0 {
             return None;
         }
-        if let Some(results) = self.entries.get(sql) {
-            if let Some(pos) = self.order.iter().position(|k| k == sql) {
-                self.order.remove(pos);
-            }
-            self.order.push_back(sql.to_string());
-            let mut cached = results.clone();
-            cached.duration_ms = 0;
-            Some(cached)
-        } else {
-            None
+        let fresh = self.entries.get(sql).map(|entry| self.is_fresh(entry))?;
+        if !fresh {
+            self.remove(sql);
+            return None;
         }
+        if let Some(pos) = self.order.iter().position(|k| k == sql) {
+            self.order.remove(pos);
+        }
+        self.order.push_back(sql.to_string());
+        let mut cached = self.entries.get(sql)?.results.clone();
+        cached.duration_ms = 0;
+        Some(cached)
+    }
+
+    /// Whether `sql` would be answered from the cache, without touching its
+    /// recency.
+    pub fn contains(&self, sql: &str) -> bool {
+        self.capacity > 0
+            && self
+                .entries
+                .get(sql)
+                .is_some_and(|entry| self.is_fresh(entry))
     }
 
     pub fn insert(&mut self, sql: String, results: QueryResults) {
@@ -71,7 +111,13 @@ impl QueryCache {
             self.entries.remove(&oldest);
         }
         self.order.push_back(sql.clone());
-        self.entries.insert(sql, results);
+        self.entries.insert(
+            sql,
+            Entry {
+                results,
+                stored_at: Instant::now(),
+            },
+        );
     }
 
     pub fn clear(&mut self) {
@@ -102,6 +148,58 @@ mod tests {
             data: vec![vec![tag.to_string()]],
             duration_ms: 100,
         }
+    }
+
+    #[test]
+    fn default_capacity_is_30_queries() {
+        assert_eq!(DEFAULT_QUERY_CACHE_LIMIT, 30);
+        assert_eq!(QueryCache::default().capacity(), 30);
+        assert_eq!(crate::config::DEFAULT_QUERY_CACHE_LIMIT, 30);
+        assert_eq!(
+            crate::config::ConnectionConfig::default().query_cache_limit,
+            30
+        );
+        let mut cache = QueryCache::default();
+        for i in 0..40 {
+            cache.insert(format!("q{i}"), dummy_results("x"));
+        }
+        assert_eq!(cache.len(), 30);
+        assert!(!cache.contains("q9"), "oldest entries are evicted");
+        assert!(cache.contains("q10") && cache.contains("q39"));
+    }
+
+    #[test]
+    fn the_default_ttl_is_two_minutes() {
+        assert_eq!(DEFAULT_QUERY_CACHE_TTL, Duration::from_secs(120));
+    }
+
+    #[test]
+    fn entries_are_served_until_the_ttl_passes() {
+        let mut cache = QueryCache::with_ttl(2, Duration::from_secs(3600));
+        cache.insert("Q1".into(), dummy_results("1"));
+        assert!(cache.contains("Q1"));
+        assert_eq!(cache.get("Q1").unwrap().data[0][0], "1");
+    }
+
+    #[test]
+    fn expired_entries_are_a_miss_and_are_dropped() {
+        let mut cache = QueryCache::with_ttl(2, Duration::ZERO);
+        cache.insert("Q1".into(), dummy_results("1"));
+        assert!(!cache.contains("Q1"), "contains() ignores expired entries");
+        assert!(cache.get("Q1").is_none());
+        assert_eq!(cache.len(), 0, "a miss on an expired entry drops it");
+    }
+
+    #[test]
+    fn contains_peeks_without_changing_eviction_order() {
+        let mut cache = QueryCache::new(2);
+        cache.insert("a".into(), dummy_results("a"));
+        cache.insert("b".into(), dummy_results("b"));
+        assert!(cache.contains("a"));
+        // `a` was only peeked at, so it is still the oldest and goes first
+        cache.insert("c".into(), dummy_results("c"));
+        assert!(!cache.contains("a") && cache.contains("b") && cache.contains("c"));
+        assert!(!QueryCache::new(0).contains("a"));
     }
 
     #[test]

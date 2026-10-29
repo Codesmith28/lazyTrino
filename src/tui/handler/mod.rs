@@ -22,13 +22,17 @@ use crate::trino::error::TrinoClientError;
 pub mod applied_filters_modal;
 pub mod column_modal;
 mod commands;
-mod export;
+pub mod export;
 pub mod filter_modal;
+pub mod footer;
 pub mod help_modal;
 mod mouse;
 mod navigation;
 mod query;
+pub mod query_vim;
+pub mod restore;
 pub mod saved_views_modal;
+mod screen_text;
 
 pub fn extract_from_tables(sql: &str) -> Vec<String> {
     query::extract_from_tables(sql)
@@ -43,6 +47,15 @@ pub fn validate_and_build_query(
     query::validate_and_build_query(user_input, catalog, schema, table)
 }
 
+/// The keyboard row selection of the focused list view, if it still applies.
+pub fn live_line_selection(app: &App) -> Option<LineSelection> {
+    navigation::line_select::live_selection(app)
+}
+
+pub fn selection_uses_screen_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -> bool {
+    mouse::selection_uses_screen_text(app, anchor, current)
+}
+
 pub fn handle_pane_focus_keys(app: &mut App, key: KeyEvent) -> bool {
     navigation::handle_pane_focus_keys(app, key)
 }
@@ -52,6 +65,9 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
 }
 
 pub fn handle_mouse_sync(app: &mut App, mouse: crossterm::event::MouseEvent) -> Option<Command> {
+    if app.restore.is_some() && matches!(mouse.kind, crossterm::event::MouseEventKind::Down(_)) {
+        restore::cancel(app);
+    }
     mouse::handle_mouse_sync(app, mouse)
 }
 
@@ -81,11 +97,14 @@ fn preserve_public_api_symbols() {
 }
 
 pub enum Command {
+    /// Several commands to dispatch in order.
+    Batch(Vec<Command>),
     Connect {
         url: String,
         user: String,
         password: String,
     },
+    FetchCatalogs,
     FetchSchemas {
         catalog: String,
     },
@@ -108,6 +127,9 @@ pub enum Command {
         /// resulting `ResultsState` (and any subsequent `FetchNextPage`)
         /// keeps using them. Empty for ordinary, non-drill-down queries.
         filters: Vec<(String, String)>,
+        /// Skip the query cache. Set for metadata actions (Schema, Show
+        /// Stats, Partitions) so they show the live state of the table.
+        fresh: bool,
     },
     FetchNextPage {
         catalog: String,
@@ -144,6 +166,10 @@ pub enum AsyncResult {
         user: String,
         password: String,
         result: Result<(TrinoClient, Vec<String>), TrinoClientError>,
+    },
+    FetchCatalogs {
+        log_id: usize,
+        result: Result<Vec<String>, TrinoClientError>,
     },
     FetchSchemas {
         log_id: usize,
@@ -220,8 +246,34 @@ pub enum AsyncResult {
     },
 }
 
+/// `Cmd+C` (kitty protocol: Super) or `Ctrl+Shift+C`.
+fn is_native_copy_chord(code: KeyCode, mods: KeyModifiers) -> bool {
+    let is_c = matches!(code, KeyCode::Char('c') | KeyCode::Char('C'));
+    is_c && (mods.contains(KeyModifiers::SUPER)
+        || (mods.contains(KeyModifiers::CONTROL)
+            && (mods.contains(KeyModifiers::SHIFT) || code == KeyCode::Char('C'))))
+}
+
 pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     preserve_public_api_symbols();
+    app.sync_search_scope();
+    // The user took over while a saved view was being rebuilt.
+    if app.restore.is_some() {
+        restore::cancel(app);
+    }
+
+    // The painted mouse selection is positional, so any key that could move
+    // content invalidates it. Esc (deselect), `y` and the native copy chords
+    // act on it instead.
+    if app.mouse_selection_committed {
+        let code = navigation::normalize_key_code(key.code);
+        let keeps_selection = code == KeyCode::Esc
+            || is_native_copy_chord(code, key.modifiers)
+            || (code == KeyCode::Char('y') && key.modifiers.is_empty());
+        if !keeps_selection {
+            app.mouse_selection_committed = false;
+        }
+    }
 
     // Guard against mode desynchronization: if any modal is currently visible,
     // key events MUST be handled by that modal and never leak to background panes.
@@ -262,7 +314,15 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return applied_filters_modal::handle_applied_filters_modal_key(app, key);
     }
 
+    if app.export_modal.is_some() {
+        if app.mode != Mode::ExportModal {
+            app.mode = Mode::ExportModal;
+        }
+        return export::handle_export_modal_key(app, key);
+    }
+
     match app.mode {
+        Mode::ExportModal => return export::handle_export_modal_key(app, key),
         Mode::HelpModal => return help_modal::handle_help_modal_key(app, key),
         Mode::FilterModal => return filter_modal::handle_filter_modal_key(app, key),
         Mode::ColumnModal => return column_modal::handle_column_modal_key(app, key),
@@ -276,7 +336,21 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         Mode::Normal => {}
     }
 
+    // A focused help bar takes its scroll keys before any pane can see them.
+    if footer::handle_key(app, key) {
+        return None;
+    }
+
     let code = navigation::normalize_key_code(key.code);
+
+    // Native copy shortcuts. Must run before the Ctrl+C quit check: with the
+    // kitty keyboard protocol, Ctrl+Shift+C arrives as Ctrl+C plus Shift.
+    // (Terminals that handle Cmd+C / Ctrl+Shift+C themselves never forward
+    // them; the drag-to-select auto-copy and `y` cover those.)
+    if is_native_copy_chord(code, key.modifiers) {
+        navigation::clipboard::copy_current_selection(app);
+        return None;
+    }
 
     if code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         info!("User pressed Ctrl+C, quitting...");
@@ -300,7 +374,25 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return navigation::connect_keys(app, key);
     }
 
+    if code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        export::open_export_modal(app);
+        return None;
+    }
+
+    // Esc deselects first; it only falls through to its normal meaning
+    // (back / focus menu pane) when nothing is selected.
+    navigation::line_select::prune(app);
+    if code == KeyCode::Esc && app.has_active_selection() {
+        app.number_buffer.clear();
+        app.clear_all_selections();
+        return None;
+    }
+
     if navigation::handle_pane_focus_keys(app, key) {
+        return None;
+    }
+
+    if navigation::line_select::handle_key(app, key) {
         return None;
     }
 
@@ -316,6 +408,14 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         return None;
     }
 
+    // `{` / `}` scroll the Executed Queries pane (it has no focus of its own;
+    // the mouse wheel over it works too).
+    if matches!(code, KeyCode::Char('{') | KeyCode::Char('}')) {
+        let delta = if code == KeyCode::Char('{') { -1 } else { 1 };
+        crate::tui::screens::query_inspector::scroll_by(app, delta);
+        return None;
+    }
+
     if code == KeyCode::Char('/')
         && matches!(
             app.screen,
@@ -324,6 +424,11 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
     {
         app.mode = Mode::Search;
         return None;
+    }
+
+    // `r` drops the cached query results and reloads the view on screen.
+    if code == KeyCode::Char('r') && key.modifiers.is_empty() && navigation::refresh::applies(app) {
+        return navigation::refresh::refresh_current_view(app);
     }
 
     if code == KeyCode::Esc {
@@ -361,5 +466,250 @@ pub fn handle_key_sync(app: &mut App, key: KeyEvent) -> Option<Command> {
         Screen::Table(_) => navigation::table_keys(app, key),
         Screen::Actions(_) => navigation::actions_keys(app, key),
         Screen::Help => navigation::help_keys(app, key),
+    }
+}
+
+#[cfg(test)]
+mod router_tests {
+    //! Key-binding tests that go through `handle_key_sync` (the real router),
+    //! so global handlers that shadow per-screen ones are exercised too.
+    use super::*;
+    use crate::config::ConnectionConfig;
+    use crossterm::event::{KeyEvent, KeyModifiers as M};
+
+    fn press(app: &mut App, code: KeyCode, mods: M) {
+        handle_key_sync(app, KeyEvent::new(code, mods));
+    }
+
+    fn schema_app() -> App {
+        let mut app = App::new(ConnectionConfig::default(), false);
+        app.catalogs = vec!["hive".into()];
+        app.screen = Screen::Schema(SchemaState {
+            catalog: "hive".into(),
+            items: vec!["a".into(), "b".into(), "c".into()],
+            selected: 1,
+        });
+        app
+    }
+
+    fn grid_app() -> App {
+        let res = ResultsState {
+            columns: vec!["a".into(), "b".into()],
+            rows: vec![vec!["1".into(), "2".into()], vec!["3".into(), "4".into()]],
+            ..Default::default()
+        };
+        let mut app = App::new(ConnectionConfig::default(), false);
+        app.screen = Screen::Actions(ActionState {
+            catalog: "c".into(),
+            schema: "s".into(),
+            table: "t".into(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        });
+        app.active_panel = ActivePanel::MainViewer;
+        app
+    }
+
+    #[test]
+    fn search_stays_in_its_pane_and_is_dropped_on_drill_or_back() {
+        let mut app = schema_app();
+        press(&mut app, KeyCode::Char('/'), M::NONE);
+        press(&mut app, KeyCode::Char('b'), M::NONE);
+        press(&mut app, KeyCode::Enter, M::NONE); // close the search bar
+        assert_eq!(app.search_query, "b");
+
+        // another pane (drill-down) shows its own, unfiltered list
+        app.screen = Screen::Table(TableState {
+            catalog: "hive".into(),
+            schema: "b".into(),
+            items: vec!["t1".into(), "t2".into()],
+            selected: 0,
+        });
+        press(&mut app, KeyCode::Down, M::NONE);
+        assert!(app.search_query.is_empty());
+
+        // and the previous pane is not filtered when coming back
+        app.screen = schema_app().screen;
+        press(&mut app, KeyCode::Down, M::NONE);
+        assert!(app.search_query.is_empty());
+    }
+
+    #[test]
+    fn braces_scroll_the_executed_queries_pane() {
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+        let mut app = schema_app();
+        for i in 0..30 {
+            let id = app.add_query_log(format!("SELECT {i}"));
+            app.complete_query_log_success(id, 1, 1);
+        }
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| {
+            crate::tui::screens::query_inspector::render(f, Rect::new(0, 17, 80, 7), &app)
+        })
+        .unwrap();
+        press(&mut app, KeyCode::Char('}'), M::NONE);
+        press(&mut app, KeyCode::Char('}'), M::NONE);
+        assert_eq!(app.query_inspector_scroll, 2);
+        press(&mut app, KeyCode::Char('{'), M::NONE);
+        assert_eq!(app.query_inspector_scroll, 1);
+        // the list cursor is not affected
+        assert!(matches!(&app.screen, Screen::Schema(s) if s.selected == 1));
+    }
+
+    #[test]
+    fn search_survives_keys_within_the_same_pane() {
+        let mut app = schema_app();
+        press(&mut app, KeyCode::Char('/'), M::NONE);
+        press(&mut app, KeyCode::Char('a'), M::NONE);
+        press(&mut app, KeyCode::Enter, M::NONE);
+        press(&mut app, KeyCode::Down, M::NONE);
+        press(&mut app, KeyCode::Up, M::NONE);
+        assert_eq!(app.search_query, "a");
+    }
+
+    fn in_visual(app: &App) -> bool {
+        matches!(&app.screen, Screen::Actions(s)
+            if s.results.as_ref().is_some_and(|r| r.is_in_visual_mode()))
+    }
+
+    #[test]
+    fn esc_clears_grid_visual_mode_before_leaving_the_pane() {
+        let mut app = grid_app();
+        press(&mut app, KeyCode::Char('V'), M::SHIFT);
+        assert!(in_visual(&app));
+
+        press(&mut app, KeyCode::Esc, M::NONE);
+        assert!(!in_visual(&app), "first Esc deselects");
+        assert_eq!(app.active_panel, ActivePanel::MainViewer, "and stays put");
+
+        press(&mut app, KeyCode::Esc, M::NONE);
+        assert_eq!(
+            app.active_panel,
+            ActivePanel::MenuPane,
+            "second Esc is the usual Esc"
+        );
+    }
+
+    #[test]
+    fn esc_clears_list_selection_before_going_back() {
+        let mut app = schema_app();
+        press(&mut app, KeyCode::Char('V'), M::SHIFT);
+        press(&mut app, KeyCode::Char('j'), M::NONE);
+        assert!(app.line_selection.is_some());
+
+        press(&mut app, KeyCode::Esc, M::NONE);
+        assert!(app.line_selection.is_none());
+        assert!(
+            matches!(app.screen, Screen::Schema(_)),
+            "still on the schema list"
+        );
+
+        press(&mut app, KeyCode::Esc, M::NONE);
+        assert!(
+            matches!(app.screen, Screen::Catalog(_)),
+            "now Esc goes back"
+        );
+    }
+
+    #[test]
+    fn esc_is_not_swallowed_by_an_invisible_click_anchor() {
+        let mut app = schema_app();
+        // a bare click leaves anchors but nothing visible to deselect
+        app.mouse_selection_anchor = Some((3, 3));
+        app.mouse_selection_current = Some((3, 3));
+        press(&mut app, KeyCode::Esc, M::NONE);
+        assert!(matches!(app.screen, Screen::Catalog(_)));
+    }
+
+    #[test]
+    fn esc_clears_an_in_progress_mouse_drag_selection() {
+        let mut app = schema_app();
+        app.mouse_selection_anchor = Some((1, 1));
+        app.mouse_selection_current = Some((5, 4));
+        app.is_selecting_text = true;
+        press(&mut app, KeyCode::Esc, M::NONE);
+        assert!(!app.is_selecting_text && !app.has_mouse_selection());
+        assert!(matches!(app.screen, Screen::Schema(_)));
+    }
+
+    #[test]
+    fn stale_list_selection_does_not_swallow_esc() {
+        let mut app = schema_app();
+        press(&mut app, KeyCode::Char('V'), M::SHIFT);
+        // async refresh replaces the list while the selection is anchored
+        if let Screen::Schema(s) = &mut app.screen {
+            s.items.push("d".into());
+        }
+        press(&mut app, KeyCode::Esc, M::NONE);
+        assert!(
+            matches!(app.screen, Screen::Catalog(_)),
+            "stale selection was pruned"
+        );
+    }
+
+    #[test]
+    fn ctrl_e_opens_modal_which_owns_the_keyboard_and_mouse() {
+        let mut app = schema_app();
+        press(&mut app, KeyCode::Char('e'), M::CONTROL);
+        assert_eq!(app.mode, Mode::ExportModal);
+
+        // keys must not leak to the list behind
+        press(&mut app, KeyCode::Char('j'), M::NONE);
+        press(&mut app, KeyCode::Char('V'), M::SHIFT);
+        press(&mut app, KeyCode::Char('l'), M::NONE);
+        assert!(matches!(&app.screen, Screen::Schema(s) if s.selected == 1));
+        assert!(app.line_selection.is_none());
+
+        // Ctrl+E again toggles it closed, and must not export anything
+        press(&mut app, KeyCode::Char('e'), M::CONTROL);
+        assert!(app.export_modal.is_none());
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.notice_toast.is_none(), "closing must not copy/export");
+
+        press(&mut app, KeyCode::Char('e'), M::CONTROL);
+        press(&mut app, KeyCode::Esc, M::NONE);
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.export_modal.is_none());
+        assert!(matches!(app.screen, Screen::Schema(_)));
+    }
+
+    #[test]
+    fn ctrl_e_is_inert_on_screens_with_nothing_to_export() {
+        let mut app = App::new(ConnectionConfig::default(), false); // Connect screen
+        press(&mut app, KeyCode::Char('e'), M::CONTROL);
+        assert!(app.export_modal.is_none());
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn native_copy_chords_never_quit_but_plain_ctrl_c_does() {
+        for (code, mods) in [
+            (KeyCode::Char('c'), M::SUPER),
+            (KeyCode::Char('c'), M::CONTROL | M::SHIFT),
+            (KeyCode::Char('C'), M::CONTROL | M::SHIFT),
+            (KeyCode::Char('C'), M::CONTROL),
+        ] {
+            let mut app = App::new(ConnectionConfig::default(), false);
+            press(&mut app, code, mods);
+            assert!(!app.should_quit, "{code:?} {mods:?} must not quit");
+            assert!(
+                app.notice_toast.is_some(),
+                "{code:?} {mods:?} should report"
+            );
+        }
+        let mut app = App::new(ConnectionConfig::default(), false);
+        press(&mut app, KeyCode::Char('c'), M::CONTROL);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn menu_pane_action_hotkeys_still_win_over_selection_keys() {
+        // `v` selects only in the main viewer; in the menu it still runs Table View.
+        let mut app = grid_app();
+        app.active_panel = ActivePanel::MenuPane;
+        press(&mut app, KeyCode::Char('v'), M::NONE);
+        assert!(app.line_selection.is_none());
+        assert!(!in_visual(&app));
     }
 }

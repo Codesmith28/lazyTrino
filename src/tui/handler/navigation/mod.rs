@@ -21,7 +21,9 @@ pub mod actions;
 pub mod clipboard;
 pub mod connect_help;
 pub mod drilldown;
+pub mod line_select;
 pub mod list;
+pub mod refresh;
 
 pub use actions::*;
 pub use connect_help::*;
@@ -595,6 +597,7 @@ pub mod tests {
             &[("date".to_string(), "2026-08-06".to_string())],
             "service",
             200,
+            &crate::trino::queries::ColumnTypes::default(),
         );
         assert_eq!(s.query_buffer, expected_level_query);
     }
@@ -654,8 +657,15 @@ pub mod tests {
         assert!(dd.path.is_empty());
         assert_eq!(dd.selected, 0);
         assert!(s.results.is_none());
-        let expected_parent_query =
-            queries::distinct_partition_values("datalake", "tenant", "events", &[], "date", 200);
+        let expected_parent_query = queries::distinct_partition_values(
+            "datalake",
+            "tenant",
+            "events",
+            &[],
+            "date",
+            200,
+            &crate::trino::queries::ColumnTypes::default(),
+        );
         assert_eq!(s.query_buffer, expected_parent_query);
     }
 
@@ -1409,9 +1419,9 @@ pub mod tests {
         };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 0);
 
-        // 8. Shift+Right moves 5 columns right
-        let shift_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::SHIFT);
-        actions_keys(&mut app, shift_right);
+        // 8. Ctrl+Right moves 5 columns right
+        let ctrl_right = KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_right);
         let Screen::Actions(state) = &app.screen else {
             panic!()
         };
@@ -1431,9 +1441,9 @@ pub mod tests {
         };
         assert_eq!(state.results.as_ref().unwrap().selected_col, 5);
 
-        // 11. Shift+Left moves 5 columns left
-        let shift_left = KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::SHIFT);
-        actions_keys(&mut app, shift_left);
+        // 11. Ctrl+Left moves 5 columns left
+        let ctrl_left = KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::CONTROL);
+        actions_keys(&mut app, ctrl_left);
         let Screen::Actions(state) = &app.screen else {
             panic!()
         };
@@ -1665,7 +1675,7 @@ pub mod tests {
         let res = state.results.as_ref().unwrap();
         assert_eq!(res.visual_mode, crate::app::VisualMode::None);
         let toast = app.copied_toast.as_ref().unwrap().0.clone();
-        assert!(toast.contains("2 selected row(s) (CSV)"));
+        assert!(toast.contains("2 selected row(s) with header (CSV)"));
     }
 
     #[test]
@@ -1769,7 +1779,7 @@ pub mod tests {
         // 'Y' yanks the whole visible row 1
         actions_keys(&mut app, KeyEvent::from(KeyCode::Char('Y')));
         let toast = app.copied_toast.as_ref().unwrap().0.clone();
-        assert!(toast.contains("1 visible row(s) (CSV)"));
+        assert!(toast.contains("1 visible row(s) with header (CSV)"));
     }
 
     #[test]
@@ -1790,7 +1800,7 @@ pub mod tests {
         }));
         app.set_active_panel(ActivePanel::MainViewer);
 
-        // Shift+Down enters visual line mode
+        // Shift+Down enters visual block mode (cell level, not the whole row)
         let shift_down = KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::SHIFT);
         actions_keys(&mut app, shift_down);
         let Screen::Actions(state) = &app.screen else {
@@ -1799,7 +1809,10 @@ pub mod tests {
         let res = state.results.as_ref().unwrap();
         assert_eq!(
             res.visual_mode,
-            crate::app::VisualMode::Line { anchor_row: 0 }
+            crate::app::VisualMode::Block {
+                anchor_row: 0,
+                anchor_col: 0
+            }
         );
         assert_eq!(res.selected_row, 1);
 
@@ -1820,6 +1833,160 @@ pub mod tests {
                 anchor_col: 0
             }
         );
+    }
+
+    #[test]
+    fn test_shift_arrows_extend_selection_one_cell_at_a_time() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+        res.rows = vec![
+            vec!["1".into(), "2".into(), "3".into(), "4".into()],
+            vec!["5".into(), "6".into(), "7".into(), "8".into()],
+        ];
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        let shift = crossterm::event::KeyModifiers::SHIFT;
+        actions_keys(&mut app, KeyEvent::new(KeyCode::Right, shift));
+        actions_keys(&mut app, KeyEvent::new(KeyCode::Right, shift));
+        actions_keys(&mut app, KeyEvent::new(KeyCode::Down, shift));
+
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert_eq!((res.selected_row, res.selected_col), (1, 2));
+        // anchored where selection began, spanning 2x3 cells
+        assert!(res.is_cell_selected(0, 0) && res.is_cell_selected(1, 2));
+        assert!(!res.is_cell_selected(0, 3));
+    }
+
+    #[test]
+    fn test_shift_down_up_select_cells_not_whole_rows() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["a".into(), "b".into(), "c".into()];
+        res.rows = vec![
+            vec!["1".into(), "2".into(), "3".into()],
+            vec!["4".into(), "5".into(), "6".into()],
+            vec!["7".into(), "8".into(), "9".into()],
+        ];
+        res.selected_row = 1;
+        res.selected_col = 1;
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+
+        let shift = crossterm::event::KeyModifiers::SHIFT;
+        actions_keys(&mut app, KeyEvent::new(KeyCode::Down, shift));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        // only column `b`, rows 1..=2
+        assert!(res.is_cell_selected(1, 1) && res.is_cell_selected(2, 1));
+        assert!(!res.is_cell_selected(1, 0) && !res.is_cell_selected(2, 2));
+        assert!(!res.is_cell_selected(0, 1));
+
+        // and upwards from a fresh start
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Esc));
+        actions_keys(&mut app, KeyEvent::new(KeyCode::Up, shift));
+        let Screen::Actions(state) = &app.screen else {
+            panic!()
+        };
+        let res = state.results.as_ref().unwrap();
+        assert!(res.is_cell_selected(2, 1) && res.is_cell_selected(1, 1));
+        assert!(!res.is_cell_selected(2, 0) && !res.is_cell_selected(1, 2));
+    }
+
+    #[test]
+    fn j_k_page_keys_and_the_wheel_scroll_inside_a_tall_row_before_moving_rows() {
+        let mut res = sample_leaf_results_state();
+        res.columns = vec!["Create Table".to_string()];
+        res.rows = vec![vec!["ddl".to_string()], vec!["next".to_string()]];
+        // geometry as the renderer records it: a 60-line row in a 20-line view
+        res.sel_row_height.set(60);
+        res.viewport_lines.set(20);
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            selected: 0,
+            results: Some(res),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+        let state = |app: &App| match &app.screen {
+            Screen::Actions(a) => {
+                let r = a.results.as_ref().unwrap();
+                (r.row_line_offset.get(), r.selected_row)
+            }
+            _ => panic!(),
+        };
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Down));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(
+            state(&app),
+            (2, 0),
+            "j / Down scroll the row, not the cursor"
+        );
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Up));
+        assert_eq!(state(&app), (1, 0));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::PageDown));
+        assert_eq!(state(&app), (20, 0), "a page is the view height minus one");
+        actions_keys(&mut app, KeyEvent::from(KeyCode::PageDown));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::PageDown));
+        assert_eq!(state(&app), (40, 0), "clamped to the last line (60 - 20)");
+
+        // at the end of the row the next key moves on to the next row
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Down));
+        assert_eq!(state(&app).1, 1);
+    }
+
+    #[test]
+    fn h_l_and_arrows_scroll_the_partitions_tree_sideways() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            catalog: "c".to_string(),
+            schema: "s".to_string(),
+            table: "t".to_string(),
+            selected: Action::Partitions.index(),
+            ..Default::default()
+        }));
+        app.set_active_panel(ActivePanel::MainViewer);
+        app.partition_max_h.set(20); // as recorded by the renderer
+        let h = |app: &App| app.partition_scroll_h;
+
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(h(&app), PARTITION_HSCROLL_STEP);
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Right));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Right));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Right));
+        assert_eq!(h(&app), 20, "clamped to the widest line");
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Left));
+        assert_eq!(h(&app), 12);
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('h')));
+        assert_eq!(h(&app), 0);
+
+        // a narrower pane (smaller max) pulls an old offset back in
+        app.partition_scroll_h = 30;
+        app.partition_max_h.set(10);
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Left));
+        assert_eq!(h(&app), 2);
     }
 
     #[test]
@@ -1920,6 +2087,7 @@ pub mod tests {
                 counts_cache: std::collections::HashMap::new(),
                 current_count_loading: false,
                 path_cursors: std::collections::HashMap::new(),
+                focus_value: None,
             }),
             ..Default::default()
         };
@@ -2076,5 +2244,41 @@ pub mod tests {
             act_st.query_buffer, "SELECT * FROM t3 LIMIT 50",
             "cached query preserved"
         );
+    }
+
+    #[test]
+    fn q_and_colon_open_the_query_bar_in_every_footer_state_that_offers_them() {
+        let config = || ConnectionConfig {
+            url: "http://localhost:8080".to_string(),
+            user: "test".to_string(),
+            password: String::new(),
+            query_cache_limit: crate::config::DEFAULT_QUERY_CACHE_LIMIT,
+        };
+        // Table View, drilled into a partition level above the leaf
+        let mut drilldown = drilldown_action_state(vec!["date", "service"]);
+        drilldown.selected = 0;
+        drilldown.drilldown = Some(DrillDownState {
+            partition_cols: vec!["date".to_string(), "service".to_string()],
+            levels_cache: vec![vec!["2026-08-06".to_string()]],
+            ..Default::default()
+        });
+        // Partitions, with its tree shown in the main viewer
+        let mut partitions = drilldown_action_state(vec!["date"]);
+        partitions.selected = 5;
+        let partition_lines = vec!["date=2026-08-06".to_string()];
+
+        for (label, state, tree_lines) in [
+            ("drill-down", drilldown, Vec::new()),
+            ("partitions tree", partitions, partition_lines),
+        ] {
+            for key in ['q', ':'] {
+                let mut app = App::new(config(), false);
+                app.screen = Screen::Actions(state.clone());
+                app.active_panel = ActivePanel::MainViewer;
+                app.partition_tree_lines = tree_lines.clone();
+                actions_keys(&mut app, KeyEvent::from(KeyCode::Char(key)));
+                assert_eq!(app.mode, Mode::QueryInput, "{key} in {label}");
+            }
+        }
     }
 }
