@@ -156,6 +156,15 @@ pub enum Command {
         table: String,
         filters: Vec<(String, String)>,
     },
+    /// Fetches every distinct value of one table column for the filter
+    /// modal, scoped to the partition `filters` of the grid being filtered.
+    FetchColumnValues {
+        catalog: String,
+        schema: String,
+        table: String,
+        filters: Vec<(String, String)>,
+        column: String,
+    },
 }
 
 #[derive(Debug)]
@@ -242,6 +251,14 @@ pub enum AsyncResult {
         schema: String,
         table: String,
         filters: Vec<(String, String)>,
+        result: Result<crate::trino::types::QueryResults, TrinoClientError>,
+    },
+    FetchColumnValues {
+        log_id: usize,
+        catalog: String,
+        schema: String,
+        table: String,
+        column: String,
         result: Result<crate::trino::types::QueryResults, TrinoClientError>,
     },
 }
@@ -503,7 +520,7 @@ mod router_tests {
             catalog: "c".into(),
             schema: "s".into(),
             table: "t".into(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(res),
             ..Default::default()
         });

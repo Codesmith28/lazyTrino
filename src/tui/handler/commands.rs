@@ -236,6 +236,25 @@ pub fn dispatch_command(
             filters,
             fresh,
         } => {
+            // A bare `SELECT *` over this table (Sample, unpartitioned Table
+            // View, or the same text typed in the query bar) fails outright
+            // if any map/row column's Parquet encoding disagrees with the
+            // catalog. Read only the columns that are safe, as filtered
+            // views already do; the query bar shows the rewritten SQL.
+            let query = match &app.screen {
+                Screen::Actions(a)
+                    if a.catalog == catalog && a.schema == schema && a.table == table =>
+                {
+                    let safe = crate::app::safe_select_columns(&app.vertical_schema_cols);
+                    if safe.len() < app.vertical_schema_cols.len() {
+                        queries::star_to_columns(&query, &catalog, &schema, &table, &safe)
+                            .unwrap_or(query)
+                    } else {
+                        query
+                    }
+                }
+                _ => query,
+            };
             let log_id = if fresh {
                 app.add_query_log(query.clone())
             } else {
@@ -267,7 +286,25 @@ pub fn dispatch_command(
                 None
             };
 
+            // The grid is rebuilt for the new query, but the filter modal's
+            // full value lists (slow to fetch) still apply to the same table
+            // and partition, so keep them.
+            let (kept_distinct, kept_full, kept_truncated) = match &app.screen {
+                Screen::Actions(a)
+                    if a.catalog == catalog && a.schema == schema && a.table == table =>
+                {
+                    a.results
+                        .as_ref()
+                        .map(|r| r.fetched_values_for(&filters))
+                        .unwrap_or_default()
+                }
+                _ => Default::default(),
+            };
+
             let res_state = ResultsState {
+                col_distinct_values: kept_distinct,
+                col_values_full: kept_full,
+                col_values_truncated: kept_truncated,
                 query_buffer: query_buffer.clone(),
                 query_cursor,
                 columns: Vec::new(),
@@ -376,17 +413,7 @@ pub fn dispatch_command(
             limit,
             filters,
         } => {
-            let safe_columns = crate::app::safe_select_columns(&app.vertical_schema_cols);
-            let query = queries::filtered_page_query(
-                &catalog,
-                &schema,
-                &table,
-                &filters,
-                offset,
-                limit,
-                &safe_columns,
-                &table_column_types(app, &catalog, &schema, &table),
-            );
+            let query = next_page_query(app, &catalog, &schema, &table, offset, limit, &filters);
             let log_id = log_query(app, query.clone());
             if let Screen::Actions(ref mut action_state) = app.screen
                 && let Some(state) = action_state.results.as_mut()
@@ -553,7 +580,76 @@ pub fn dispatch_command(
                 });
             }
         }
+        Command::FetchColumnValues {
+            catalog,
+            schema,
+            table,
+            filters,
+            column,
+        } => {
+            let query = queries::distinct_column_values(
+                &catalog,
+                &schema,
+                &table,
+                &filters,
+                &column,
+                // One more than shown, to tell "exactly the limit" from "more".
+                queries::COLUMN_VALUES_LIMIT + 1,
+                &table_column_types(app, &catalog, &schema, &table),
+            );
+            let log_id = app.add_query_log(query.clone());
+            if let Some(client) = app.trino_client.clone() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let res = client.execute_fresh(&query).await;
+                    let _ = tx.send(AsyncResult::FetchColumnValues {
+                        log_id,
+                        catalog,
+                        schema,
+                        table,
+                        column,
+                        result: res,
+                    });
+                });
+            }
+        }
     }
+}
+
+/// The query for the page of rows starting at `offset` of the grid on screen.
+///
+/// It is the grid's own query moved to that page, so the rows line up with
+/// the columns already shown and honour its column filters, hidden columns
+/// and any custom SQL. Without a grid to copy, the table's plain page query.
+fn next_page_query(
+    app: &App,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    offset: usize,
+    limit: usize,
+    filters: &[(String, String)],
+) -> String {
+    if let Screen::Actions(a) = &app.screen
+        && a.catalog == catalog
+        && a.schema == schema
+        && a.table == table
+        && let Some(res) = a.results.as_ref()
+        && !res.query_buffer.trim().is_empty()
+    {
+        return queries::query_page(&res.query_buffer, offset, limit);
+    }
+    let safe_columns = crate::app::safe_select_columns(&app.vertical_schema_cols);
+    queries::filtered_page_query(
+        catalog,
+        schema,
+        table,
+        filters,
+        offset,
+        limit,
+        &safe_columns,
+        &table_column_types(app, catalog, schema, table),
+    )
 }
 
 /// Known column types of the table on screen (empty for any other table).
@@ -752,8 +848,9 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                 && action_state.schema == schema
                 && action_state.table == table
             {
-                let should_run_table_view = action_state.pending_action == Some(0)
-                    || (action_state.selected == 0
+                let table_view_idx = Action::TableView.index();
+                let should_run_table_view = action_state.pending_action == Some(table_view_idx)
+                    || (action_state.selected == table_view_idx
                         && action_state.results.is_none()
                         && action_state.drilldown.is_none());
 
@@ -858,6 +955,26 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                 app.vertical_schema_cols = columns;
                 action_state.metadata_loading = false;
                 action_state.pending_action = None;
+
+                // All Table View waits for the column list so its first
+                // page can skip columns Trino can't read (see
+                // `safe_select_columns`); it starts now that they're here.
+                if action_state.selected == Action::AllTableView.index()
+                    && action_state.results.is_none()
+                {
+                    let query = Action::AllTableView.build_query(&catalog, &schema, &table);
+                    action_state.query_cursor = query.len();
+                    action_state.query_buffer = query.clone();
+                    return Some(Command::ExecuteQuery {
+                        fresh: false,
+                        query,
+                        is_paginated: true,
+                        catalog,
+                        schema,
+                        table,
+                        filters: Vec::new(),
+                    });
+                }
             }
         }
         AsyncResult::ExecuteQuery {
@@ -926,8 +1043,22 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                     let col_filts = existing_results
                         .map(|r| r.column_filters.clone())
                         .unwrap_or_default();
-                    let distinct_vals = existing_results
+                    // Full per-column value lists belong to the partition they
+                    // were fetched for; a different one starts over.
+                    let same_scope = existing_results.is_some_and(|r| r.filters == filters);
+                    let mut distinct_vals = existing_results
                         .map(|r| r.col_distinct_values.clone())
+                        .unwrap_or_default();
+                    if let Some(r) = existing_results.filter(|_| !same_scope) {
+                        distinct_vals.retain(|col, _| !r.col_values_full.contains(col));
+                    }
+                    let values_full = existing_results
+                        .filter(|_| same_scope)
+                        .map(|r| r.col_values_full.clone())
+                        .unwrap_or_default();
+                    let values_truncated = existing_results
+                        .filter(|_| same_scope)
+                        .map(|r| r.col_values_truncated.clone())
                         .unwrap_or_default();
                     let hidden_cols = existing_results
                         .filter(|r| !r.columns.is_empty())
@@ -977,6 +1108,8 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                         unfiltered_rows: unfilt,
                         column_filters: col_filts,
                         col_distinct_values: distinct_vals,
+                        col_values_full: values_full,
+                        col_values_truncated: values_truncated,
                         hidden_columns: hidden_cols,
                         ..Default::default()
                     };
@@ -1014,7 +1147,8 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                             applied_to_table = true;
                         }
                     } else {
-                        let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
+                        let default_query =
+                            Action::TableView.build_query(&catalog, &schema, &table);
                         let query_len = default_query.len();
                         app.clear_mouse_selection();
                         let mut res_state = res_state;
@@ -1075,7 +1209,8 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                             applied_to_table = true;
                         }
                     } else {
-                        let default_query = ACTIONS[0].2.build_query(&catalog, &schema, &table);
+                        let default_query =
+                            Action::TableView.build_query(&catalog, &schema, &table);
                         let query_len = default_query.len();
                         app.clear_mouse_selection();
                         app.screen = Screen::Actions(ActionState {
@@ -1258,6 +1393,38 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
                 }
             }
         },
+        AsyncResult::FetchColumnValues {
+            log_id,
+            catalog,
+            schema,
+            table,
+            column,
+            result,
+        } => {
+            let outcome = match result {
+                Ok(results) => {
+                    app.complete_query_log_success(log_id, results.duration_ms, results.data.len());
+                    let mut values: Vec<String> = results
+                        .data
+                        .into_iter()
+                        .filter_map(|mut r| (!r.is_empty()).then(|| r.remove(0)))
+                        .collect();
+                    let truncated = values.len() > queries::COLUMN_VALUES_LIMIT;
+                    values.truncate(queries::COLUMN_VALUES_LIMIT);
+                    values.sort();
+                    values.dedup();
+                    Ok((values, truncated))
+                }
+                Err(err) => {
+                    error!(error = %err, column = %column, "Fetch column values failed");
+                    app.complete_query_log_error(log_id, err.to_string());
+                    Err(err.to_string())
+                }
+            };
+            super::filter_modal::column_values_loaded(
+                app, &catalog, &schema, &table, &column, outcome,
+            );
+        }
         AsyncResult::FetchPartitionCount {
             log_id,
             catalog,
@@ -1345,6 +1512,214 @@ mod tests {
         }
     }
 
+    fn grid_with_fetched_status_values(partition: Vec<(String, String)>) -> App {
+        let mut app = App::new(sample_config(), false);
+        app.clear_mouse_selection();
+        let mut res = crate::app::ResultsState {
+            is_paginated: true,
+            filters: partition,
+            columns: vec!["status".into(), "id".into()],
+            ..Default::default()
+        };
+        res.col_values_full.insert("status".to_string());
+        res.col_values_truncated.insert("status".to_string());
+        res.col_distinct_values
+            .insert("status".to_string(), vec!["a".into(), "b".into()]);
+        // A list built from loaded rows only: not worth keeping.
+        res.col_distinct_values
+            .insert("id".to_string(), vec!["1".into()]);
+        app.screen = Screen::Actions(ActionState {
+            catalog: "c".into(),
+            schema: "s".into(),
+            table: "t".into(),
+            selected: Action::AllTableView.index(),
+            results: Some(res),
+            ..Default::default()
+        });
+        app
+    }
+
+    fn rerun(app: &mut App, filters: Vec<(String, String)>) {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        dispatch_command(
+            app,
+            Command::ExecuteQuery {
+                fresh: false,
+                query: "SELECT status, id FROM c.s.t".into(),
+                is_paginated: true,
+                catalog: "c".into(),
+                schema: "s".into(),
+                table: "t".into(),
+                filters,
+            },
+            &tx,
+        );
+    }
+
+    #[test]
+    fn rerunning_a_grid_keeps_its_fetched_filter_values() {
+        let mut app = grid_with_fetched_status_values(Vec::new());
+        rerun(&mut app, Vec::new());
+        let Screen::Actions(a) = &app.screen else {
+            panic!()
+        };
+        let res = a.results.as_ref().unwrap();
+        assert!(res.col_values_full.contains("status"));
+        assert!(res.col_values_truncated.contains("status"));
+        assert_eq!(res.col_distinct_values["status"], vec!["a", "b"]);
+        assert!(!res.col_distinct_values.contains_key("id"));
+    }
+
+    #[test]
+    fn another_partition_does_not_inherit_fetched_values() {
+        let mut app = grid_with_fetched_status_values(Vec::new());
+        rerun(
+            &mut app,
+            vec![("date".to_string(), "2026-08-06".to_string())],
+        );
+        let Screen::Actions(a) = &app.screen else {
+            panic!()
+        };
+        let res = a.results.as_ref().unwrap();
+        assert!(res.col_values_full.is_empty());
+        assert!(res.col_distinct_values.is_empty());
+    }
+
+    #[test]
+    fn the_next_page_of_a_filtered_grid_keeps_its_filters_and_columns() {
+        let mut app = App::new(sample_config(), false);
+        app.clear_mouse_selection();
+        // What the grid ran after a column filter and hidden `_hoodie_*`
+        // columns: fewer columns and a WHERE, shown with the rows loaded so far.
+        let grid_query = "SELECT \"account_name\", \"event_type\" FROM \"c\".\"s\".\"t\" \
+                          WHERE \"event_type\" = 'viewed' OFFSET 0 LIMIT 100";
+        app.screen = Screen::Actions(ActionState {
+            catalog: "c".into(),
+            schema: "s".into(),
+            table: "t".into(),
+            selected: Action::AllTableView.index(),
+            results: Some(crate::app::ResultsState {
+                is_paginated: true,
+                query_buffer: grid_query.into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        app.vertical_schema_cols = vec![
+            vcol(1, "_hoodie_commit_time", "varchar"),
+            vcol(2, "account_name", "varchar"),
+            vcol(3, "event_type", "varchar"),
+        ];
+
+        assert_eq!(
+            next_page_query(&app, "c", "s", "t", 100, 100, &[]),
+            "SELECT \"account_name\", \"event_type\" FROM \"c\".\"s\".\"t\" \
+             WHERE \"event_type\" = 'viewed' OFFSET 100 LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn the_next_page_without_a_grid_is_the_plain_table_page() {
+        let mut app = App::new(sample_config(), false);
+        app.clear_mouse_selection();
+        app.vertical_schema_cols = vec![
+            vcol(1, "a", "varchar"),
+            vcol(2, "m", "map(varchar, varchar)"),
+        ];
+        assert_eq!(
+            next_page_query(&app, "c", "s", "t", 100, 100, &[]),
+            "SELECT \"a\" FROM \"c\".\"s\".\"t\" OFFSET 100 LIMIT 100"
+        );
+    }
+
+    fn vcol(index: usize, name: &str, data_type: &str) -> crate::app::VerticalColumn {
+        crate::app::VerticalColumn {
+            index,
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            is_nullable: "YES".to_string(),
+            key_meta: String::new(),
+            description: String::new(),
+        }
+    }
+
+    #[test]
+    fn all_table_view_starts_when_column_metadata_arrives() {
+        let mut app = App::new(sample_config(), false);
+        app.clear_mouse_selection();
+        app.screen = Screen::Actions(ActionState {
+            catalog: "iceberg".to_string(),
+            schema: "sales".to_string(),
+            table: "orders".to_string(),
+            selected: Action::AllTableView.index(),
+            pending_action: Some(Action::AllTableView.index()),
+            metadata_loading: true,
+            ..Default::default()
+        });
+
+        let cmd = handle_async_result(
+            &mut app,
+            AsyncResult::FetchTableMetadata {
+                partitions_log_id: 1,
+                cols_log_id: 2,
+                catalog: "iceberg".to_string(),
+                schema: "sales".to_string(),
+                table: "orders".to_string(),
+                partition_lines: Vec::new(),
+                columns: vec![vcol(1, "id", "bigint")],
+                partitions_error: None,
+                columns_error: None,
+            },
+        );
+        assert!(matches!(
+            cmd,
+            Some(Command::ExecuteQuery {
+                is_paginated: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn execute_query_skips_map_columns_for_a_plain_select_star() {
+        let mut app = App::new(sample_config(), false);
+        app.clear_mouse_selection();
+        app.screen = Screen::Actions(ActionState {
+            catalog: "datalake".to_string(),
+            schema: "tenant".to_string(),
+            table: "events".to_string(),
+            selected: Action::AllTableView.index(),
+            ..Default::default()
+        });
+        app.vertical_schema_cols = vec![
+            vcol(1, "event_type", "varchar"),
+            vcol(2, "policy_id", "map(varchar, varchar)"),
+            vcol(3, "timestamp", "bigint"),
+        ];
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        dispatch_command(
+            &mut app,
+            Command::ExecuteQuery {
+                fresh: false,
+                query: Action::AllTableView.build_query("datalake", "tenant", "events"),
+                is_paginated: true,
+                catalog: "datalake".to_string(),
+                schema: "tenant".to_string(),
+                table: "events".to_string(),
+                filters: Vec::new(),
+            },
+            &tx,
+        );
+
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let expected = "SELECT \"event_type\", \"timestamp\" FROM \"datalake\".\"tenant\".\"events\" OFFSET 0 LIMIT 100";
+        assert_eq!(state.query_buffer, expected);
+        assert_eq!(state.results.as_ref().unwrap().query_buffer, expected);
+    }
+
     #[test]
     fn fetch_table_ddl_auto_populates_results_when_ddl_view_was_pending() {
         let mut app = App::new(sample_config(), false);
@@ -1357,7 +1732,7 @@ mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 1,
+            selected: Action::TableDDL.index(),
             ddl_loading: true,
             ..Default::default()
         });
@@ -1402,7 +1777,7 @@ mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             // Stale text that must NOT leak into the new query bar.
             query_buffer: "SELECT * FROM orders LIMIT 10".to_string(),
             query_cursor: 30,
@@ -1734,7 +2109,7 @@ mod tests {
             catalog: "hive".to_string(),
             schema: "default".to_string(),
             table: "events".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             pending_action: Some(0),
             ddl_loading: true,
             ..Default::default()
@@ -1778,7 +2153,7 @@ mod tests {
             catalog: "hive".to_string(),
             schema: "default".to_string(),
             table: "events_part".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             pending_action: Some(0),
             ddl_loading: true,
             ..Default::default()
@@ -1825,7 +2200,7 @@ mod tests {
             catalog: "hudi".to_string(),
             schema: "analytics".to_string(),
             table: "users".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             ..Default::default()
         });
 
@@ -1889,7 +2264,7 @@ mod tests {
             catalog: "lake".to_string(),
             schema: "default".to_string(),
             table: "logs".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             drilldown: Some(DrillDownState {
                 partition_cols: vec!["dt".to_string()],
                 path: Vec::new(),

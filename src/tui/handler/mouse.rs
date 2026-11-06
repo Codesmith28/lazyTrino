@@ -1569,7 +1569,7 @@ mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             query_buffer: "SELECT * FROM orders".to_string(),
             query_cursor: 20,
             results: Some(res_state),
@@ -1669,7 +1669,7 @@ mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             query_buffer: "SELECT * FROM orders".to_string(),
             query_cursor: 20,
             results: Some(res_state),
@@ -1744,7 +1744,7 @@ mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(res_state),
             ..Default::default()
         });
@@ -1815,7 +1815,7 @@ mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             drilldown: Some(dd),
             results: None,
             ..Default::default()
@@ -1864,7 +1864,7 @@ mod tests {
             catalog: "system".to_string(),
             schema: "runtime".to_string(),
             table: "nodes".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             drilldown: None,
             results: Some(ResultsState {
                 columns: cols,
@@ -2178,7 +2178,7 @@ mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             query_buffer: "SELECT * FROM orders".to_string(),
             query_cursor: 20,
             results: Some(res_state),
@@ -2384,7 +2384,7 @@ mod tests {
             catalog: "c".to_string(),
             schema: "s".to_string(),
             table: "t".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             ..Default::default()
         });
         app.actions_panel_pct = 18;

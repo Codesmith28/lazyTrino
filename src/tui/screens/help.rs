@@ -90,10 +90,11 @@ const HELP_SECTIONS: &[HelpSection] = &[
     HelpSection {
         title: "Table View Options & Hotkeys",
         items: &[
-            "  v                              Table View Mode (Infinite Scroll grid)",
+            "  a                              All Table View (every row, flat — no partition drill-down; filter / search / sort like any grid)",
+            "  v                              Table View Mode (Infinite Scroll grid, partition drill-down)",
             "  c                              Table DDL",
             "  e                              Schema (Vertical Columns Inspector)",
-            "  t / m                          Show Stats / Sample (20 rows)",
+            "  t                              Show Stats",
             "  p                              Partitions Tree",
             "  Ctrl+s                         Save active table view (prompt for view name)",
             "  Ctrl+o / B                     Browse and restore saved table views (Back / Esc / < work from there)",

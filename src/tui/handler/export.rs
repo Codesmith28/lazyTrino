@@ -698,7 +698,7 @@ mod tests {
             catalog: "c".into(),
             schema: "s".into(),
             table: "t".into(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             drilldown: Some(dd),
             ..Default::default()
         }));

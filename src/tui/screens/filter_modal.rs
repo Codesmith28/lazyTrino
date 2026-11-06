@@ -28,12 +28,23 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &FilterModalState) {
 
     let title = match modal.mode {
         FilterMode::Numeric => format!(" Filter Column: {} (Numeric Filter) ", modal.column_name),
-        FilterMode::Values => format!(
-            " Filter Column: {} ({} of {} selected) ",
-            modal.column_name,
-            modal.selected_values.len(),
-            modal.values.len()
+        FilterMode::Values if modal.loading => format!(
+            " Filter Column: {} — loading all values… (Esc: cancel) ",
+            modal.column_name
         ),
+        FilterMode::Values => {
+            let note = modal
+                .note
+                .as_deref()
+                .map(|n| format!(" · {n}"))
+                .unwrap_or_default();
+            format!(
+                " Filter Column: {} ({} of {} selected{note}) ",
+                modal.column_name,
+                modal.selected_values.len(),
+                modal.values.len()
+            )
+        }
     };
 
     let inner = modal::render_modal_frame(frame, popup_area, &title, true);
@@ -439,6 +450,8 @@ mod tests {
             numeric_focus: NumericFocus::Value,
             numeric_error: None,
             last_op_char: None,
+            loading: false,
+            note: None,
         };
         terminal.draw(|f| render(f, f.area(), &modal)).unwrap();
     }
@@ -464,6 +477,8 @@ mod tests {
             numeric_focus: NumericFocus::Value,
             numeric_error: None,
             last_op_char: None,
+            loading: false,
+            note: None,
         };
         terminal.draw(|f| render(f, f.area(), &modal)).unwrap();
     }

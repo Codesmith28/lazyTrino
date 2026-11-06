@@ -204,6 +204,8 @@ pub fn on_table_ddl(
 
     match loc.action {
         Action::TableView => Some(restore_table_view(app, &loc, custom, partitioned_by)),
+        // Flat view of every row: the same path as an unpartitioned table.
+        Action::AllTableView => Some(restore_table_view(app, &loc, custom, &[])),
         Action::TableDDL => {
             a.pending_action = None;
             super::navigation::populate_table_ddl_results(a);
@@ -216,7 +218,7 @@ pub fn on_table_ddl(
             finish(app);
             Some(None)
         }
-        Action::ShowStats | Action::Sample => {
+        Action::ShowStats => {
             a.pending_action = None;
             let sql = custom
                 .clone()
@@ -941,7 +943,7 @@ mod tests {
         begin(
             &mut app,
             view(
-                Action::Sample,
+                Action::AllTableView,
                 &[],
                 QuerySource::Generated,
                 GridState::default(),
@@ -953,10 +955,10 @@ mod tests {
                 is_paginated,
                 ..
             }) => {
-                assert_eq!(query, queries::sample(CAT, SCH, TBL));
-                assert!(!is_paginated);
+                assert_eq!(query, queries::page_query(CAT, SCH, TBL, 0, 100));
+                assert!(is_paginated);
             }
-            _ => panic!("expected the sample query"),
+            _ => panic!("expected the all-table-view query"),
         }
 
         let mut app = browsed_app();

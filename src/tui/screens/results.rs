@@ -785,7 +785,7 @@ pub fn render(
         };
 
         format!(
-            "{title_prefix}Sample Mode ({} sample rows, col {col_str}{sort_str}) ",
+            "{title_prefix}Query Results ({} rows, col {col_str}{sort_str}) ",
             state.rows.len()
         )
     };

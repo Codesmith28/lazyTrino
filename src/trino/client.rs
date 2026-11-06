@@ -97,8 +97,9 @@ impl TrinoClient {
 
     fn ensure_success(response: &TrinoResponse) -> Result<(), TrinoClientError> {
         if let Some(err) = &response.error {
+            let message = err.message.clone().unwrap_or_else(|| "unknown".to_string());
             return Err(TrinoClientError::QueryError {
-                message: err.message.clone().unwrap_or_else(|| "unknown".to_string()),
+                message: with_parquet_mismatch_hint(message),
             });
         }
 
@@ -256,6 +257,33 @@ fn format_response_body(body: &[u8]) -> String {
     } else {
         truncated
     }
+}
+
+/// Trino reports "Unsupported Trino column type (X) for Parquet column
+/// ([col, ...] ...)" when the catalog's declared type for a column doesn't
+/// match what a Parquet file actually stores (schema drift). Say which
+/// column to leave out, since the bare message doesn't make that obvious.
+fn with_parquet_mismatch_hint(message: String) -> String {
+    const MARKER: &str = "Unsupported Trino column type";
+    const PATH: &str = "for Parquet column ([";
+    if !message.contains(MARKER) {
+        return message;
+    }
+    let Some(start) = message.find(PATH).map(|i| i + PATH.len()) else {
+        return message;
+    };
+    let column = message[start..]
+        .split([',', ']'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    if column.is_empty() {
+        return message;
+    }
+    format!(
+        "{message}\nHint: column \"{column}\" is stored in the data files with a different type than \
+         the table schema declares. Select the other columns explicitly (omit \"{column}\") instead of SELECT *."
+    )
 }
 
 #[cfg(test)]
@@ -504,6 +532,16 @@ mod tests {
             }
             other => panic!("expected QueryError, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parquet_mismatch_error_names_the_column_to_skip() {
+        let msg = "Unsupported Trino column type (varchar) for Parquet column ([policy_id, key_value, value] optional int64 value)";
+        let out = with_parquet_mismatch_hint(msg.to_string());
+        assert!(out.starts_with(msg));
+        assert!(out.contains("omit \"policy_id\""), "{out}");
+        let other = "line 1:8: Column 'x' cannot be resolved";
+        assert_eq!(with_parquet_mismatch_hint(other.to_string()), other);
     }
 
     #[tokio::test]

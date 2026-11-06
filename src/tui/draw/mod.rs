@@ -651,7 +651,7 @@ pub mod help_modal_overlay_regression {
             catalog: "iceberg".into(),
             schema: "analytics".into(),
             table: "customers".into(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             query_buffer: "SELECT id, name FROM customers".into(),
             query_cursor: 30,
             results: Some(ResultsState {
@@ -720,7 +720,7 @@ pub mod count_box_layout_regression {
             catalog: "iceberg".into(),
             schema: "analytics".into(),
             table: "customers".into(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             query_buffer: "SELECT id, name FROM customers".into(),
             query_cursor: 30,
             results: Some(ResultsState {
@@ -900,7 +900,7 @@ mod selection_overlay_tests {
             catalog: "c".into(),
             schema: "s".into(),
             table: "t".into(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(res),
             ..Default::default()
         });
@@ -963,7 +963,7 @@ mod selection_overlay_tests {
             catalog: "c".into(),
             schema: "s".into(),
             table: "t".into(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             drilldown: Some(dd),
             ..Default::default()
         });
@@ -1187,7 +1187,7 @@ mod theme_contrast_tests {
             catalog: "c".into(),
             schema: "s".into(),
             table: "t".into(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(res),
             ..Default::default()
         }));
@@ -1206,7 +1206,7 @@ mod theme_contrast_tests {
             catalog: "c".into(),
             schema: "s".into(),
             table: "t".into(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             drilldown: Some(dd),
             ..Default::default()
         }));

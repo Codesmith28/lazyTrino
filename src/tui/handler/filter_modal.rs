@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
+
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::{
@@ -58,7 +60,65 @@ pub fn is_numeric_column(
     non_empty.iter().all(|s| s.parse::<f64>().is_ok())
 }
 
-pub fn open_filter_modal(app: &mut App) {
+/// Which filter the modal starts from for a column: its mode, the values
+/// ticked, and the numeric operator / input.
+fn modal_selection(
+    filter: Option<&ColumnFilter>,
+    values: &[String],
+) -> (FilterMode, HashSet<String>, NumericOp, String) {
+    match filter {
+        Some(ColumnFilter::Numeric(num)) => (
+            FilterMode::Numeric,
+            values.iter().cloned().collect(),
+            num.op,
+            num.raw_value.clone(),
+        ),
+        Some(ColumnFilter::Values(existing)) => (
+            FilterMode::Values,
+            existing.clone(),
+            NumericOp::Lt,
+            String::new(),
+        ),
+        None => (
+            FilterMode::Values,
+            values.iter().cloned().collect(),
+            NumericOp::Lt,
+            String::new(),
+        ),
+    }
+}
+
+/// Sorted distinct values of column `col_idx` among the rows in memory.
+fn loaded_values(res: &crate::app::ResultsState, col_idx: usize) -> Vec<String> {
+    let mut vals = Vec::new();
+    let rows_source = res.unfiltered_rows.as_ref().unwrap_or(&res.rows);
+    for row in rows_source {
+        let val = row.get(col_idx).cloned().unwrap_or_default();
+        if !vals.contains(&val) {
+            vals.push(val);
+        }
+    }
+    vals.sort();
+    vals
+}
+
+fn truncated_note() -> String {
+    format!(
+        "first {} values only",
+        crate::app::format_count(crate::trino::queries::COLUMN_VALUES_LIMIT)
+    )
+}
+
+/// Opens the filter modal for the column under the cursor.
+///
+/// On a table grid the list should hold every value the column has in the
+/// table, not just the page loaded so far, so the modal opens empty and the
+/// returned command fetches them (see [`column_values_loaded`]). Grids that
+/// are not a plain table read, and columns already fetched, use what is at
+/// hand.
+pub fn open_filter_modal(app: &mut App) -> Option<Command> {
+    let can_fetch = app.trino_client.is_some();
+    let mut fetch = None;
     if let Screen::Actions(ref mut action_state) = app.screen
         && let Some(ref mut res) = action_state.results
         && !res.columns.is_empty()
@@ -71,47 +131,38 @@ pub fn open_filter_modal(app: &mut App) {
             res.unfiltered_rows = Some(res.rows.clone());
         }
 
-        // Collect distinct values for this column if not cached
-        let values = res
-            .col_distinct_values
-            .entry(col_name.clone())
-            .or_insert_with(|| {
-                let mut vals = Vec::new();
-                let rows_source = res.unfiltered_rows.as_ref().unwrap_or(&res.rows);
-                for row in rows_source {
-                    let val = row.get(col_idx).cloned().unwrap_or_default();
-                    if !vals.contains(&val) {
-                        vals.push(val);
-                    }
-                }
-                vals.sort();
-                vals
-            })
-            .clone();
+        let is_table_column = app
+            .vertical_schema_cols
+            .iter()
+            .any(|c| c.name.eq_ignore_ascii_case(&col_name));
+        let loading = can_fetch
+            && res.is_paginated
+            && is_table_column
+            && !res.col_values_full.contains(&col_name);
+
+        let values = if loading {
+            Vec::new()
+        } else {
+            let local = loaded_values(res, col_idx);
+            res.col_distinct_values
+                .entry(col_name.clone())
+                .or_insert(local)
+                .clone()
+        };
+        if loading {
+            fetch = Some(Command::FetchColumnValues {
+                catalog: res.catalog.clone(),
+                schema: res.schema.clone(),
+                table: res.table.clone(),
+                filters: res.filters.clone(),
+                column: col_name.clone(),
+            });
+        }
+        let note = (!loading && res.col_values_truncated.contains(&col_name)).then(truncated_note);
 
         let is_numeric = is_numeric_column(&col_name, &app.vertical_schema_cols, &values);
-
         let (mode, selected_values, numeric_op, numeric_input) =
-            match res.column_filters.get(&col_name) {
-                Some(ColumnFilter::Numeric(num)) => (
-                    FilterMode::Numeric,
-                    values.iter().cloned().collect(),
-                    num.op,
-                    num.raw_value.clone(),
-                ),
-                Some(ColumnFilter::Values(existing)) => (
-                    FilterMode::Values,
-                    existing.clone(),
-                    NumericOp::Lt,
-                    String::new(),
-                ),
-                None => (
-                    FilterMode::Values,
-                    values.iter().cloned().collect(),
-                    NumericOp::Lt,
-                    String::new(),
-                ),
-            };
+            modal_selection(res.column_filters.get(&col_name), &values);
 
         app.filter_modal = Some(FilterModalState {
             column_index: col_idx,
@@ -134,12 +185,96 @@ pub fn open_filter_modal(app: &mut App) {
             numeric_focus: NumericFocus::Value,
             numeric_error: None,
             last_op_char: None,
+            loading,
+            note,
         });
         app.mode = Mode::FilterModal;
+    }
+    fetch
+}
+
+/// Takes the outcome of a [`Command::FetchColumnValues`]: remembers the full
+/// list for the grid and, if the modal for that column is still waiting for
+/// it, fills the modal in. A failed fetch falls back to the loaded rows (and
+/// says so) rather than leaving the modal empty.
+pub fn column_values_loaded(
+    app: &mut App,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    column: &str,
+    outcome: Result<(Vec<String>, bool), String>,
+) {
+    let Screen::Actions(ref mut action_state) = app.screen else {
+        return;
+    };
+    if action_state.catalog != catalog
+        || action_state.schema != schema
+        || action_state.table != table
+    {
+        return;
+    }
+    let Some(res) = action_state.results.as_mut() else {
+        return;
+    };
+
+    let (values, note) = match outcome {
+        Ok((values, truncated)) => {
+            res.col_distinct_values
+                .insert(column.to_string(), values.clone());
+            res.col_values_full.insert(column.to_string());
+            if truncated {
+                res.col_values_truncated.insert(column.to_string());
+            } else {
+                res.col_values_truncated.remove(column);
+            }
+            (values, truncated.then(truncated_note))
+        }
+        Err(err) => {
+            let local = res
+                .columns
+                .iter()
+                .position(|c| c == column)
+                .map(|idx| loaded_values(res, idx))
+                .unwrap_or_default();
+            let brief: String = err.lines().next().unwrap_or("").chars().take(80).collect();
+            (
+                local,
+                Some(format!(
+                    "couldn't load all values ({brief}); loaded rows only"
+                )),
+            )
+        }
+    };
+
+    if let Some(m) = app.filter_modal.as_mut()
+        && m.loading
+        && m.column_name == column
+    {
+        let (mode, selected_values, numeric_op, numeric_input) =
+            modal_selection(res.column_filters.get(column), &values);
+        m.is_numeric_col = is_numeric_column(column, &app.vertical_schema_cols, &values);
+        m.mode = mode;
+        m.values = values;
+        m.selected_values = selected_values;
+        m.numeric_op = numeric_op;
+        m.numeric_input = numeric_input;
+        m.cursor = 0;
+        m.scroll = 0;
+        m.loading = false;
+        m.note = note;
     }
 }
 
 pub fn handle_filter_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> {
+    // Until the full value list arrives there is nothing to pick from.
+    if app.filter_modal.as_ref().is_some_and(|m| m.loading) {
+        if key.code == KeyCode::Esc {
+            app.mode = Mode::Normal;
+            app.filter_modal = None;
+        }
+        return None;
+    }
     let mode = app.filter_modal.as_ref().map(|m| m.mode)?;
     let is_numeric_col = app
         .filter_modal
@@ -670,7 +805,7 @@ mod tests {
             catalog: "memory".to_string(),
             schema: "default".to_string(),
             table: "users".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(ResultsState {
                 query_buffer: "SELECT id, status FROM users".to_string(),
                 query_cursor: 28,
@@ -690,6 +825,218 @@ mod tests {
             ..Default::default()
         });
         app
+    }
+
+    /// A table grid (paginated) on a connected app, cursor on `status`.
+    fn table_grid_app() -> App {
+        let mut app = sample_app_with_results();
+        app.trino_client =
+            Some(crate::trino::client::TrinoClient::new("http://localhost:1", "t").unwrap());
+        app.vertical_schema_cols = ["id", "status"]
+            .iter()
+            .enumerate()
+            .map(|(i, name)| VerticalColumn {
+                index: i + 1,
+                name: name.to_string(),
+                data_type: "varchar".to_string(),
+                is_nullable: "YES".to_string(),
+                key_meta: String::new(),
+                description: String::new(),
+            })
+            .collect();
+        if let Screen::Actions(a) = &mut app.screen {
+            let res = a.results.as_mut().unwrap();
+            res.is_paginated = true;
+            res.catalog = "memory".to_string();
+            res.schema = "default".to_string();
+            res.table = "users".to_string();
+        }
+        app
+    }
+
+    fn all_statuses() -> Vec<String> {
+        ["active", "inactive", "pending", "suspended"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_table_grid_fetches_every_value_instead_of_using_the_loaded_rows() {
+        let mut app = table_grid_app();
+
+        let cmd = open_filter_modal(&mut app);
+        assert!(matches!(
+            cmd,
+            Some(Command::FetchColumnValues { ref column, ref filters, .. })
+                if column == "status" && filters.is_empty()
+        ));
+        let m = app.filter_modal.as_ref().unwrap();
+        assert!(m.loading);
+        assert!(
+            m.values.is_empty(),
+            "loaded rows must not be offered as if complete"
+        );
+
+        column_values_loaded(
+            &mut app,
+            "memory",
+            "default",
+            "users",
+            "status",
+            Ok((all_statuses(), false)),
+        );
+        let m = app.filter_modal.as_ref().unwrap();
+        assert!(!m.loading);
+        assert_eq!(m.values, all_statuses());
+        assert_eq!(m.selected_values.len(), 4, "everything starts ticked");
+        assert!(m.note.is_none());
+    }
+
+    #[test]
+    fn fetched_values_are_remembered_for_the_next_open() {
+        let mut app = table_grid_app();
+        open_filter_modal(&mut app);
+        column_values_loaded(
+            &mut app,
+            "memory",
+            "default",
+            "users",
+            "status",
+            Ok((all_statuses(), false)),
+        );
+        app.filter_modal = None;
+
+        let cmd = open_filter_modal(&mut app);
+        assert!(
+            cmd.is_none(),
+            "no second query for a column already fetched"
+        );
+        assert_eq!(app.filter_modal.as_ref().unwrap().values, all_statuses());
+        assert!(!app.filter_modal.as_ref().unwrap().loading);
+    }
+
+    #[test]
+    fn a_cut_off_list_says_so() {
+        let mut app = table_grid_app();
+        open_filter_modal(&mut app);
+        column_values_loaded(
+            &mut app,
+            "memory",
+            "default",
+            "users",
+            "status",
+            Ok((all_statuses(), true)),
+        );
+        assert_eq!(
+            app.filter_modal.as_ref().unwrap().note.as_deref(),
+            Some("first 1,000 values only")
+        );
+        // ... and still does when reopened from the cache.
+        app.filter_modal = None;
+        open_filter_modal(&mut app);
+        assert!(app.filter_modal.as_ref().unwrap().note.is_some());
+    }
+
+    #[test]
+    fn a_failed_fetch_falls_back_to_the_loaded_rows_and_says_so() {
+        let mut app = table_grid_app();
+        open_filter_modal(&mut app);
+        column_values_loaded(
+            &mut app,
+            "memory",
+            "default",
+            "users",
+            "status",
+            Err("boom".to_string()),
+        );
+        let m = app.filter_modal.as_ref().unwrap();
+        assert!(!m.loading);
+        assert_eq!(m.values, vec!["active", "inactive", "pending"]);
+        assert!(m.note.as_deref().unwrap().contains("boom"));
+
+        // Not remembered as complete: the next open tries again.
+        app.filter_modal = None;
+        assert!(open_filter_modal(&mut app).is_some());
+    }
+
+    #[test]
+    fn an_earlier_selection_is_kept_when_the_full_list_arrives() {
+        let mut app = table_grid_app();
+        if let Screen::Actions(a) = &mut app.screen {
+            a.results.as_mut().unwrap().column_filters.insert(
+                "status".to_string(),
+                ColumnFilter::Values(["pending".to_string()].into_iter().collect()),
+            );
+        }
+        open_filter_modal(&mut app);
+        column_values_loaded(
+            &mut app,
+            "memory",
+            "default",
+            "users",
+            "status",
+            Ok((all_statuses(), false)),
+        );
+        let m = app.filter_modal.as_ref().unwrap();
+        assert_eq!(m.selected_values.len(), 1);
+        assert!(m.selected_values.contains("pending"));
+    }
+
+    #[test]
+    fn keys_do_nothing_but_cancel_while_values_load() {
+        let mut app = table_grid_app();
+        open_filter_modal(&mut app);
+
+        for code in [
+            KeyCode::Enter,
+            KeyCode::Char(' '),
+            KeyCode::Tab,
+            KeyCode::Down,
+        ] {
+            assert!(handle_filter_modal_key(&mut app, KeyEvent::from(code)).is_none());
+            assert!(
+                app.filter_modal.is_some(),
+                "{code:?} must not close or apply"
+            );
+        }
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert!(app.filter_modal.is_none());
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn a_late_answer_for_a_closed_modal_only_fills_the_cache() {
+        let mut app = table_grid_app();
+        open_filter_modal(&mut app);
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Esc));
+
+        column_values_loaded(
+            &mut app,
+            "memory",
+            "default",
+            "users",
+            "status",
+            Ok((all_statuses(), false)),
+        );
+        assert!(app.filter_modal.is_none());
+        assert!(
+            open_filter_modal(&mut app).is_none(),
+            "served from the cache"
+        );
+        assert_eq!(app.filter_modal.as_ref().unwrap().values, all_statuses());
+    }
+
+    #[test]
+    fn results_that_are_not_a_table_read_use_the_rows_they_have() {
+        let mut app = table_grid_app();
+        if let Screen::Actions(a) = &mut app.screen {
+            a.results.as_mut().unwrap().is_paginated = false;
+        }
+        assert!(open_filter_modal(&mut app).is_none());
+        let m = app.filter_modal.as_ref().unwrap();
+        assert!(!m.loading);
+        assert_eq!(m.values, vec!["active", "inactive", "pending"]);
     }
 
     /// Regression: the keys scrolled the list as if it always showed 10 rows,

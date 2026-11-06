@@ -352,7 +352,7 @@ mod tests {
         let mut app = App::new(ConnectionConfig::default(), false);
         app.active_panel = ActivePanel::MainViewer;
         app.screen = Screen::Actions(ActionState {
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             drilldown: Some(dd),
             ..Default::default()
         });
@@ -381,7 +381,7 @@ mod tests {
         let mut app = App::new(ConnectionConfig::default(), false);
         app.active_panel = ActivePanel::MainViewer;
         app.screen = Screen::Actions(ActionState {
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             drilldown: Some(dd),
             ..Default::default()
         });

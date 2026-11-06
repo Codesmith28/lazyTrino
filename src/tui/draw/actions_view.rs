@@ -55,7 +55,7 @@ fn render_results_count_spans(
 
     if !res_state.is_paginated {
         spans.push(Span::styled(loaded_str, theme::number_bold_style()));
-        spans.push(Span::styled(" sample rows loaded", theme::text_style()));
+        spans.push(Span::styled(" rows loaded", theme::text_style()));
         if let Some(tot) = res_state.table_count.or(res_state.total_count) {
             spans.push(Span::styled(" of ", theme::secondary_style()));
             spans.push(Span::styled(
@@ -636,9 +636,8 @@ pub fn render_placeholder_preview(
         )),
         Line::from(""),
         Line::from(Span::styled(" Menu Shortcuts:", theme::muted_style())),
-        Line::from("   [v] Table View Mode       [c] Table DDL            [i] Info Schema"),
-        Line::from("   [s] Show Stats            [p] Sample (20 rows)     [P] Partition Tree"),
-        Line::from("   [S] Vertical Schema"),
+        Line::from("   [a] All Table View        [v] Table View Mode      [c] Table DDL"),
+        Line::from("   [e] Schema                [t] Show Stats           [p] Partitions"),
     ];
     let info_p = Paragraph::new(info_lines).alignment(Alignment::Center);
     frame.render_widget(info_p, inner);
@@ -766,8 +765,8 @@ mod tests {
             .join("\n");
 
         assert!(
-            content.contains("2 sample rows loaded"),
-            "Must show sample mode rows: {content}"
+            content.contains("2 rows loaded"),
+            "Must show the loaded row count: {content}"
         );
     }
 

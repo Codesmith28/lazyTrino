@@ -263,7 +263,10 @@ pub(super) fn active_query_state_mut(app: &mut App) -> Option<&mut ResultsState>
     match &mut app.screen {
         Screen::Actions(action_state) => {
             if action_state.results.is_none() {
-                let is_paginated = action_state.selected == 0;
+                let is_paginated = matches!(
+                    ACTIONS.get(action_state.selected).map(|(_, _, a)| a),
+                    Some(Action::TableView | Action::AllTableView)
+                );
                 action_state.results = Some(ResultsState {
                     query_buffer: action_state.query_buffer.clone(),
                     query_cursor: action_state.query_cursor,
@@ -817,7 +820,7 @@ mod tests {
             catalog: "c".to_string(),
             schema: "s".to_string(),
             table: "t".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             query_buffer: query.to_string(),
             query_cursor: query.len(),
             ..Default::default()
@@ -948,7 +951,7 @@ mod tests {
             },
             false,
         );
-        // Action index 4 is Sample Mode
+        // Action index 4 is Show Stats
         app.screen = Screen::Actions(ActionState {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),

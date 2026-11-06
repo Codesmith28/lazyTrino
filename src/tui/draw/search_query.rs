@@ -151,8 +151,10 @@ pub fn render_query_bar(frame: &mut Frame, area: Rect, app: &App) {
     let is_table_view = matches!(
         effective_screen,
         Screen::Actions(state)
-            if state.selected == 0
-                && (state.drilldown.as_ref().is_some_and(|d| d.is_leaf())
+            if matches!(
+                crate::app::ACTIONS.get(state.selected).map(|(_, _, a)| a),
+                Some(crate::app::Action::TableView | crate::app::Action::AllTableView)
+            ) && (state.drilldown.as_ref().is_some_and(|d| d.is_leaf())
                     || state.results.as_ref().is_some_and(|results| results.is_paginated))
     );
 
