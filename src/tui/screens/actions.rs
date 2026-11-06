@@ -163,9 +163,9 @@ mod tests {
 
     #[test]
     fn test_wrap_action_item_wraps_when_narrow() {
-        let lines = wrap_action_item('m', "Sample Mode (20 rows)", true, 16);
+        let lines = wrap_action_item('a', "All Table View Mode (full table)", true, 16);
         assert!(lines.len() >= 2);
-        assert!(lines[0].starts_with("▸ [m] "));
+        assert!(lines[0].starts_with("▸ [a] "));
         assert!(lines[1].starts_with("      "));
     }
 }

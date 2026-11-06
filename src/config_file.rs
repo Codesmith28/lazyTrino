@@ -180,7 +180,7 @@ fn resolve_profile_with_env(
         last_used.and_then(|last| last.url.clone()),
         default_config.url,
     );
-    let (user, user_source) = resolve_string(
+    let (user, _user_source) = resolve_string(
         args.user.clone(),
         env.user,
         selected_profile.and_then(|profile| profile.user.clone()),
@@ -201,6 +201,8 @@ fn resolve_profile_with_env(
         .or_else(|| config_file.and_then(|c| c.query_cache_limit))
         .unwrap_or(default_config.query_cache_limit);
 
+    let auto_connect = url_source >= ValueSource::Profile && !user.trim().is_empty();
+
     ResolvedConnectionConfig {
         config: ConnectionConfig {
             url,
@@ -208,7 +210,7 @@ fn resolve_profile_with_env(
             password,
             query_cache_limit,
         },
-        auto_connect: url_source >= ValueSource::Profile && user_source >= ValueSource::Profile,
+        auto_connect,
         selected_profile: selected_profile_name,
     }
 }
@@ -376,5 +378,36 @@ query_cache_size = 25
         assert!(malformed.is_none());
         assert_eq!(resolved.config, ConnectionConfig::default());
         assert!(!resolved.auto_connect);
+    }
+
+    #[test]
+    fn fed_url_and_user_without_password_skips_login_screen() {
+        let mut cli_args = args();
+        cli_args.url = Some("http://trino.example.com:8080".to_string());
+        cli_args.user = Some("analyst".to_string());
+
+        let resolved = resolve_profile_with_env(&cli_args, None, EnvOverrides::default());
+        assert!(
+            resolved.auto_connect,
+            "must skip login screen when url and user are fed"
+        );
+        assert_eq!(resolved.config.url, "http://trino.example.com:8080");
+        assert_eq!(resolved.config.user, "analyst");
+        assert!(resolved.config.password.is_empty());
+    }
+
+    #[test]
+    fn fed_url_only_with_default_user_skips_login_screen() {
+        let mut cli_args = args();
+        cli_args.url = Some("http://trino.example.com:8080".to_string());
+
+        let resolved = resolve_profile_with_env(&cli_args, None, EnvOverrides::default());
+        assert!(
+            resolved.auto_connect,
+            "must skip login screen when url is fed even if user is defaulted"
+        );
+        assert_eq!(resolved.config.url, "http://trino.example.com:8080");
+        assert!(!resolved.config.user.is_empty());
+        assert!(resolved.config.password.is_empty());
     }
 }

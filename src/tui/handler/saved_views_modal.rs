@@ -664,7 +664,7 @@ mod tests {
             catalog: "c".into(),
             schema: "s".into(),
             table: "t".into(),
-            selected: crate::app::Action::Sample.index(),
+            selected: crate::app::Action::AllTableView.index(),
             custom_sql: Some("SELECT a FROM t".into()),
             results: Some(res),
             ..Default::default()
@@ -673,7 +673,7 @@ mod tests {
         let prompt = app.save_view_prompt.as_ref().unwrap();
         assert_eq!(prompt.name_input, "c.s.t");
         let v = &prompt.view;
-        assert_eq!(v.location.action, crate::app::Action::Sample);
+        assert_eq!(v.location.action, crate::app::Action::AllTableView);
         assert_eq!(
             v.query,
             crate::view_location::QuerySource::Custom {

@@ -384,6 +384,11 @@ pub struct ResultsState {
     pub unfiltered_rows: Option<Vec<Vec<String>>>,
     pub column_filters: HashMap<String, ColumnFilter>,
     pub col_distinct_values: HashMap<String, Vec<String>>,
+    /// Columns whose `col_distinct_values` entry is the table's full value
+    /// list fetched from Trino, rather than just what the loaded rows hold.
+    pub col_values_full: HashSet<String>,
+    /// Of those, the ones cut off at `COLUMN_VALUES_LIMIT` (more exist).
+    pub col_values_truncated: HashSet<String>,
     pub hidden_columns: HashSet<String>,
     pub sort: Option<(String, SortDirection)>,
     pub unsorted_rows: Option<Vec<Vec<String>>>,
@@ -439,6 +444,41 @@ pub fn format_count(n: usize) -> String {
 }
 
 impl ResultsState {
+    /// Forgets the value lists fetched from Trino for the filter modal (a
+    /// refresh may have changed them); lists built from loaded rows stay.
+    pub fn forget_fetched_values(&mut self) {
+        let full = std::mem::take(&mut self.col_values_full);
+        self.col_distinct_values
+            .retain(|col, _| !full.contains(col));
+        self.col_values_truncated.clear();
+    }
+
+    /// The fetched value lists of this grid, if it is showing the partition
+    /// `filters` (a different partition has different values).
+    pub fn fetched_values_for(
+        &self,
+        filters: &[(String, String)],
+    ) -> (
+        HashMap<String, Vec<String>>,
+        HashSet<String>,
+        HashSet<String>,
+    ) {
+        if self.filters != filters {
+            return Default::default();
+        }
+        let distinct = self
+            .col_distinct_values
+            .iter()
+            .filter(|(col, _)| self.col_values_full.contains(*col))
+            .map(|(col, vals)| (col.clone(), vals.clone()))
+            .collect();
+        (
+            distinct,
+            self.col_values_full.clone(),
+            self.col_values_truncated.clone(),
+        )
+    }
+
     pub fn is_column_visible(&self, col_name: &str) -> bool {
         !self.hidden_columns.contains(col_name)
     }
@@ -969,15 +1009,17 @@ pub enum NumericOp {
     Gt,
     Gte,
     Eq,
+    Neq,
 }
 
 impl NumericOp {
-    pub const ALL: [NumericOp; 5] = [
+    pub const ALL: [NumericOp; 6] = [
         NumericOp::Lt,
         NumericOp::Lte,
         NumericOp::Gt,
         NumericOp::Gte,
         NumericOp::Eq,
+        NumericOp::Neq,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -987,6 +1029,7 @@ impl NumericOp {
             NumericOp::Gt => ">",
             NumericOp::Gte => ">=",
             NumericOp::Eq => "=",
+            NumericOp::Neq => "!=",
         }
     }
 
@@ -997,6 +1040,7 @@ impl NumericOp {
             NumericOp::Gt => "Greater than (>)",
             NumericOp::Gte => "Greater than or equal (>=)",
             NumericOp::Eq => "Equal (=)",
+            NumericOp::Neq => "Not equal (!=)",
         }
     }
 
@@ -1007,12 +1051,17 @@ impl NumericOp {
             NumericOp::Gt => val > target,
             NumericOp::Gte => val >= target,
             NumericOp::Eq => (val - target).abs() < 1e-9 || val == target,
+            NumericOp::Neq => (val - target).abs() >= 1e-9 && val != target,
         }
     }
 
     pub fn from_str_prefix(s: &str) -> Option<(NumericOp, &str)> {
         let s = s.trim_start();
-        if let Some(rest) = s.strip_prefix("<=") {
+        if let Some(rest) = s.strip_prefix("!=") {
+            Some((NumericOp::Neq, rest.trim()))
+        } else if let Some(rest) = s.strip_prefix("<>") {
+            Some((NumericOp::Neq, rest.trim()))
+        } else if let Some(rest) = s.strip_prefix("<=") {
             Some((NumericOp::Lte, rest.trim()))
         } else if let Some(rest) = s.strip_prefix(">=") {
             Some((NumericOp::Gte, rest.trim()))
@@ -1099,6 +1148,10 @@ pub struct FilterModalState {
     pub numeric_focus: NumericFocus,
     pub numeric_error: Option<String>,
     pub last_op_char: Option<char>,
+    /// The full value list is still being fetched from Trino.
+    pub loading: bool,
+    /// Shown beside the title: the list was cut off, or the fetch failed.
+    pub note: Option<String>,
 }
 
 impl FilterModalState {
@@ -1378,21 +1431,24 @@ impl SavedViewsModalState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
+    /// Every row of the table as one flat, scrollable result — no partition
+    /// drill-down. Saved views written before this existed called it `sample`.
+    #[serde(alias = "sample")]
+    AllTableView,
     TableView,
     #[serde(rename = "table_ddl")]
     TableDDL,
     Schema,
     ShowStats,
-    Sample,
     Partitions,
 }
 
 pub const ACTIONS: &[(char, &str, Action)] = &[
+    ('a', "All Table View", Action::AllTableView),
     ('v', "Table View Mode", Action::TableView),
     ('c', "Table DDL", Action::TableDDL),
     ('e', "Schema", Action::Schema),
     ('t', "Show Stats", Action::ShowStats),
-    ('m', "Sample Mode (20 rows)", Action::Sample),
     ('p', "Partitions", Action::Partitions),
 ];
 
@@ -1417,11 +1473,12 @@ impl Action {
 
     pub fn build_query(&self, catalog: &str, schema: &str, table: &str) -> String {
         match self {
-            Action::TableView => crate::trino::queries::page_query(catalog, schema, table, 0, 100),
+            Action::AllTableView | Action::TableView => {
+                crate::trino::queries::page_query(catalog, schema, table, 0, 100)
+            }
             Action::TableDDL => crate::trino::queries::show_create(catalog, schema, table),
             Action::Schema => crate::trino::queries::describe(catalog, schema, table),
             Action::ShowStats => crate::trino::queries::show_stats(catalog, schema, table),
-            Action::Sample => crate::trino::queries::sample(catalog, schema, table),
             Action::Partitions => crate::trino::queries::show_create(catalog, schema, table),
         }
     }
@@ -1578,7 +1635,11 @@ impl App {
     }
 
     pub fn add_query_log(&mut self, sql: String) -> usize {
-        let id = self.query_logs.len() + 1;
+        const MAX_QUERY_LOGS: usize = 500;
+        let id = self.query_logs.last().map(|e| e.id + 1).unwrap_or(1);
+        if self.query_logs.len() >= MAX_QUERY_LOGS {
+            self.query_logs.remove(0);
+        }
         self.query_logs.push(QueryLogEntry {
             id,
             sql,
@@ -1862,6 +1923,16 @@ mod tests {
     }
 
     #[test]
+    fn query_log_caps_at_maximum_entries() {
+        let mut app = App::new(sample_config(), false);
+        for i in 0..510 {
+            app.add_query_log(format!("SELECT {i}"));
+        }
+        assert_eq!(app.query_logs.len(), 500);
+        assert_eq!(app.query_logs.last().unwrap().sql, "SELECT 509");
+    }
+
+    #[test]
     fn action_build_query_matches_queries_module_for_all_variants() {
         let catalog = "iceberg";
         let schema = "sales";
@@ -1880,7 +1951,10 @@ mod tests {
                 Action::ShowStats,
                 queries::show_stats(catalog, schema, table),
             ),
-            (Action::Sample, queries::sample(catalog, schema, table)),
+            (
+                Action::AllTableView,
+                queries::page_query(catalog, schema, table, 0, 100),
+            ),
             (
                 Action::Partitions,
                 queries::show_create(catalog, schema, table),

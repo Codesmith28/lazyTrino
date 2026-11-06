@@ -77,6 +77,7 @@ fn refresh_action(s: &mut ActionState) -> Command {
     } else if let Some(res) = s.results.as_mut() {
         res.total_count = None;
         res.table_count = None;
+        res.forget_fetched_values();
         commands.push(Command::ExecuteQuery {
             query: res.query_buffer.clone(),
             is_paginated: res.is_paginated,
@@ -92,6 +93,25 @@ fn refresh_action(s: &mut ActionState) -> Command {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn refreshing_a_grid_drops_its_fetched_filter_values() {
+        let mut res = crate::app::ResultsState::default();
+        res.col_values_full.insert("status".to_string());
+        res.col_values_truncated.insert("status".to_string());
+        res.col_distinct_values
+            .insert("status".to_string(), vec!["a".to_string()]);
+        res.col_distinct_values
+            .insert("id".to_string(), vec!["1".to_string()]);
+        res.forget_fetched_values();
+        assert!(res.col_values_full.is_empty());
+        assert!(res.col_values_truncated.is_empty());
+        assert!(!res.col_distinct_values.contains_key("status"));
+        assert!(
+            res.col_distinct_values.contains_key("id"),
+            "row-derived lists stay"
+        );
+    }
+
     use super::*;
     use crate::app::{ActionState, CatalogState, ResultsState, SchemaState, TableState};
     use crate::config::ConnectionConfig;
@@ -159,7 +179,7 @@ mod tests {
             catalog: "datalake".to_string(),
             schema: "tenant".to_string(),
             table: "events".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(ResultsState {
                 query_buffer: "SELECT * FROM events LIMIT 100".to_string(),
                 is_paginated: true,

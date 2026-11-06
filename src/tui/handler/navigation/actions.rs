@@ -83,6 +83,23 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
             app.active_panel = ActivePanel::MainViewer;
             return None;
         }
+        // Waits for the column list; the metadata handler starts it on arrival.
+        if s.metadata_loading && matches!(action, Action::AllTableView) {
+            s.selected = action_idx;
+            s.pending_action = Some(action_idx);
+            s.results = None;
+            s.drilldown = None;
+            s.custom_sql = None;
+            let query = action.build_query(&s.catalog, &s.schema, &s.table);
+            s.query_cursor = query.len();
+            s.query_buffer = query;
+            if app.active_panel != ActivePanel::MainViewer {
+                app.mouse_selection_anchor = None;
+                app.mouse_selection_current = None;
+            }
+            app.active_panel = ActivePanel::MainViewer;
+            return None;
+        }
         if s.ddl_loading && matches!(action, Action::TableView | Action::TableDDL) {
             s.selected = action_idx;
             s.pending_action = Some(action_idx);
@@ -117,6 +134,28 @@ pub fn trigger_action(app: &mut App, action_idx: usize) -> Option<Command> {
                 s.query_cursor = query.len();
                 s.query_buffer = query;
                 None
+            }
+            Action::AllTableView => {
+                let already_shown = prev_selected == action_idx
+                    && s.results.as_ref().is_some_and(|r| r.is_paginated);
+                if already_shown {
+                    return None;
+                }
+                s.custom_sql = None;
+                s.results = None;
+                s.drilldown = None;
+                let query = action.build_query(&s.catalog, &s.schema, &s.table);
+                s.query_cursor = query.len();
+                s.query_buffer = query.clone();
+                Some(Command::ExecuteQuery {
+                    query,
+                    is_paginated: true,
+                    catalog: s.catalog.clone(),
+                    schema: s.schema.clone(),
+                    table: s.table.clone(),
+                    filters: Vec::new(),
+                    fresh: false,
+                })
             }
             Action::TableView => {
                 let is_same_table_view = prev_selected == action_idx
@@ -287,7 +326,8 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         }
                         None
                     }
-                    KeyCode::Char('A') | KeyCode::Char('a') => {
+                    // Plain `a` is the All Table View hotkey here.
+                    KeyCode::Char('A') => {
                         crate::tui::handler::applied_filters_modal::open_applied_filters_modal(app);
                         None
                     }
@@ -721,7 +761,7 @@ pub fn actions_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                         }
                         KeyCode::Char('F') | KeyCode::Char('f') => {
                             if s.results.is_some() {
-                                crate::tui::handler::filter_modal::open_filter_modal(app);
+                                return crate::tui::handler::filter_modal::open_filter_modal(app);
                             }
                             None
                         }

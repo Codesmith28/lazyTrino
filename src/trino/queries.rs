@@ -162,15 +162,6 @@ pub fn count(catalog: &str, schema: &str, table: &str) -> String {
     filtered_count(catalog, schema, table, &[], &ColumnTypes::default())
 }
 
-pub fn sample(catalog: &str, schema: &str, table: &str) -> String {
-    format!(
-        "SELECT * FROM {}.{}.{} LIMIT 20",
-        q(catalog),
-        q(schema),
-        q(table)
-    )
-}
-
 pub fn page_query(catalog: &str, schema: &str, table: &str, offset: usize, limit: usize) -> String {
     format!(
         "SELECT * FROM {}.{}.{} OFFSET {offset} LIMIT {limit}",
@@ -267,6 +258,37 @@ pub fn distinct_partition_values(
     )
 }
 
+/// Most distinct values the filter modal asks Trino for per column.
+pub const COLUMN_VALUES_LIMIT: usize = 1000;
+
+/// `SELECT DISTINCT "<column>" FROM t [WHERE k1='v1' AND k2='v2'] LIMIT <limit>`
+///
+/// Every value a column holds in the table (or in the partition fixed by
+/// `filters`), not just the rows currently loaded — what the filter modal
+/// offers. Deliberately unordered: without `ORDER BY` Trino can stop as soon
+/// as it has `limit` distinct values instead of scanning the whole table, and
+/// the caller sorts what comes back.
+pub fn distinct_column_values(
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    filters: &[(String, String)],
+    column: &str,
+    limit: usize,
+    types: &ColumnTypes,
+) -> String {
+    let where_clause = build_where_clause(filters, types)
+        .map(|c| format!(" WHERE {c}"))
+        .unwrap_or_default();
+    format!(
+        "SELECT DISTINCT {} FROM {}.{}.{}{where_clause} LIMIT {limit}",
+        q(column.trim()),
+        q(catalog),
+        q(schema),
+        q(table),
+    )
+}
+
 /// `SELECT * FROM t [WHERE k1='v1' AND k2='v2'] OFFSET <offset> LIMIT <limit>`
 ///
 /// The leaf-level query in a partition drill-down: only run once every
@@ -308,6 +330,68 @@ pub fn filtered_page_query(
         q(schema),
         q(table),
     )
+}
+
+/// Rewrites a bare `SELECT * FROM <catalog>.<schema>.<table> ...` into an
+/// explicit column list (`columns`), keeping whatever follows the table
+/// reference (`LIMIT`, `OFFSET`, ...). Used to keep Sample / Table View from
+/// tripping over `map`/`row` columns whose Parquet encoding disagrees with
+/// the catalog (see [`filtered_page_query`]).
+///
+/// Returns `None` — leave the query alone — when `columns` is empty or the
+/// query isn't exactly that shape for this table (a different table, a
+/// `$partitions` view, an explicit select list, a join, ...).
+pub fn star_to_columns(
+    query: &str,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    columns: &[String],
+) -> Option<String> {
+    if columns.is_empty() {
+        return None;
+    }
+    let t = query.trim();
+    let after_select = t
+        .get(..6)
+        .filter(|kw| kw.eq_ignore_ascii_case("SELECT"))
+        .map(|_| &t[6..])?;
+    if !after_select.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let after_star = after_select.trim_start().strip_prefix('*')?;
+    if !after_star.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let after_star = after_star.trim_start();
+    let after_from = after_star
+        .get(..4)
+        .filter(|kw| kw.eq_ignore_ascii_case("FROM"))
+        .map(|_| &after_star[4..])?;
+    if !after_from.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let target = format!("{}.{}.{}", q(catalog), q(schema), q(table));
+    let tail = after_from.trim_start().strip_prefix(target.as_str())?;
+    // The table reference must end here; anything glued to it (alias, join,
+    // `$partitions`, ...) means this isn't the plain full-table read.
+    if !(tail.is_empty() || tail.starts_with(char::is_whitespace) || tail.starts_with(';')) {
+        return None;
+    }
+    // `SELECT *` over a join also returns the other table's columns.
+    if tail.trim_start().starts_with(',')
+        || tail
+            .split_whitespace()
+            .any(|w| w.eq_ignore_ascii_case("JOIN"))
+    {
+        return None;
+    }
+    let select_list = columns
+        .iter()
+        .map(|c| q(c.trim()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!("SELECT {select_list} FROM {target}{tail}"))
 }
 
 pub fn partitions(catalog: &str, schema: &str, table: &str) -> String {
@@ -701,6 +785,113 @@ pub fn build_query_with_column_filters(
     )
 }
 
+/// True if `tail` is only an optional `OFFSET <n> [ROW[S]]` and an optional
+/// `LIMIT <n>` (and a `;`): the paging clauses at the end of a query.
+fn is_paging_tail(tail: &str) -> bool {
+    let tail = tail.trim().trim_end_matches(';');
+    let mut words = tail.split_whitespace().peekable();
+    let is_number = |w: &str| !w.is_empty() && w.bytes().all(|b| b.is_ascii_digit());
+    if words
+        .peek()
+        .is_some_and(|w| w.eq_ignore_ascii_case("OFFSET"))
+    {
+        words.next();
+        if !words.next().is_some_and(is_number) {
+            return false;
+        }
+        if words
+            .peek()
+            .is_some_and(|w| w.eq_ignore_ascii_case("ROW") || w.eq_ignore_ascii_case("ROWS"))
+        {
+            words.next();
+        }
+    }
+    if words
+        .peek()
+        .is_some_and(|w| w.eq_ignore_ascii_case("LIMIT"))
+    {
+        words.next();
+        if !words.next().is_some_and(is_number) {
+            return false;
+        }
+    }
+    words.next().is_none()
+}
+
+/// The page of `sql`'s rows that starts at `offset`: the same query (its
+/// `WHERE`, column list, `ORDER BY`, ...) with its trailing `OFFSET`/`LIMIT`
+/// replaced by `OFFSET <offset> LIMIT <limit>`.
+///
+/// What infinite scroll runs for each further page, so the rows it appends
+/// match the grid's columns and filters. `OFFSET` / `LIMIT` inside quotes,
+/// comments or parentheses are left alone.
+pub fn query_page(sql: &str, offset: usize, limit: usize) -> String {
+    let bytes = sql.as_bytes();
+    let len = bytes.len();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut depth: usize = 0;
+    let mut tail_start = len;
+
+    let mut i = 0;
+    while i < len {
+        let b = bytes[i];
+        if !in_single && !in_double && b == b'-' && i + 1 < len && bytes[i + 1] == b'-' {
+            while i < len && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if b == b'\'' && !in_double {
+            if in_single && i + 1 < len && bytes[i + 1] == b'\'' {
+                i += 2;
+                continue;
+            }
+            in_single = !in_single;
+        } else if b == b'"' && !in_single {
+            if in_double && i + 1 < len && bytes[i + 1] == b'"' {
+                i += 2;
+                continue;
+            }
+            in_double = !in_double;
+        } else if !in_single && !in_double {
+            if b == b'(' {
+                depth += 1;
+            } else if b == b')' {
+                depth = depth.saturating_sub(1);
+            } else if depth == 0
+                && (i == 0 || bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b')')
+                && let Some(word) = sql.get(i..).and_then(|rest| {
+                    ["OFFSET", "LIMIT"].into_iter().find(|kw| {
+                        rest.len() >= kw.len() && rest[..kw.len()].eq_ignore_ascii_case(kw)
+                    })
+                })
+                && is_paging_tail(&sql[i..])
+                && sql[i + word.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(char::is_whitespace)
+            {
+                tail_start = i;
+                break;
+            }
+        }
+        i += 1;
+    }
+
+    let head = sql[..tail_start]
+        .trim_end()
+        .trim_end_matches(';')
+        .trim_end();
+    // A `-- comment` on the last line would swallow what follows it.
+    let sep = if head.rsplit('\n').next().is_some_and(|l| l.contains("--")) {
+        '\n'
+    } else {
+        ' '
+    };
+    format!("{head}{sep}OFFSET {offset} LIMIT {limit}")
+}
+
 /// Incrementally updates the `LIMIT` clause in a SQL query to `new_limit`.
 ///
 /// Accurately parses top-level SQL, ignoring `LIMIT` inside single-quoted strings,
@@ -811,6 +1002,149 @@ pub fn update_query_limit(sql: &str, new_limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_page_moves_a_query_to_another_page() {
+        let t = "\"cat\".\"sch\".\"t\"";
+        // The grid's own shape after filters / hidden columns: kept as is.
+        assert_eq!(
+            query_page(
+                &format!("SELECT \"a\", \"b\" FROM {t} WHERE \"b\" = 'x' OFFSET 0 LIMIT 200"),
+                200,
+                100
+            ),
+            format!("SELECT \"a\", \"b\" FROM {t} WHERE \"b\" = 'x' OFFSET 200 LIMIT 100")
+        );
+        // No paging clause, lowercase clauses, ORDER BY, trailing `;`.
+        assert_eq!(
+            query_page(&format!("SELECT a FROM {t} ORDER BY a;"), 100, 100),
+            format!("SELECT a FROM {t} ORDER BY a OFFSET 100 LIMIT 100")
+        );
+        assert_eq!(
+            query_page(&format!("select a from {t} order by a limit 100"), 100, 100),
+            format!("select a from {t} order by a OFFSET 100 LIMIT 100")
+        );
+        assert_eq!(
+            query_page("SELECT a FROM t OFFSET 5 ROWS LIMIT 10;", 20, 10),
+            "SELECT a FROM t OFFSET 20 LIMIT 10"
+        );
+    }
+
+    #[test]
+    fn query_page_ignores_limit_and_offset_that_are_not_the_paging_clause() {
+        // In a string, a quoted identifier, a subquery and a comment.
+        assert_eq!(
+            query_page("SELECT a FROM t WHERE b = ' LIMIT 5 ' LIMIT 100", 100, 100),
+            "SELECT a FROM t WHERE b = ' LIMIT 5 ' OFFSET 100 LIMIT 100"
+        );
+        assert_eq!(
+            query_page("SELECT \"limit\" FROM t LIMIT 100", 100, 100),
+            "SELECT \"limit\" FROM t OFFSET 100 LIMIT 100"
+        );
+        assert_eq!(
+            query_page(
+                "SELECT a FROM (SELECT a FROM t LIMIT 50) LIMIT 100",
+                100,
+                100
+            ),
+            "SELECT a FROM (SELECT a FROM t LIMIT 50) OFFSET 100 LIMIT 100"
+        );
+        assert_eq!(
+            query_page("SELECT a FROM t -- LIMIT 1\nLIMIT 100", 100, 100),
+            "SELECT a FROM t -- LIMIT 1\nOFFSET 100 LIMIT 100"
+        );
+        // A column that merely starts with the keyword.
+        assert_eq!(
+            query_page("SELECT a FROM t WHERE limits = 1 LIMIT 100", 100, 100),
+            "SELECT a FROM t WHERE limits = 1 OFFSET 100 LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn distinct_column_values_reads_the_whole_table_unless_scoped() {
+        let types = ColumnTypes::default();
+        assert_eq!(
+            distinct_column_values("cat", "sch", "t", &[], "event type", 1001, &types),
+            "SELECT DISTINCT \"event type\" FROM \"cat\".\"sch\".\"t\" LIMIT 1001"
+        );
+        let scoped = distinct_column_values(
+            "cat",
+            "sch",
+            "t",
+            &[("date".to_string(), "2026-08-06".to_string())],
+            "service",
+            1001,
+            &types,
+        );
+        assert_eq!(
+            scoped,
+            "SELECT DISTINCT \"service\" FROM \"cat\".\"sch\".\"t\" WHERE date = '2026-08-06' LIMIT 1001"
+        );
+        assert!(!scoped.contains("ORDER BY"), "must stay cheap: {scoped}");
+    }
+
+    #[test]
+    fn star_to_columns_rewrites_plain_table_reads() {
+        let cols = vec!["a".to_string(), "b c".to_string()];
+        assert_eq!(
+            star_to_columns(
+                &page_query("cat", "sch", "t", 0, 20),
+                "cat",
+                "sch",
+                "t",
+                &cols
+            )
+            .as_deref(),
+            Some("SELECT \"a\", \"b c\" FROM \"cat\".\"sch\".\"t\" OFFSET 0 LIMIT 20")
+        );
+        assert_eq!(
+            star_to_columns(
+                &page_query("cat", "sch", "t", 0, 100),
+                "cat",
+                "sch",
+                "t",
+                &cols
+            )
+            .as_deref(),
+            Some("SELECT \"a\", \"b c\" FROM \"cat\".\"sch\".\"t\" OFFSET 0 LIMIT 100")
+        );
+        assert_eq!(
+            star_to_columns(
+                "select  *  from \"cat\".\"sch\".\"t\" where a = 1;",
+                "cat",
+                "sch",
+                "t",
+                &cols
+            )
+            .as_deref(),
+            Some("SELECT \"a\", \"b c\" FROM \"cat\".\"sch\".\"t\" where a = 1;")
+        );
+    }
+
+    #[test]
+    fn star_to_columns_leaves_other_queries_alone() {
+        let cols = vec!["a".to_string()];
+        let t = "\"cat\".\"sch\".\"t\"";
+        for sql in [
+            format!("SELECT a FROM {t}"),
+            format!("SELECT * FROM {t}$partitions"),
+            "SELECT * FROM \"cat\".\"sch\".\"t$partitions\"".to_string(),
+            "SELECT * FROM \"cat\".\"sch\".\"other\"".to_string(),
+            format!("SELECT * FROM {t} JOIN {t} x ON true"),
+            format!("SELECT * FROM {t}, {t}"),
+            "SELECT * FROM 世界".to_string(),
+        ] {
+            assert_eq!(
+                star_to_columns(&sql, "cat", "sch", "t", &cols),
+                None,
+                "{sql}"
+            );
+        }
+        assert_eq!(
+            star_to_columns(&format!("SELECT * FROM {t}"), "cat", "sch", "t", &[]),
+            None
+        );
+    }
 
     #[test]
     fn clause_splitting_handles_non_ascii_words() {
@@ -953,10 +1287,6 @@ mod tests {
                 &crate::trino::queries::ColumnTypes::default()
             ),
             "SELECT COUNT(*) AS total_records FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\" WHERE date = '2026-08-06'"
-        );
-        assert_eq!(
-            sample(catalog, schema, table),
-            "SELECT * FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024\" LIMIT 20"
         );
         assert_eq!(
             page_query(catalog, schema, table, 25, 50),

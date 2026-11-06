@@ -187,10 +187,10 @@ mod tests {
         // custom SQL is kept; partition paths only belong to Table View
         if let Screen::Actions(a) = &mut app.screen {
             a.custom_sql = Some("SELECT 1 FROM t".into());
-            a.selected = Action::Sample.index();
+            a.selected = Action::AllTableView.index();
         }
         let (location, query) = ViewLocation::capture(&app).unwrap();
-        assert_eq!(location.action, Action::Sample);
+        assert_eq!(location.action, Action::AllTableView);
         assert!(location.partition_path.is_empty());
         assert_eq!(
             query,

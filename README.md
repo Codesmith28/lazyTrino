@@ -29,12 +29,12 @@ curl -fsSL --connect-timeout 2 https://raw.githubusercontent.com/Codesmith28/laz
 | Menu - orders          | Table Query Bar [Press q or : to write query]                 |
 | (Resizable Split)      | SQL > SELECT * FROM "iceberg"."sales"."orders" LIMIT 100      |
 |                        +---------------------------------------------------------------+
-| > [v] Table View       | iceberg > sales > orders | 100 records | sorted by id desc    |
-|                        +---------------------------------------------------------------+
+| > [a] All Table View   | iceberg > sales > orders | 100 records | sorted by id desc    |
+|   [v] Table View       +---------------------------------------------------------------+
 |   [c] Table DDL        | +----+-------------+-------------------------+--------------+ |
 |   [s] Schema & Info    | | id | customer_id | order_date              | total_amount | |
 |   [t] Show Stats       | +----+-------------+-------------------------+--------------+ |
-|   [m] Sample (20 rows) | | 99 | C-1042      | 2026-10-14 09:12:00 UTC |     1,420.50 | |
+|                        | | 99 | C-1042      | 2026-10-14 09:12:00 UTC |     1,420.50 | |
 |   [p] Partitions       | | 98 | C-0819      | 2026-10-14 08:45:22 UTC |       310.00 | |
 |                        | +----+-------------+-------------------------+--------------+ |
 +------------------------+---------------------------------------------------------------+
@@ -123,7 +123,7 @@ lazyTrino --profile prod
 - 🎯 **Advanced Vim Visual Modes**: Visual Line (`V`), Visual Block (`Ctrl+V`), cursor/anchor swap (`o`/`O`), and Shift-drag mouse selection.
 - 📋 **Copy Anything, Export Everything**: Select with the mouse or `v`/`V`/`Ctrl+V`/`Shift+arrows` and copy (`y`, `Cmd+C`); `Ctrl+E` copies or exports the *entire* view (to the clipboard, or to `~/Downloads/lazytrino/*.csv`).
 - 🔃 **Column-wise Sorting (`S`)**: Cycle active column sort: Ascending (`▲`) $\rightarrow$ Descending (`▼`) $\rightarrow$ None.
-- 🎛️ **Column Filtering (`F`)**: Numeric comparator filters (`>`, `<`, `>=`, `<=`, `=`, `!=`, `BETWEEN`) and distinct categorical value checklists.
+- 🎛️ **Column Filtering (`F`)**: Numeric comparator filters (`>`, `<`, `>=`, `<=`, `=`, `!=`, `BETWEEN`) and distinct categorical value checklists. On a table grid the checklist holds *every* value the column has in the table (or in the partition you drilled into), fetched with a `SELECT DISTINCT … LIMIT 1001` when you press `F`, not just the rows loaded so far; it shows a note when a column has more than 1,000 values, and is remembered until you refresh.
 - 👁️ **Column Visibility Manager (`C`)**: Hide or display specific columns in wide tables.
 - ✍️ **Interactive SQL Query Bar (`q` / `:`)**: Buffer editing with text selection, clipboard support, and instant query execution.
 - 🖱️ **Mouse & Resizable Split**: Click-to-select, wheel scrolling, and draggable vertical pane divider.
@@ -162,11 +162,11 @@ When a table is selected in the menu, press the action hotkey:
 
 | Key | Action | Description |
 | --- | --- | --- |
+| `a` | All Table View | Every row of the table as one flat grid (no partition drill-down) with filtering, search, sort and infinite scroll. Columns whose on-disk type disagrees with the catalog (e.g. a `map` stored as `map<string,bigint>` in some Parquet files) are left out of the `SELECT` so the query still runs |
 | `v` | Table View Mode | Full interactive table viewer with partition drilldown & live record counts |
 | `c` | Table DDL | Execute `SHOW CREATE TABLE` |
 | `s` | Schema & Info | Column metadata and type details |
 | `t` | Show Stats | Execute `SHOW STATS FOR table` |
-| `m` | Sample Mode | Preview sample of 20 rows |
 | `p` | Partitions Tree | Render interactive partition tree hierarchy |
 
 ### Table View & Results Grid

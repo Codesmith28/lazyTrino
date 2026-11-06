@@ -4,6 +4,7 @@ on:
   push:
     branches: [ "main", "master" ]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     branches: [ "main", "master" ]
   workflow_dispatch:
 
@@ -23,8 +24,8 @@ jobs:
   #    - Runs on PRs only (never re-runs on push to main after merge)
   #    - Convention:
   #        • doc     => docs only: fast-passes in ~2s (skips compiler/test suite)
-  #        • Release => big release: verifies += 0.1.x minor bump & runs full tests
-  #        • none    => patch release: default, verifies += 0.0.1 bump (if bumped) & runs full tests
+  #        • Release => release PR: verifies SemVer bump (patch, minor, or major) & runs full tests
+  #        • none    => standard PR: default, verifies += 0.0.1 bump (if bumped) & runs full tests
   # ==========================================================================
   check-and-test:
     name: Check & Test
@@ -52,11 +53,11 @@ jobs:
           if echo "$LOWER_TITLE" | grep -qE '^(doc|docs)(:|\s|\(.*\):)|^\[(doc|docs)\]'; then
             echo "Convention detected: doc (documentation only)"
             echo "kind=doc" >> "$GITHUB_OUTPUT"
-          elif echo "$LOWER_TITLE" | grep -qE '^release(:|\s|\(.*\):)|^\[release\]'; then
-            echo "Convention detected: Release (big release)"
+          elif echo "$LOWER_TITLE" | grep -qE '^release(/|-|:|\s|\(.*\):)|^\[release\]'; then
+            echo "Convention detected: Release"
             echo "kind=release" >> "$GITHUB_OUTPUT"
           else
-            echo "Convention detected: none (patch release default)"
+            echo "Convention detected: none (standard PR)"
             echo "kind=patch" >> "$GITHUB_OUTPUT"
           fi
 
@@ -88,19 +89,24 @@ jobs:
           KIND="${{ steps.pr-intent.outputs.kind }}"
 
           if [ "$KIND" = "release" ]; then
-            # Release tag => big release (+= 0.1.0 or += 1.0.0)
-            echo "Validating big release bump..."
-            if [ "$PR_VERSION" != "$EXPECTED_MINOR" ] && [ "$PR_VERSION" != "$EXPECTED_MAJOR" ]; then
-              echo "::error::PR is tagged 'Release' (big release), but Cargo.toml version ($PR_VERSION) is not bumped to $EXPECTED_MINOR from base $BASE_VERSION."
+            # Release tag => release (patch += 0.0.1, minor += 0.1.0, or major += 1.0.0)
+            echo "Validating release bump..."
+            if [ "$PR_VERSION" = "$EXPECTED_PATCH" ]; then
+              echo "✅ Valid patch release bump: $PR_VERSION"
+            elif [ "$PR_VERSION" = "$EXPECTED_MINOR" ]; then
+              echo "✅ Valid minor release bump: $PR_VERSION"
+            elif [ "$PR_VERSION" = "$EXPECTED_MAJOR" ]; then
+              echo "✅ Valid major release bump: $PR_VERSION"
+            else
+              echo "::error::PR is tagged 'Release', but Cargo.toml version ($PR_VERSION) is not a valid bump from base $BASE_VERSION. Expected patch ($EXPECTED_PATCH), minor ($EXPECTED_MINOR), or major ($EXPECTED_MAJOR)."
               exit 1
             fi
-            echo "✅ Valid big release bump: $PR_VERSION"
           elif [ "$KIND" = "patch" ]; then
-            # none tag => patch release (+= 0.0.1 if version was bumped)
+            # none tag => standard PR (+= 0.0.1 if version was bumped)
             if [ "$PR_VERSION" != "$BASE_VERSION" ]; then
               echo "Version change detected. Validating patch bump..."
               if [ "$PR_VERSION" != "$EXPECTED_PATCH" ]; then
-                echo "::error::Default PRs are patch releases (+0.0.1). Expected $EXPECTED_PATCH, got $PR_VERSION. If this is a big release, include 'Release' in the PR title."
+                echo "::error::Standard PRs only allow patch releases (+0.0.1). Expected $EXPECTED_PATCH, got $PR_VERSION. If this is a minor or major release, include 'Release' in the PR title."
                 exit 1
               fi
               echo "✅ Valid patch bump: $PR_VERSION"

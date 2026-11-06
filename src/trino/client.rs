@@ -26,6 +26,7 @@ pub struct TrinoClient {
     http: reqwest::Client,
     server_url: String,
     user: String,
+    password: Option<String>,
     cache: Arc<Mutex<QueryCache>>,
 }
 
@@ -39,15 +40,31 @@ impl TrinoClient {
         user: &str,
         cache_limit: usize,
     ) -> Result<Self, TrinoClientError> {
+        Self::with_password_and_cache_limit(server_url, user, None, cache_limit)
+    }
+
+    pub fn with_password_and_cache_limit(
+        server_url: &str,
+        user: &str,
+        password: Option<&str>,
+        cache_limit: usize,
+    ) -> Result<Self, TrinoClientError> {
         let http = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
+            .connect_timeout(std::time::Duration::from_secs(15))
             .build()
             .map_err(|source| TrinoClientError::HttpClientBuild { source })?;
+
+        let password = password
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(ToString::to_string);
 
         Ok(Self {
             http,
             server_url: server_url.trim_end_matches('/').to_string(),
             user: user.to_string(),
+            password,
             cache: Arc::new(Mutex::new(QueryCache::new(cache_limit))),
         })
     }
@@ -63,6 +80,7 @@ impl TrinoClient {
                 }
             })?,
         );
+        h.insert("X-Trino-Source", HeaderValue::from_static("lazyTrino"));
         Ok(h)
     }
 
@@ -97,8 +115,9 @@ impl TrinoClient {
 
     fn ensure_success(response: &TrinoResponse) -> Result<(), TrinoClientError> {
         if let Some(err) = &response.error {
+            let message = err.message.clone().unwrap_or_else(|| "unknown".to_string());
             return Err(TrinoClientError::QueryError {
-                message: err.message.clone().unwrap_or_else(|| "unknown".to_string()),
+                message: with_parquet_mismatch_hint(message),
             });
         }
 
@@ -143,11 +162,17 @@ impl TrinoClient {
         let start = std::time::Instant::now();
         let headers = self.headers()?;
 
-        let resp = self
+        let mut req = self
             .http
             .post(format!("{}/v1/statement", self.server_url))
             .headers(headers.clone())
-            .body(sql.to_string())
+            .body(sql.to_string());
+
+        if let Some(ref pass) = self.password {
+            req = req.basic_auth(&self.user, Some(pass));
+        }
+
+        let resp = req
             .send()
             .await
             .map_err(|source| TrinoClientError::RequestFailed {
@@ -170,10 +195,13 @@ impl TrinoClient {
         while let Some(ref next_uri) = data.next_uri {
             let uri = self.rewrite_uri(next_uri);
 
-            let resp = self
-                .http
-                .get(&uri)
-                .headers(headers.clone())
+            let mut req = self.http.get(&uri).headers(headers.clone());
+
+            if let Some(ref pass) = self.password {
+                req = req.basic_auth(&self.user, Some(pass));
+            }
+
+            let resp = req
                 .send()
                 .await
                 .map_err(|source| TrinoClientError::RequestFailed {
@@ -258,6 +286,33 @@ fn format_response_body(body: &[u8]) -> String {
     }
 }
 
+/// Trino reports "Unsupported Trino column type (X) for Parquet column
+/// ([col, ...] ...)" when the catalog's declared type for a column doesn't
+/// match what a Parquet file actually stores (schema drift). Say which
+/// column to leave out, since the bare message doesn't make that obvious.
+fn with_parquet_mismatch_hint(message: String) -> String {
+    const MARKER: &str = "Unsupported Trino column type";
+    const PATH: &str = "for Parquet column ([";
+    if !message.contains(MARKER) {
+        return message;
+    }
+    let Some(start) = message.find(PATH).map(|i| i + PATH.len()) else {
+        return message;
+    };
+    let column = message[start..]
+        .split([',', ']'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    if column.is_empty() {
+        return message;
+    }
+    format!(
+        "{message}\nHint: column \"{column}\" is stored in the data files with a different type than \
+         the table schema declares. Select the other columns explicitly (omit \"{column}\") instead of SELECT *."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,6 +334,66 @@ mod tests {
         let headers = client.headers().unwrap();
 
         assert_eq!(headers["X-Trino-User"], "valid-user");
+        assert_eq!(headers["X-Trino-Source"], "lazyTrino");
+    }
+
+    #[tokio::test]
+    async fn execute_sends_basic_auth_when_password_provided() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/statement")
+            .match_header("x-trino-user", "alice")
+            .match_header("x-trino-source", "lazyTrino")
+            .match_header("authorization", Matcher::Regex(r"^Basic \S+".to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "columns": [{ "name": "ok" }],
+                    "data": [[1]]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let client = TrinoClient::with_password_and_cache_limit(
+            &server.url(),
+            "alice",
+            Some("secret123"),
+            30,
+        )
+        .unwrap();
+        let res = client.execute("SELECT 1").await.unwrap();
+        mock.assert_async().await;
+        assert_eq!(res.data.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn execute_omits_basic_auth_when_no_password() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/statement")
+            .match_header("x-trino-user", "bob")
+            .match_header("x-trino-source", "lazyTrino")
+            .match_header("authorization", Matcher::Missing)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "columns": [{ "name": "ok" }],
+                    "data": [[1]]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let client =
+            TrinoClient::with_password_and_cache_limit(&server.url(), "bob", None, 30).unwrap();
+        let res = client.execute("SELECT 1").await.unwrap();
+        mock.assert_async().await;
+        assert_eq!(res.data.len(), 1);
     }
 
     #[tokio::test]
@@ -504,6 +619,16 @@ mod tests {
             }
             other => panic!("expected QueryError, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parquet_mismatch_error_names_the_column_to_skip() {
+        let msg = "Unsupported Trino column type (varchar) for Parquet column ([policy_id, key_value, value] optional int64 value)";
+        let out = with_parquet_mismatch_hint(msg.to_string());
+        assert!(out.starts_with(msg));
+        assert!(out.contains("omit \"policy_id\""), "{out}");
+        let other = "line 1:8: Column 'x' cannot be resolved";
+        assert_eq!(with_parquet_mismatch_hint(other.to_string()), other);
     }
 
     #[tokio::test]

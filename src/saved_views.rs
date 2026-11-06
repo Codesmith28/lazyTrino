@@ -76,6 +76,7 @@ impl StoredColumnFilter {
                     "<=" => NumericOp::Lte,
                     ">" => NumericOp::Gt,
                     ">=" => NumericOp::Gte,
+                    "!=" | "<>" => NumericOp::Neq,
                     _ => NumericOp::Eq,
                 };
                 ColumnFilter::Numeric(NumericFilter {
@@ -227,7 +228,7 @@ const V1_ACTIONS: [Action; 6] = [
     Action::TableDDL,
     Action::Schema,
     Action::ShowStats,
-    Action::Sample,
+    Action::AllTableView,
     Action::Partitions,
 ];
 
@@ -568,7 +569,7 @@ mod tests {
         assert_eq!(level.query, QuerySource::Generated);
 
         let custom = &views[1];
-        assert_eq!(custom.location.action, Action::Sample);
+        assert_eq!(custom.location.action, Action::AllTableView);
         assert_eq!(
             custom.query,
             QuerySource::Custom {

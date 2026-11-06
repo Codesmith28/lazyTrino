@@ -351,7 +351,7 @@ pub mod tests {
             catalog: "tpch".to_string(),
             schema: "sf1".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             query_buffer: "SELECT * FROM orders".to_string(),
             query_cursor: 20,
             results: None,
@@ -472,7 +472,7 @@ pub mod tests {
             ..drilldown_action_state(vec!["date"])
         }));
 
-        for idx in [0usize, 1] {
+        for idx in [Action::TableView.index(), Action::TableDDL.index()] {
             let cmd = trigger_action(&mut app, idx);
             assert!(
                 cmd.is_none(),
@@ -485,7 +485,7 @@ pub mod tests {
     fn trigger_action_table_ddl_uses_cached_recon_ddl_without_query() {
         let mut app = sample_app(Screen::Actions(drilldown_action_state(vec!["date"])));
 
-        let cmd = trigger_action(&mut app, 1);
+        let cmd = trigger_action(&mut app, Action::TableDDL.index());
         assert!(
             cmd.is_none(),
             "Table DDL should render from cached recon, not fire a query"
@@ -508,7 +508,7 @@ pub mod tests {
     fn trigger_action_table_view_runs_direct_query_for_unpartitioned_table() {
         let mut app = sample_app(Screen::Actions(drilldown_action_state(vec![])));
 
-        let cmd = trigger_action(&mut app, 0);
+        let cmd = trigger_action(&mut app, Action::TableView.index());
         let Some(Command::ExecuteQuery {
             is_paginated,
             filters,
@@ -527,6 +527,57 @@ pub mod tests {
     }
 
     #[test]
+    fn trigger_action_all_table_view_is_flat_even_for_partitioned_tables() {
+        let mut app = sample_app(Screen::Actions(drilldown_action_state(vec![
+            "date", "service",
+        ])));
+
+        let cmd = trigger_action(&mut app, Action::AllTableView.index());
+        let Some(Command::ExecuteQuery {
+            query,
+            is_paginated,
+            filters,
+            ..
+        }) = cmd
+        else {
+            panic!("expected ExecuteQuery, not a partition drill-down");
+        };
+        assert!(
+            is_paginated,
+            "filter / search / infinite scroll need a paginated grid"
+        );
+        assert!(filters.is_empty());
+        assert_eq!(
+            query,
+            "SELECT * FROM \"datalake\".\"tenant\".\"events\" OFFSET 0 LIMIT 100"
+        );
+
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert!(state.drilldown.is_none());
+        assert_eq!(state.selected, Action::AllTableView.index());
+    }
+
+    #[test]
+    fn trigger_action_all_table_view_waits_for_column_metadata() {
+        let mut app = sample_app(Screen::Actions(ActionState {
+            metadata_loading: true,
+            ..drilldown_action_state(vec!["date"])
+        }));
+
+        let cmd = trigger_action(&mut app, Action::AllTableView.index());
+        assert!(
+            cmd.is_none(),
+            "must not query before the column list is known"
+        );
+        let Screen::Actions(state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        assert_eq!(state.pending_action, Some(Action::AllTableView.index()));
+    }
+
+    #[test]
     fn trigger_action_table_view_starts_drilldown_for_partitioned_table() {
         let mut app = sample_app(Screen::Actions(drilldown_action_state(vec![
             "date",
@@ -534,7 +585,7 @@ pub mod tests {
             "account_id",
         ])));
 
-        let cmd = trigger_action(&mut app, 0);
+        let cmd = trigger_action(&mut app, Action::TableView.index());
         let Some(Command::FetchPartitionLevel {
             column, filters, ..
         }) = cmd
@@ -724,7 +775,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(sample_leaf_results_state()),
             ..Default::default()
         }));
@@ -735,7 +786,7 @@ pub mod tests {
         let Screen::Actions(state) = &app.screen else {
             panic!("expected actions screen");
         };
-        assert_eq!(state.selected, 1);
+        assert_eq!(state.selected, Action::TableDDL.index());
         assert!(
             state.results.is_none(),
             "moving menu selection should reset results pane"
@@ -786,7 +837,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(sample_leaf_results_state()),
             ..Default::default()
         }));
@@ -891,7 +942,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 3,
+            selected: Action::ShowStats.index(),
             results: Some(sample_leaf_results_state()),
             ..Default::default()
         }));
@@ -910,7 +961,7 @@ pub mod tests {
         res.columns = vec!["col_a".to_string(), "col_b".to_string()];
         res.rows = vec![vec!["a".to_string(), "b".to_string()]];
         let mut app = sample_app(Screen::Actions(ActionState {
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             drilldown: Some(DrillDownState {
                 partition_cols: vec!["date".to_string()],
                 path: vec![("date".to_string(), "2026-08-06".to_string())],
@@ -960,7 +1011,7 @@ pub mod tests {
     #[test]
     fn actions_keys_drilldown_non_leaf_gt_drills_down_and_lt_goes_up() {
         let mut app = sample_app(Screen::Actions(ActionState {
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             drilldown: Some(DrillDownState {
                 partition_cols: vec!["date".to_string(), "service".to_string()],
                 path: vec![("date".to_string(), "2026-08-06".to_string())],
@@ -1081,7 +1132,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 1, // Table DDL
+            selected: Action::TableDDL.index(),
             metadata: Some(TableRecon {
                 partitioned_by: Vec::new(),
                 location: "s3://bucket/orders".to_string(),
@@ -1116,7 +1167,7 @@ pub mod tests {
         }));
 
         // User triggers Table View (action idx 0)
-        let cmd = trigger_action(&mut app, 0);
+        let cmd = trigger_action(&mut app, Action::TableView.index());
         let Some(Command::ExecuteQuery {
             is_paginated,
             catalog,
@@ -1135,7 +1186,7 @@ pub mod tests {
         let Screen::Actions(ref state) = app.screen else {
             panic!("expected actions screen");
         };
-        assert_eq!(state.selected, 0);
+        assert_eq!(state.selected, Action::TableView.index());
         assert!(
             state.results.is_none(),
             "stale DDL results must be cleared on transition to Table View"
@@ -1148,7 +1199,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(ResultsState {
                 query_buffer: "SELECT id, status, amount FROM orders".to_string(),
                 query_cursor: 37,
@@ -1222,7 +1273,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(ResultsState {
                 query_buffer: "SELECT id, status, amount FROM orders".to_string(),
                 query_cursor: 37,
@@ -1300,7 +1351,7 @@ pub mod tests {
     #[test]
     fn test_actions_keys_page_down_and_up_in_table_view() {
         let mut app = sample_app(Screen::Actions(ActionState {
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(ResultsState {
                 rows: (0..50).map(|i| vec![format!("{i}")]).collect(),
                 columns: vec!["id".to_string()],
@@ -1355,7 +1406,7 @@ pub mod tests {
     fn test_actions_keys_horizontal_navigation_in_table_view() {
         let cols: Vec<String> = (0..20).map(|i| format!("col_{i}")).collect();
         let mut app = sample_app(Screen::Actions(ActionState {
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(ResultsState {
                 rows: vec![vec!["val".to_string()]],
                 columns: cols,
@@ -1499,7 +1550,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(sample_leaf_results_state()),
             ..Default::default()
         }));
@@ -1511,8 +1562,9 @@ pub mod tests {
             panic!()
         };
         assert_eq!(
-            state.selected, 0,
-            "Selected menu action must remain TableView (0)"
+            state.selected,
+            Action::TableView.index(),
+            "Selected menu action must remain TableView"
         );
         assert_eq!(
             state.results.as_ref().unwrap().sort,
@@ -1543,7 +1595,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             ..Default::default()
         }));
 
@@ -1566,7 +1618,7 @@ pub mod tests {
             .unwrap();
         let sample_idx = crate::app::ACTIONS
             .iter()
-            .position(|(_, _, a)| *a == crate::app::Action::Sample)
+            .position(|(_, _, a)| *a == crate::app::Action::AllTableView)
             .unwrap();
 
         // 'e' triggers Schema from MenuPane
@@ -1615,9 +1667,9 @@ pub mod tests {
         };
         assert_eq!(state.selected, stats_idx);
 
-        // 'm' triggers Sample Mode from MenuPane
+        // 'a' triggers All Table View from MenuPane
         app.active_panel = ActivePanel::MenuPane;
-        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('m')));
+        actions_keys(&mut app, KeyEvent::from(KeyCode::Char('a')));
         let Screen::Actions(state) = &app.screen else {
             panic!()
         };
@@ -1637,7 +1689,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(res),
             ..Default::default()
         }));
@@ -1691,7 +1743,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(res),
             ..Default::default()
         }));
@@ -1770,7 +1822,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(res),
             ..Default::default()
         }));
@@ -1794,7 +1846,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(res),
             ..Default::default()
         }));
@@ -1847,7 +1899,7 @@ pub mod tests {
             catalog: "c".to_string(),
             schema: "s".to_string(),
             table: "t".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(res),
             ..Default::default()
         }));
@@ -1883,7 +1935,7 @@ pub mod tests {
             catalog: "c".to_string(),
             schema: "s".to_string(),
             table: "t".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(res),
             ..Default::default()
         }));
@@ -1923,7 +1975,7 @@ pub mod tests {
             catalog: "c".to_string(),
             schema: "s".to_string(),
             table: "t".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(res),
             ..Default::default()
         }));
@@ -2001,7 +2053,7 @@ pub mod tests {
             catalog: "iceberg".to_string(),
             schema: "sales".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(res),
             ..Default::default()
         }));
@@ -2062,7 +2114,7 @@ pub mod tests {
             catalog: "lake".to_string(),
             schema: "default".to_string(),
             table: "logs".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             drilldown: Some(DrillDownState {
                 partition_cols: vec!["dt".to_string(), "region".to_string()],
                 path: Vec::new(),
@@ -2186,7 +2238,7 @@ pub mod tests {
             panic!("expected Actions screen");
         };
         assert_eq!(act_st.table, "t3");
-        assert_eq!(act_st.selected, 0);
+        assert_eq!(act_st.selected, Action::TableView.index());
 
         // Move action to index 1 (Sample) and customize query
         act_st.selected = 1;

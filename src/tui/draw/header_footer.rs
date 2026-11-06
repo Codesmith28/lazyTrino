@@ -74,7 +74,7 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
 
                     match app.active_panel {
                         ActivePanel::MenuPane => Some(
-                            " j/k:move  l/Enter:run  h/Esc:back  A:filters  v/c/e/t/m/p:action  Tab:pane  r:refresh  ?:help  Ctrl+C:quit ",
+                            " j/k:move  l/Enter:run  h/Esc:back  A:filters  a/v/c/e/t/p:action  Tab:pane  r:refresh  ?:help  Ctrl+C:quit ",
                         ),
                         ActivePanel::MainViewer => match selected_action {
                             Some(Action::TableView)
@@ -84,9 +84,13 @@ pub fn footer_hint(app: &App) -> Option<&'static str> {
                                     " hjkl/←→:cells  <:up  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
                                 )
                             }
-                            Some(Action::TableView) if state.results.is_some() => Some(
-                                " hjkl/←→:cells  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
-                            ),
+                            Some(Action::TableView | Action::AllTableView)
+                                if state.results.is_some() =>
+                            {
+                                Some(
+                                    " hjkl/←→:cells  S:sort  C:cols  F:filter  A:filters  u:clear sel  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",
+                                )
+                            }
                             Some(Action::Partitions) if !app.partition_tree_lines.is_empty() => {
                                 Some(
                                     " j/k:scroll  g/G:top/btm  q/:query  Esc:menu  Tab:pane  V/v:select  ^E:export  r:refresh  ?:help  Ctrl+C:quit ",

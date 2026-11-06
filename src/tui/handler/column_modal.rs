@@ -336,7 +336,7 @@ mod tests {
             catalog: "memory".to_string(),
             schema: "default".to_string(),
             table: "orders".to_string(),
-            selected: 0,
+            selected: crate::app::Action::TableView.index(),
             results: Some(ResultsState {
                 query_buffer: "SELECT id, status, amount, created_at FROM orders".to_string(),
                 query_cursor: 50,

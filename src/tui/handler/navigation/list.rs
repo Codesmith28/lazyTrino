@@ -14,7 +14,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::{ACTIONS, ActivePanel, App, SchemaState, Screen, TableState};
+use crate::app::{ACTIONS, Action, ActivePanel, App, SchemaState, Screen, TableState};
 use crate::tui::handler::Command;
 
 use super::clipboard::copy_active_pane_content;
@@ -272,7 +272,11 @@ pub fn select_current_item(app: &mut App) -> Option<Command> {
                 app.screen = Screen::Actions(cached_state);
                 None
             } else {
-                let selected_action = app.last_selected_action.get(&key).copied().unwrap_or(0);
+                let selected_action = app
+                    .last_selected_action
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(Action::TableView.index());
                 Some(open_table(app, catalog, schema, table, selected_action))
             }
         }
