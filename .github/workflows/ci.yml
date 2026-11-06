@@ -195,11 +195,21 @@ jobs:
           TAG="v${VERSION}"
           echo "Resolved release tag: $TAG"
 
-          # 4. Check if tag already exists on remote (skip if already released)
-          if git rev-parse "$TAG" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists on remote. No new version bump. Skipping release creation."
+          # 4. Check if a published release for this tag already exists on remote
+          IS_PUBLISHED=$(gh release view "$TAG" --json isDraft --jq '.isDraft == false' 2>/dev/null || echo "false")
+          if [ "$IS_PUBLISHED" = "true" ]; then
+            echo "Release $TAG is already published on remote. No new version bump. Skipping release creation."
             echo "should_release=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          # If an unpublished draft release or dangling tag exists from a previous failed run, clean it up first
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Found unpublished draft release for $TAG. Cleaning it up for fresh release..."
+            gh release delete "$TAG" --yes --cleanup-tag || true
+          elif git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Found dangling tag $TAG on origin without a published release. Deleting tag..."
+            git push origin --delete "$TAG" || true
           fi
 
           echo "New release version detected: $TAG"
@@ -232,9 +242,9 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-latest
           - target: x86_64-apple-darwin
-            os: macos-14
+            os: macos-latest
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
           - target: x86_64-pc-windows-msvc
@@ -309,7 +319,7 @@ jobs:
   cleanup-draft-on-failure:
     name: Cleanup Failed Draft Release
     needs: [prepare-release, upload-assets]
-    if: needs.prepare-release.outputs.should_release == 'true' && failure()
+    if: always() && needs.prepare-release.outputs.should_release == 'true' && needs.upload-assets.result != 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
