@@ -115,16 +115,39 @@ pub fn parse_partitioned_by(ddl: &str) -> (Vec<String>, String) {
         {
             location = trimmed[start + 1..start + 1 + end].to_string();
         }
-        if (trimmed.contains("partitioned_by =") || trimmed.contains("partitioning ="))
-            && let Some(start) = trimmed.find("ARRAY[")
-            && let Some(end) = trimmed[start..].find(']')
-        {
-            let arr_str = &trimmed[start + 6..start + end];
-            partition_cols = arr_str
-                .split(',')
-                .map(|s| s.trim().trim_matches('\'').trim_matches('"').to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
+    }
+
+    if let Some(pos) = ddl
+        .find("partitioned_by")
+        .or_else(|| ddl.find("partitioning"))
+    {
+        let after_kw = &ddl[pos..];
+        if let Some(arr_start) = after_kw.find("ARRAY[") {
+            let slice = &after_kw[arr_start + 6..];
+            let mut depth = 0usize;
+            let mut in_sq = false;
+            let mut in_dq = false;
+            let mut end_pos = None;
+            for (idx, ch) in slice.char_indices() {
+                match ch {
+                    '\'' if !in_dq => in_sq = !in_sq,
+                    '"' if !in_sq => in_dq = !in_dq,
+                    '[' if !in_sq && !in_dq => depth += 1,
+                    ']' if !in_sq && !in_dq => {
+                        if depth == 0 {
+                            end_pos = Some(idx);
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(end) = end_pos {
+                let arr_str = &slice[..end];
+                partition_cols = split_array_elements(arr_str);
+            }
         }
     }
 
@@ -133,6 +156,62 @@ pub fn parse_partitioned_by(ddl: &str) -> (Vec<String>, String) {
     }
 
     (partition_cols, location)
+}
+
+fn split_array_elements(arr_str: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut in_sq = false;
+    let mut in_dq = false;
+    let mut paren_depth = 0usize;
+
+    for ch in arr_str.chars() {
+        match ch {
+            '\'' if !in_dq => {
+                in_sq = !in_sq;
+                current.push(ch);
+            }
+            '"' if !in_sq => {
+                in_dq = !in_dq;
+                current.push(ch);
+            }
+            '(' if !in_sq && !in_dq => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' if !in_sq && !in_dq => {
+                paren_depth = paren_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' if !in_sq && !in_dq && paren_depth == 0 => {
+                let cleaned = current
+                    .trim()
+                    .trim_matches('\'')
+                    .trim_matches('"')
+                    .trim()
+                    .to_string();
+                if !cleaned.is_empty() {
+                    items.push(cleaned);
+                }
+                current.clear();
+            }
+            _ => {
+                current.push(ch);
+            }
+        }
+    }
+
+    let cleaned = current
+        .trim()
+        .trim_matches('\'')
+        .trim_matches('"')
+        .trim()
+        .to_string();
+    if !cleaned.is_empty() {
+        items.push(cleaned);
+    }
+
+    items
 }
 
 pub fn parse_show_create_to_tree_lines(ddl: &str, override_location: Option<&str>) -> Vec<String> {
@@ -471,5 +550,30 @@ WITH (
         let lines = parse_show_create_to_tree_lines(ddl, None);
         assert_eq!(lines[0], " s3://warehouse/demo/lookup/");
         assert!(lines.iter().any(|l| l.contains("(Non-partitioned Table)")));
+    }
+
+    #[test]
+    fn parse_partitioned_by_handles_multiline_array_and_transform_expressions() {
+        let ddl = r#"
+CREATE TABLE iceberg.sales.orders (
+   id bigint,
+   order_date date,
+   customer_id varchar
+)
+WITH (
+   location = 's3://warehouse/sales/orders/',
+   partitioning = ARRAY[
+      'year(order_date)',
+      'bucket(customer_id, 100)',
+      'region'
+   ]
+)
+"#;
+        let (cols, location) = parse_partitioned_by(ddl);
+        assert_eq!(
+            cols,
+            vec!["year(order_date)", "bucket(customer_id, 100)", "region"]
+        );
+        assert_eq!(location, "s3://warehouse/sales/orders/");
     }
 }

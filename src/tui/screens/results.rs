@@ -235,18 +235,41 @@ pub fn compute_column_width(
     available_width: usize,
 ) -> usize {
     let is_stats = is_stats_table(&state.columns);
-    let max_data = state
-        .rows
-        .iter()
-        .map(|r| {
-            if is_stats && orig_col_idx == 0 && is_stats_summary_row(&state.columns, r) {
-                "Summary".len()
-            } else {
-                r.get(orig_col_idx).map(|v| v.len()).unwrap_or(0)
-            }
-        })
-        .max()
-        .unwrap_or(0);
+    let row_count = state.rows.len();
+    let max_data = if row_count <= 120 {
+        state
+            .rows
+            .iter()
+            .map(|r| {
+                if is_stats && orig_col_idx == 0 && is_stats_summary_row(&state.columns, r) {
+                    "Summary".len()
+                } else {
+                    r.get(orig_col_idx).map(|v| v.len()).unwrap_or(0)
+                }
+            })
+            .max()
+            .unwrap_or(0)
+    } else {
+        let scroll_v = state.scroll_v.get();
+        let sel = state.selected_row;
+        let head = state.rows.iter().take(60);
+        let mid_start = scroll_v.saturating_sub(15).min(row_count);
+        let mid_end = (scroll_v + 45).min(row_count);
+        let mid = state.rows[mid_start..mid_end].iter();
+        let sel_row = state.rows.get(sel).into_iter();
+
+        head.chain(mid)
+            .chain(sel_row)
+            .map(|r| {
+                if is_stats && orig_col_idx == 0 && is_stats_summary_row(&state.columns, r) {
+                    "Summary".len()
+                } else {
+                    r.get(orig_col_idx).map(|v| v.len()).unwrap_or(0)
+                }
+            })
+            .max()
+            .unwrap_or(0)
+    };
     let mut header_len = col_name.len();
     if state.column_filters.contains_key(col_name) {
         header_len += 4;

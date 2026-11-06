@@ -290,11 +290,12 @@ pub fn handle_filter_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
 
 fn cycle_op_left(op: NumericOp) -> NumericOp {
     match op {
-        NumericOp::Lt => NumericOp::Eq,
+        NumericOp::Lt => NumericOp::Neq,
         NumericOp::Lte => NumericOp::Lt,
         NumericOp::Gt => NumericOp::Lte,
         NumericOp::Gte => NumericOp::Gt,
         NumericOp::Eq => NumericOp::Gte,
+        NumericOp::Neq => NumericOp::Eq,
     }
 }
 
@@ -304,7 +305,8 @@ fn cycle_op_right(op: NumericOp) -> NumericOp {
         NumericOp::Lte => NumericOp::Gt,
         NumericOp::Gt => NumericOp::Gte,
         NumericOp::Gte => NumericOp::Eq,
-        NumericOp::Eq => NumericOp::Lt,
+        NumericOp::Eq => NumericOp::Neq,
+        NumericOp::Neq => NumericOp::Lt,
     }
 }
 
@@ -415,6 +417,10 @@ fn handle_numeric_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> {
                             m.numeric_op = NumericOp::Eq;
                             return None;
                         }
+                        '6' => {
+                            m.numeric_op = NumericOp::Neq;
+                            return None;
+                        }
                         'j' => {
                             m.numeric_focus = NumericFocus::Value;
                             return None;
@@ -439,12 +445,22 @@ fn handle_numeric_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> {
                         m.numeric_input = format!("> {}", rest);
                     }
                     m.numeric_error = None;
+                } else if c == '!' {
+                    m.numeric_op = NumericOp::Neq;
+                    m.last_op_char = Some('!');
+                    if let Some((_, rest)) = NumericOp::from_str_prefix(&m.numeric_input) {
+                        m.numeric_input = format!("!= {}", rest);
+                    }
+                    m.numeric_error = None;
                 } else if c == '=' {
                     if m.last_op_char == Some('<') {
                         m.numeric_op = NumericOp::Lte;
                         m.last_op_char = None;
                     } else if m.last_op_char == Some('>') {
                         m.numeric_op = NumericOp::Gte;
+                        m.last_op_char = None;
+                    } else if m.last_op_char == Some('!') {
+                        m.numeric_op = NumericOp::Neq;
                         m.last_op_char = None;
                     } else {
                         m.numeric_op = NumericOp::Eq;
@@ -536,7 +552,9 @@ fn handle_values_modal_key(app: &mut App, key: KeyEvent, is_numeric_col: bool) -
             }
             None
         }
-        KeyCode::Char(c) if is_numeric_col && (c == '<' || c == '>' || c == '=' || c == '2') => {
+        KeyCode::Char(c)
+            if is_numeric_col && (c == '<' || c == '>' || c == '=' || c == '!' || c == '2') =>
+        {
             if let Some(ref mut m) = app.filter_modal {
                 m.mode = FilterMode::Numeric;
                 if c == '<' {
@@ -545,6 +563,8 @@ fn handle_values_modal_key(app: &mut App, key: KeyEvent, is_numeric_col: bool) -
                     m.numeric_op = NumericOp::Gt;
                 } else if c == '=' {
                     m.numeric_op = NumericOp::Eq;
+                } else if c == '!' {
+                    m.numeric_op = NumericOp::Neq;
                 }
             }
             None
@@ -1507,11 +1527,20 @@ mod tests {
         assert_eq!(app.filter_modal.as_ref().unwrap().numeric_op, NumericOp::Eq);
 
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Right));
+        assert_eq!(
+            app.filter_modal.as_ref().unwrap().numeric_op,
+            NumericOp::Neq
+        );
+
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Right));
         assert_eq!(app.filter_modal.as_ref().unwrap().numeric_op, NumericOp::Lt);
 
         // Cycle left
         handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Left));
-        assert_eq!(app.filter_modal.as_ref().unwrap().numeric_op, NumericOp::Eq);
+        assert_eq!(
+            app.filter_modal.as_ref().unwrap().numeric_op,
+            NumericOp::Neq
+        );
     }
 
     #[test]
@@ -1547,6 +1576,45 @@ mod tests {
         assert_eq!(
             res.query_buffer,
             "SELECT id, status FROM users WHERE \"id\" <= 2"
+        );
+    }
+
+    #[test]
+    fn test_numeric_filter_direct_typing_neq_operator() {
+        let mut app = sample_app_with_results();
+        if let Screen::Actions(ref mut a) = app.screen {
+            a.results.as_mut().unwrap().selected_col = 0; // "id" column
+        }
+        open_filter_modal(&mut app);
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Tab)); // Switch to numeric
+
+        // Type "!= 2" directly: '!', '=', '2'
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('!')));
+        assert_eq!(
+            app.filter_modal.as_ref().unwrap().numeric_op,
+            NumericOp::Neq
+        );
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('=')));
+        assert_eq!(
+            app.filter_modal.as_ref().unwrap().numeric_op,
+            NumericOp::Neq
+        );
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('2')));
+        assert_eq!(app.filter_modal.as_ref().unwrap().numeric_input, "2");
+
+        // Apply
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Enter));
+        assert!(app.filter_modal.is_none());
+
+        let Screen::Actions(action_state) = &app.screen else {
+            panic!("expected actions screen");
+        };
+        let res = action_state.results.as_ref().unwrap();
+        let row_ids: Vec<&str> = res.rows.iter().map(|r| r[0].as_str()).collect();
+        assert_eq!(row_ids, vec!["1", "3", "4"]);
+        assert_eq!(
+            res.query_buffer,
+            "SELECT id, status FROM users WHERE \"id\" != 2"
         );
     }
 

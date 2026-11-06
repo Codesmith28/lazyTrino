@@ -76,6 +76,7 @@ impl StoredColumnFilter {
                     "<=" => NumericOp::Lte,
                     ">" => NumericOp::Gt,
                     ">=" => NumericOp::Gte,
+                    "!=" | "<>" => NumericOp::Neq,
                     _ => NumericOp::Eq,
                 };
                 ColumnFilter::Numeric(NumericFilter {

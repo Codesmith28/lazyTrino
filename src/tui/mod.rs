@@ -159,7 +159,13 @@ async fn run_loop(
             break Ok(());
         }
 
-        if event::poll(std::time::Duration::from_millis(33))? {
+        let poll_timeout = if app.loading || app.restore.is_some() {
+            std::time::Duration::from_millis(33)
+        } else {
+            std::time::Duration::from_millis(100)
+        };
+
+        if event::poll(poll_timeout)? {
             match event::read()? {
                 Event::Key(key) => {
                     if key.kind != KeyEventKind::Press {

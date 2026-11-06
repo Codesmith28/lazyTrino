@@ -59,7 +59,17 @@ pub fn dispatch_command(
             let cache_limit = app.config.query_cache_limit;
             let tx = tx.clone();
             tokio::spawn(async move {
-                let res = match TrinoClient::with_cache_limit(&url, &user, cache_limit) {
+                let pass_opt = if password.trim().is_empty() {
+                    None
+                } else {
+                    Some(password.as_str())
+                };
+                let res = match TrinoClient::with_password_and_cache_limit(
+                    &url,
+                    &user,
+                    pass_opt,
+                    cache_limit,
+                ) {
                     Ok(client) => match client.fetch_catalogs().await {
                         Ok(catalogs) => Ok((client, catalogs)),
                         Err(err) => Err(err),
