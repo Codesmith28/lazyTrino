@@ -40,18 +40,19 @@ pub fn connect_keys(app: &mut App, key: KeyEvent) -> Option<Command> {
                 state.focused - 1
             };
         }
-        KeyCode::Backspace => match state.focused {
-            0 => {
-                state.url.pop();
+        _ if crate::tui::handler::text_edit::deletion(&key).is_some() => {
+            if let Some(kind) = crate::tui::handler::text_edit::deletion(&key) {
+                let field = match state.focused {
+                    0 => Some(&mut state.url),
+                    1 => Some(&mut state.user),
+                    2 => Some(&mut state.password),
+                    _ => None,
+                };
+                if let Some(field) = field {
+                    crate::tui::handler::text_edit::delete_back(field, kind);
+                }
             }
-            1 => {
-                state.user.pop();
-            }
-            2 => {
-                state.password.pop();
-            }
-            _ => {}
-        },
+        }
         KeyCode::Char(c) => match state.focused {
             0 => state.url.push(c),
             1 => state.user.push(c),

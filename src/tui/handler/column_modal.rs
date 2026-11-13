@@ -86,9 +86,11 @@ pub fn handle_column_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> 
                 }
                 return None;
             }
-            KeyCode::Backspace => {
-                if let Some(ref mut m) = app.column_modal {
-                    m.search_query.pop();
+            _ if super::text_edit::deletion(&key).is_some() => {
+                if let Some(kind) = super::text_edit::deletion(&key)
+                    && let Some(ref mut m) = app.column_modal
+                {
+                    super::text_edit::delete_back(&mut m.search_query, kind);
                     m.cursor = 0;
                     m.scroll = 0;
                 }

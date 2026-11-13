@@ -311,6 +311,18 @@ fn cycle_op_right(op: NumericOp) -> NumericOp {
 }
 
 fn handle_numeric_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> {
+    // Backspace-style deletion first, so Ctrl+H / Ctrl+W don't hit the h/w-style shortcuts.
+    if let Some(kind) = super::text_edit::deletion(&key) {
+        if let Some(ref mut m) = app.filter_modal {
+            m.last_op_char = None;
+            super::text_edit::delete_back(&mut m.numeric_input, kind);
+            m.numeric_error = None;
+            if let Some((op, _)) = NumericOp::from_str_prefix(&m.numeric_input) {
+                m.numeric_op = op;
+            }
+        }
+        return None;
+    }
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Normal;
@@ -362,17 +374,6 @@ fn handle_numeric_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> {
                     m.numeric_input = format!("{} {}", m.numeric_op.as_str(), rest);
                 }
                 m.numeric_error = None;
-            }
-            None
-        }
-        KeyCode::Backspace => {
-            if let Some(ref mut m) = app.filter_modal {
-                m.last_op_char = None;
-                m.numeric_input.pop();
-                m.numeric_error = None;
-                if let Some((op, _)) = NumericOp::from_str_prefix(&m.numeric_input) {
-                    m.numeric_op = op;
-                }
             }
             None
         }
@@ -519,9 +520,11 @@ fn handle_values_modal_key(app: &mut App, key: KeyEvent, is_numeric_col: bool) -
                 }
                 return None;
             }
-            KeyCode::Backspace => {
-                if let Some(ref mut m) = app.filter_modal {
-                    m.search_query.pop();
+            _ if super::text_edit::deletion(&key).is_some() => {
+                if let Some(kind) = super::text_edit::deletion(&key)
+                    && let Some(ref mut m) = app.filter_modal
+                {
+                    super::text_edit::delete_back(&mut m.search_query, kind);
                     m.cursor = 0;
                     m.scroll = 0;
                 }

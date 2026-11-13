@@ -120,6 +120,8 @@ const HELP_SECTIONS: &[HelpSection] = &[
         title: "Search & Custom Query",
         items: &[
             "  /                              Search / filter current view or modal",
+            "  Opt/Ctrl+Backspace, Ctrl+W     In any text input: delete the previous word",
+            "  Cmd+Backspace, Ctrl+U          In any text input: delete to the start of the line",
             "  r                              Refresh: drop cached results and reload the view from Trino",
             "  Click / wheel on the help bar  Scroll the bottom hints when they do not fit; while it is focused",
             "                                 ←/→ (h/l), Home/End scroll it instead of the pane; Esc leaves it",
@@ -133,7 +135,8 @@ const HELP_SECTIONS: &[HelpSection] = &[
             "  (opens in INSERT)              Type SQL; Enter runs it; Esc switches to NORMAL mode",
             "  ← → ↑ ↓ / Home / End           Move (↑ ↓ walk wrapped rows) — in every mode",
             "  Opt/Alt+← →, Ctrl+← →          Word hop (also Opt+b / Opt+f); Cmd+← → jump to start / end",
-            "  Opt+Backspace, Cmd+Backspace   Delete word / delete to the start (insert mode)",
+            "  Opt/Ctrl+Backspace, Ctrl+W     Delete word (insert mode; also Ctrl+H)",
+            "  Cmd+Backspace, Ctrl+U          Delete to the start (insert mode)",
             "  NORMAL: h j k l w b e W B E    Motions; 0 ^ $ line ends; gg G; f/F/t/T + char, ; ,",
             "  NORMAL: d c y + motion         Delete / change / yank; dd cc yy act on the whole query",
             "  NORMAL: iw aw i\" a\" i' a' i( a(  Text objects, e.g. ci' or di(",

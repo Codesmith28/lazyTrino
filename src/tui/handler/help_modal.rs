@@ -45,9 +45,11 @@ pub fn handle_help_modal_key(app: &mut App, key: KeyEvent) -> Option<Command> {
                 }
                 None
             }
-            KeyCode::Backspace => {
-                if let Some(ref mut m) = app.help_modal {
-                    m.search_query.pop();
+            _ if super::text_edit::deletion(&key).is_some() => {
+                if let Some(kind) = super::text_edit::deletion(&key)
+                    && let Some(ref mut m) = app.help_modal
+                {
+                    super::text_edit::delete_back(&mut m.search_query, kind);
                     m.scroll = 0;
                     app.help_scroll = 0;
                 }
