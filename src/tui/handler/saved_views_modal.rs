@@ -237,9 +237,11 @@ pub fn handle_save_view_prompt_key(app: &mut App, key: KeyEvent) -> Option<Comma
             confirm_save_view_prompt(app);
             None
         }
-        KeyCode::Backspace => {
-            if let Some(ref mut prompt) = app.save_view_prompt {
-                prompt.name_input.pop();
+        _ if super::text_edit::deletion(&key).is_some() => {
+            if let Some(kind) = super::text_edit::deletion(&key)
+                && let Some(ref mut prompt) = app.save_view_prompt
+            {
+                super::text_edit::delete_back(&mut prompt.name_input, kind);
             }
             None
         }
@@ -631,6 +633,29 @@ mod tests {
             app.save_view_prompt.as_ref().unwrap().name_input,
             "test_view_"
         );
+
+        // Word / line deletion: Opt, Ctrl, Cmd and Ctrl+W / Ctrl+U spellings
+        for (code, mods) in [
+            (KeyCode::Backspace, KeyModifiers::ALT),
+            (KeyCode::Backspace, KeyModifiers::CONTROL),
+            (KeyCode::Char('w'), KeyModifiers::CONTROL),
+        ] {
+            app.save_view_prompt.as_mut().unwrap().name_input = "my test view".to_string();
+            handle_save_view_prompt_key(&mut app, KeyEvent::new(code, mods));
+            assert_eq!(
+                app.save_view_prompt.as_ref().unwrap().name_input,
+                "my test "
+            );
+        }
+        for (code, mods) in [
+            (KeyCode::Backspace, KeyModifiers::SUPER),
+            (KeyCode::Char('u'), KeyModifiers::CONTROL),
+        ] {
+            app.save_view_prompt.as_mut().unwrap().name_input = "my test view".to_string();
+            handle_save_view_prompt_key(&mut app, KeyEvent::new(code, mods));
+            assert_eq!(app.save_view_prompt.as_ref().unwrap().name_input, "");
+        }
+        app.save_view_prompt.as_mut().unwrap().name_input = "test_view_".to_string();
 
         // Enter confirms save
         let enter_key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);

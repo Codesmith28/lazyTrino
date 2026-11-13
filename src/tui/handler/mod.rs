@@ -33,6 +33,7 @@ pub mod query_vim;
 pub mod restore;
 pub mod saved_views_modal;
 mod screen_text;
+mod text_edit;
 
 pub fn extract_from_tables(sql: &str) -> Vec<String> {
     query::extract_from_tables(sql)

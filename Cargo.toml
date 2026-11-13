@@ -1,11 +1,10 @@
 [package]
 name = "lazyTrino"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 description = "Terminal UI (TUI) for browsing Trino and Presto catalogs, schemas, tables, metadata, and query results"
 license = "Apache-2.0"
 repository = "https://github.com/Codesmith28/lazyTrino"
-homepage = "https://github.com/Codesmith28/lazyTrino"
 readme = "README.md"
 keywords = ["trino", "presto", "tui", "ratatui", "sql"]
 categories = ["command-line-utilities", "database"]

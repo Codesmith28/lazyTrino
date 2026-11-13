@@ -101,15 +101,16 @@ pub fn validate_and_build_query(
 }
 
 pub(super) fn handle_search_mode(app: &mut App, key: KeyEvent) -> Option<Command> {
+    if let Some(kind) = super::text_edit::deletion(&key) {
+        super::text_edit::delete_back(&mut app.search_query, kind);
+        app.help_scroll = 0;
+        super::navigation::reset_list_selected_for_search(app);
+        return None;
+    }
     match key.code {
         KeyCode::Char(c) if !c.is_ascii_control() => {
             app.search_query.push(c);
             app.bind_search_to_pane();
-            app.help_scroll = 0;
-            super::navigation::reset_list_selected_for_search(app);
-        }
-        KeyCode::Backspace => {
-            app.search_query.pop();
             app.help_scroll = 0;
             super::navigation::reset_list_selected_for_search(app);
         }
@@ -544,10 +545,18 @@ pub(super) fn handle_query_input_mode(app: &mut App, key: KeyEvent) -> Option<Co
                     let to = next_word_pos(&state.query_buffer, state.query_cursor);
                     delete_query_range(state, state.query_cursor, to);
                 }
-                // Option+Backspace deletes a word, Cmd+Backspace to the start
-                KeyCode::Backspace if alt || line_jump => {
+                // Opt/Ctrl+Backspace (or Ctrl+W / Ctrl+H) deletes a word; Cmd+Backspace
+                // (or Ctrl+U) deletes to the start
+                KeyCode::Backspace | KeyCode::Char(_)
+                    if matches!(
+                        super::text_edit::deletion(&key),
+                        Some(super::text_edit::Deletion::Word | super::text_edit::Deletion::Line)
+                    ) =>
+                {
+                    let line =
+                        super::text_edit::deletion(&key) == Some(super::text_edit::Deletion::Line);
                     if !state.delete_selection() {
-                        let from = if line_jump {
+                        let from = if line {
                             0
                         } else {
                             prev_word_pos(&state.query_buffer, state.query_cursor)
@@ -901,6 +910,21 @@ mod tests {
         send(&mut app, KeyCode::Esc, KeyModifiers::NONE);
         typed(&mut app, "u");
         assert_eq!(query(&app).0, "SELECT * FROM orders");
+    }
+
+    #[test]
+    fn insert_mode_cross_platform_delete_chords() {
+        // Ctrl+Backspace / Ctrl+W / Ctrl+H delete a word (Windows & Linux)
+        let mut app = panel("SELECT * FROM orders");
+        send(&mut app, KeyCode::Backspace, KeyModifiers::CONTROL);
+        assert_eq!(query(&app).0, "SELECT * FROM ");
+        send(&mut app, KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(query(&app).0, "SELECT * ");
+        send(&mut app, KeyCode::Char('h'), KeyModifiers::CONTROL);
+        assert_eq!(query(&app).0, "SELECT ");
+        // Ctrl+U deletes to the start; none of these type a letter
+        send(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        assert_eq!(query(&app), (String::new(), 0));
     }
 
     #[test]
