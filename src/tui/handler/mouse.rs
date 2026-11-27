@@ -92,7 +92,8 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
         return None;
     }
 
-    let bottom_y = term_height.saturating_sub(7);
+    let bottom_rows = app.bottom_rows(term_height);
+    let bottom_y = term_height.saturating_sub(bottom_rows);
     let is_in_table = matches!(app.screen, Screen::Actions(_));
     // Only the Actions screen has a pane divider; the Connect / Catalog /
     // Schema / Table screens are full width.
@@ -105,6 +106,13 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
 
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
+            // The Executed Queries pane's top border is its drag handle: take
+            // the press before any pane (or text selection) can claim it.
+            if mouse.row == bottom_y && bottom_y > 0 {
+                app.is_dragging_inspector = true;
+                app.clear_mouse_selection();
+                return None;
+            }
             if let Some((query_x, query_y, query_width, query_height, inner_w)) =
                 query_bar_layout(app, term_width, term_height)
             {
@@ -276,6 +284,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                             false,
                             term_width,
                             term_height,
+                            bottom_rows,
                             mouse.column,
                             mouse.row,
                         )
@@ -288,6 +297,13 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
+            if app.is_dragging_inspector {
+                // The border follows the pointer: everything below it (the
+                // pane and the one-row help bar) is the pane's new height.
+                let rows = term_height.saturating_sub(1).saturating_sub(mouse.row);
+                app.inspector_height = crate::app::inspector_rows(rows, term_height);
+                return None;
+            }
             if app.is_dragging_h_scrollbar {
                 if let Some(inner) = results_table_inner_rect(app, term_width, term_height)
                     && let Screen::Actions(ref mut a) = app.screen
@@ -385,6 +401,10 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
+            if app.is_dragging_inspector {
+                app.is_dragging_inspector = false;
+                return None;
+            }
             let was_dragging_resizer = app.is_dragging_resizer;
             let was_dragging_h_scrollbar = app.is_dragging_h_scrollbar;
             let was_dragging_query = app.is_dragging_query_select;
@@ -440,6 +460,7 @@ pub fn handle_mouse_sync(app: &mut App, mouse: MouseEvent) -> Option<Command> {
                         false,
                         term_width,
                         term_height,
+                        bottom_rows,
                         mouse.column,
                         mouse.row,
                     )
@@ -664,7 +685,7 @@ pub(crate) fn phase1_list_inner_rect(app: &App, term_width: u16, term_height: u1
     if !is_phase1 {
         return None;
     }
-    let bottom_y = term_height.saturating_sub(7);
+    let bottom_y = term_height.saturating_sub(app.bottom_rows(term_height));
     let list_width = term_width;
     let inner_w = list_width.saturating_sub(2).max(1) as usize;
     let search_active = matches!(app.mode, Mode::Search) && !matches!(app.screen, Screen::Help);
@@ -745,11 +766,12 @@ pub(crate) fn drilldown_list_inner_rect(
     has_results: bool,
     term_width: u16,
     term_height: u16,
+    bottom_rows: u16,
 ) -> Option<Rect> {
     if has_results {
         return None;
     }
-    let bottom_y = term_height.saturating_sub(7);
+    let bottom_y = term_height.saturating_sub(bottom_rows);
     let menu_pct = actions_panel_pct.clamp(10, 60);
     let menu_width = ((term_width as u32 * menu_pct as u32) / 100) as u16;
     let preview_x = menu_width;
@@ -804,6 +826,7 @@ pub(crate) fn drilldown_hit_test(
     has_results: bool,
     term_width: u16,
     term_height: u16,
+    bottom_rows: u16,
     col: u16,
     row: u16,
 ) -> Option<usize> {
@@ -815,6 +838,7 @@ pub(crate) fn drilldown_hit_test(
         has_results,
         term_width,
         term_height,
+        bottom_rows,
     )?;
     if col < inner.x
         || col >= inner.x + inner.width
@@ -843,7 +867,7 @@ pub(crate) fn drilldown_hit_test(
 }
 
 pub fn results_table_inner_rect(app: &App, term_width: u16, term_height: u16) -> Option<Rect> {
-    let bottom_y = term_height.saturating_sub(7);
+    let bottom_y = term_height.saturating_sub(app.bottom_rows(term_height));
     if bottom_y == 0 {
         return None;
     }
@@ -912,7 +936,7 @@ fn extract_structured_text(app: &App, anchor: (u16, u16), current: (u16, u16)) -
         return String::new();
     }
 
-    let bottom_y = term_height.saturating_sub(7);
+    let bottom_y = term_height.saturating_sub(app.bottom_rows(term_height));
 
     let start_row = anchor.1.min(current.1);
     let end_row = anchor.1.max(current.1);
@@ -2375,6 +2399,106 @@ mod tests {
         };
         let cmd = handle_mouse_sync(&mut app, up_evt);
         assert!(matches!(cmd, Some(Command::FetchSchemas { catalog }) if catalog == "iceberg"));
+    }
+
+    fn mouse_at(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn dragging_the_queries_pane_border_resizes_it() {
+        let mut app = sample_app();
+        let (_, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
+        assert_eq!(app.bottom_rows(term_h), 7, "the default is unchanged");
+        let border = term_h - app.bottom_rows(term_h);
+
+        // Pressing the border only grabs it.
+        handle_mouse_sync(
+            &mut app,
+            mouse_at(MouseEventKind::Down(MouseButton::Left), 5, border),
+        );
+        assert!(app.is_dragging_inspector);
+        assert_eq!(app.inspector_height, crate::app::INSPECTOR_DEFAULT_ROWS);
+
+        // Dragging up grows the pane: its top border follows the pointer.
+        handle_mouse_sync(
+            &mut app,
+            mouse_at(MouseEventKind::Drag(MouseButton::Left), 5, border - 4),
+        );
+        assert_eq!(app.inspector_height, 10);
+        assert_eq!(app.bottom_rows(term_h), 11);
+
+        // Dragging down shrinks it, but never past the minimum.
+        handle_mouse_sync(
+            &mut app,
+            mouse_at(MouseEventKind::Drag(MouseButton::Left), 5, term_h - 1),
+        );
+        assert_eq!(app.inspector_height, crate::app::INSPECTOR_MIN_ROWS);
+
+        handle_mouse_sync(
+            &mut app,
+            mouse_at(MouseEventKind::Up(MouseButton::Left), 5, term_h - 1),
+        );
+        assert!(!app.is_dragging_inspector);
+    }
+
+    #[test]
+    fn the_queries_pane_cannot_be_dragged_over_the_rest_of_the_screen() {
+        let mut app = sample_app();
+        let (_, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
+        let border = term_h - app.bottom_rows(term_h);
+
+        handle_mouse_sync(
+            &mut app,
+            mouse_at(MouseEventKind::Down(MouseButton::Left), 5, border),
+        );
+        handle_mouse_sync(
+            &mut app,
+            mouse_at(MouseEventKind::Drag(MouseButton::Left), 5, 0),
+        );
+        // Rows are always left above it, and what is drawn matches what the
+        // mouse hit-tests against.
+        let rows = crate::app::inspector_rows(app.inspector_height, term_h);
+        assert_eq!(app.inspector_height, rows);
+        assert!(term_h - app.bottom_rows(term_h) >= 8);
+    }
+
+    #[test]
+    fn clicking_the_queries_pane_border_without_dragging_changes_nothing() {
+        let mut app = sample_app();
+        let (_, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
+        let border = term_h - app.bottom_rows(term_h);
+
+        handle_mouse_sync(
+            &mut app,
+            mouse_at(MouseEventKind::Down(MouseButton::Left), 5, border),
+        );
+        handle_mouse_sync(
+            &mut app,
+            mouse_at(MouseEventKind::Up(MouseButton::Left), 5, border),
+        );
+        assert!(!app.is_dragging_inspector);
+        assert_eq!(app.inspector_height, crate::app::INSPECTOR_DEFAULT_ROWS);
+        assert!(!app.is_selecting_text, "the border is not a text selection");
+    }
+
+    #[test]
+    fn a_resized_pane_moves_the_text_selection_and_grid_hit_tests_with_it() {
+        let mut app = sample_app();
+        let (_, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
+        app.add_query_log("SELECT 1".to_string());
+        app.inspector_height = 10;
+        let bottom_y = term_h - app.bottom_rows(term_h);
+        assert_eq!(bottom_y, term_h - 11);
+
+        // The first text line sits one row under the (moved) top border.
+        let text = extract_selected_text(&app, (10, bottom_y + 1), (10, bottom_y + 1));
+        assert_eq!(text, "SELECT 1");
     }
 
     #[test]

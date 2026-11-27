@@ -315,7 +315,7 @@ pub(super) fn query_bar_layout(
     term_height: u16,
 ) -> Option<(u16, u16, u16, u16, usize)> {
     let query_buf = active_query_buffer(app)?;
-    let bottom_y = term_height.saturating_sub(7);
+    let bottom_y = term_height.saturating_sub(app.bottom_rows(term_height));
     if bottom_y == 0 {
         return None;
     }

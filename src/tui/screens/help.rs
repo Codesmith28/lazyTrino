@@ -69,6 +69,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
     HelpSection {
         title: "Selection, Copy & Export",
         items: &[
+            "  Drag Executed Queries top edge Resize the Executed Queries pane (the border line above it)",
             "  Mouse drag                     Select anything on screen; copied on release and kept highlighted",
             "                                 (in your terminal's own colors) until you click, scroll, type or press Esc",
             "  Shift+↑ / ↓ (/ ← →)            Start / extend a selection (in the grid: cell level, one cell at a time)",

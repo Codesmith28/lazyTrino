@@ -1488,6 +1488,25 @@ impl Action {
     }
 }
 
+/// Rows the Executed Queries pane takes until it is dragged: 4 lines of text
+/// plus its borders.
+pub const INSPECTOR_DEFAULT_ROWS: u16 = 6;
+/// The smallest the pane can be dragged to: one line of text plus borders.
+pub const INSPECTOR_MIN_ROWS: u16 = 3;
+/// Rows always left above the pane for the query bar, count box and grid.
+const MIN_ROWS_ABOVE_INSPECTOR: u16 = 8;
+
+/// `requested` rows for the Executed Queries pane, held between the minimum
+/// and what leaves the screen above it usable on a terminal `term_height`
+/// rows tall. A terminal too short for that still gets the default size, as
+/// it did before the pane could be resized.
+pub fn inspector_rows(requested: u16, term_height: u16) -> u16 {
+    let most = term_height
+        .saturating_sub(1 + MIN_ROWS_ABOVE_INSPECTOR)
+        .max(INSPECTOR_DEFAULT_ROWS);
+    requested.clamp(INSPECTOR_MIN_ROWS, most)
+}
+
 pub struct App {
     pub screen: Screen,
     pub prev_screen: Option<Box<Screen>>,
@@ -1522,6 +1541,11 @@ pub struct App {
     pub is_dragging_resizer: bool,
     pub is_dragging_query_select: bool,
     pub is_dragging_h_scrollbar: bool,
+    /// The Executed Queries pane's top border is being dragged to resize it.
+    pub is_dragging_inspector: bool,
+    /// Rows the Executed Queries pane is asked to take, borders included.
+    /// Read it through [`App::bottom_rows`], which keeps it on screen.
+    pub inspector_height: u16,
     /// First visible line of the Executed Queries pane (0 = newest at top).
     pub query_inspector_scroll: usize,
     /// Where the pane was last drawn (set by the renderer, read by the
@@ -1606,6 +1630,8 @@ impl App {
             is_dragging_resizer: false,
             is_dragging_query_select: false,
             is_dragging_h_scrollbar: false,
+            is_dragging_inspector: false,
+            inspector_height: INSPECTOR_DEFAULT_ROWS,
             query_inspector_scroll: 0,
             inspector_rect: Cell::new(ratatui::layout::Rect::default()),
             footer_rect: Cell::new(ratatui::layout::Rect::default()),
@@ -1636,6 +1662,12 @@ impl App {
             last_selected_action: HashMap::new(),
             cached_action_states: HashMap::new(),
         }
+    }
+
+    /// Rows the bottom band takes on a terminal `term_height` rows tall: the
+    /// Executed Queries pane plus the one-row help bar under it.
+    pub fn bottom_rows(&self, term_height: u16) -> u16 {
+        inspector_rows(self.inspector_height, term_height) + 1
     }
 
     pub fn add_query_log(&mut self, sql: String) -> usize {

@@ -126,7 +126,7 @@ lazyTrino --profile prod
 - 🎛️ **Column Filtering (`F`)**: Numeric comparator filters (`>`, `<`, `>=`, `<=`, `=`, `!=`, `BETWEEN`) and distinct categorical value checklists. In the **All Table View** (`a`) the checklist holds *every* value the column has in the table, fetched with a `SELECT DISTINCT … LIMIT 1001` when you press `F`, not just the rows loaded so far; it shows a note when a column has more than 1,000 values, and is remembered until you refresh. For such a column, `/` then Enter searches the *whole table* (`LIKE '%term%'`, case-insensitive) and adds the matches to the list. Every other grid (Table View Mode, query results) lists only the rows loaded.
 - 👁️ **Column Visibility Manager (`C`)**: Hide or display specific columns in wide tables.
 - ✍️ **Interactive SQL Query Bar (`q` / `:`)**: Buffer editing with text selection, clipboard support, and instant query execution.
-- 🖱️ **Mouse & Resizable Split**: Click-to-select, wheel scrolling, and draggable vertical pane divider.
+- 🖱️ **Mouse & Resizable Split**: Click-to-select, wheel scrolling, a draggable vertical pane divider, and a draggable top border on the Executed Queries pane.
 - 🎨 **Terminal-Native Colors**: Uses only your terminal's own colors (default text plus its 16 ANSI colors), so it follows your light or dark profile. Catalogs, schemas and tables get their own colors; grid values are tinted by type (numbers, booleans, dates, NULL); the SQL bar is syntax-highlighted; footer keys stand out.
 - 📊 **Audit Logs & Status Bar**: Real-time query execution monitoring, latency (ms), row counts, and traceback errors.
 
@@ -257,6 +257,7 @@ The query bar is a small vim editor. It opens in **INSERT** mode so you can type
 | Click / Drag Query Bar | Position query cursor and select SQL text |
 | Mouse Wheel | Scroll lists, partition trees, column horizontal scroll, and result tables |
 | Drag Vertical Border | Dynamically resize split ratio between Menu and Preview panes |
+| Drag Executed Queries Top Border | Make the Executed Queries pane taller or shorter (3 rows minimum; the rest of the screen keeps at least 8 rows) |
 
 </details>
 
