@@ -40,8 +40,11 @@ pub(in crate::tui) fn ui(frame: &mut Frame, app: &App) {
 
     let is_in_table = matches!(effective_screen, Screen::Actions(_));
 
-    let outer_chunks =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).split(frame.area());
+    let outer_chunks = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(app.bottom_rows(frame.area().height)),
+    ])
+    .split(frame.area());
     let bottom_chunks =
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(outer_chunks[1]);
 
@@ -869,6 +872,40 @@ pub mod table_browse_full_width_regression {
             catalog_title_right_edge,
             "catalog list should extend to the right edge of the screen"
         );
+    }
+}
+
+#[cfg(test)]
+mod inspector_resize_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn drawn_pane_rows(app: &App, height: u16) -> u16 {
+        let mut term = Terminal::new(TestBackend::new(80, height)).unwrap();
+        term.draw(|f| ui(f, app)).unwrap();
+        app.inspector_rect.get().height
+    }
+
+    #[test]
+    fn the_queries_pane_is_drawn_at_the_size_it_was_dragged_to() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        assert_eq!(drawn_pane_rows(&app, 30), 6, "default size is unchanged");
+
+        app.inspector_height = 12;
+        assert_eq!(drawn_pane_rows(&app, 30), 12);
+
+        app.inspector_height = 3;
+        assert_eq!(drawn_pane_rows(&app, 30), 3);
+    }
+
+    #[test]
+    fn a_short_terminal_never_loses_the_rows_above_the_pane() {
+        let mut app = App::new(crate::config::ConnectionConfig::default(), false);
+        app.inspector_height = 40;
+        // 24 rows: 1 help bar + at least 8 above leaves 15 for the pane.
+        assert_eq!(drawn_pane_rows(&app, 24), 15);
+        // Too short for that: the default size, as before the pane resized.
+        assert_eq!(drawn_pane_rows(&app, 12), 6);
     }
 }
 
