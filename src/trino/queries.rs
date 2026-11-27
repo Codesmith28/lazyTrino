@@ -289,6 +289,59 @@ pub fn distinct_column_values(
     )
 }
 
+/// `term` as the body of a `LIKE '%…%' ESCAPE '\'` pattern: lower-cased (the
+/// search is case-insensitive), `\` `%` `_` escaped so they match literally,
+/// and `'` doubled for the SQL string literal.
+fn like_pattern_body(term: &str) -> String {
+    let mut out = String::with_capacity(term.len());
+    for c in term.to_lowercase().chars() {
+        match c {
+            '\\' | '%' | '_' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\'' => out.push_str("''"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// `SELECT DISTINCT "<column>" FROM t WHERE [k1='v1' AND …] lower(CAST("<column>" AS VARCHAR)) LIKE '%term%' ESCAPE '\' LIMIT <limit>`
+///
+/// The filter modal's search over the whole table (or the partition fixed by
+/// `filters`): the distinct values that contain `term`, case-insensitively,
+/// whatever the column's type. Used when the modal's list was cut off at
+/// `COLUMN_VALUES_LIMIT`, so a value outside it can still be found.
+#[allow(clippy::too_many_arguments)]
+pub fn search_column_values(
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    filters: &[(String, String)],
+    column: &str,
+    term: &str,
+    limit: usize,
+    types: &ColumnTypes,
+) -> String {
+    let col = q(column.trim());
+    let mut predicates = Vec::new();
+    if let Some(partition) = build_where_clause(filters, types) {
+        predicates.push(partition);
+    }
+    predicates.push(format!(
+        "lower(CAST({col} AS VARCHAR)) LIKE '%{}%' ESCAPE '\\'",
+        like_pattern_body(term)
+    ));
+    format!(
+        "SELECT DISTINCT {col} FROM {}.{}.{} WHERE {} LIMIT {limit}",
+        q(catalog),
+        q(schema),
+        q(table),
+        predicates.join(" AND "),
+    )
+}
+
 /// `SELECT * FROM t [WHERE k1='v1' AND k2='v2'] OFFSET <offset> LIMIT <limit>`
 ///
 /// The leaf-level query in a partition drill-down: only run once every
@@ -1295,6 +1348,44 @@ mod tests {
         assert_eq!(
             partitions(catalog, schema, table),
             "SELECT * FROM \"ice\"\"berg\".\"sales data\".\"orders\"\"2024$partitions\""
+        );
+    }
+
+    #[test]
+    fn search_column_values_matches_any_type_case_insensitively() {
+        assert_eq!(
+            search_column_values(
+                "hive",
+                "default",
+                "events",
+                &[],
+                "target_id",
+                "AbC",
+                1001,
+                &ColumnTypes::default(),
+            ),
+            "SELECT DISTINCT \"target_id\" FROM \"hive\".\"default\".\"events\" \
+             WHERE lower(CAST(\"target_id\" AS VARCHAR)) LIKE '%abc%' ESCAPE '\\' LIMIT 1001"
+        );
+    }
+
+    #[test]
+    fn search_column_values_escapes_wildcards_and_quotes_and_keeps_the_partition() {
+        let filters = vec![("date".to_string(), "2026-08-06".to_string())];
+        let sql = search_column_values(
+            "hive",
+            "default",
+            "events",
+            &filters,
+            "name",
+            r"50%_o'\x",
+            10,
+            &ColumnTypes::default(),
+        );
+        assert!(sql.contains(r"LIKE '%50\%\_o''\\x%' ESCAPE"), "{sql}");
+        assert!(
+            sql.contains("WHERE date = '2026-08-06' AND lower("),
+            "{sql}"
         );
     }
 

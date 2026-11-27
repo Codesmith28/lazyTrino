@@ -1152,6 +1152,10 @@ pub struct FilterModalState {
     pub loading: bool,
     /// Shown beside the title: the list was cut off, or the fetch failed.
     pub note: Option<String>,
+    /// The grid is the All Table View: when the value list was cut off,
+    /// Enter in the search box also searches the whole table in Trino. Every
+    /// other grid searches only the rows it has loaded.
+    pub search_table: bool,
 }
 
 impl FilterModalState {
