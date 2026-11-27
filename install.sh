@@ -195,7 +195,7 @@ main() {
 
         # 3. Fallback to hardcoded known stable release
         if [ -z "$TAG" ]; then
-            TAG="v0.3.3"
+            TAG="v0.3.4"
         fi
     fi
 
