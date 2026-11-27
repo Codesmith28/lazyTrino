@@ -452,6 +452,7 @@ mod tests {
             last_op_char: None,
             loading: false,
             note: None,
+            search_table: false,
         };
         terminal.draw(|f| render(f, f.area(), &modal)).unwrap();
     }
@@ -479,6 +480,7 @@ mod tests {
             last_op_char: None,
             loading: false,
             note: None,
+            search_table: false,
         };
         terminal.draw(|f| render(f, f.area(), &modal)).unwrap();
     }

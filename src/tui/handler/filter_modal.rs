@@ -17,8 +17,8 @@ use std::collections::HashSet;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::{
-    App, ColumnFilter, FilterModalState, FilterMode, Mode, NumericFilter, NumericFocus, NumericOp,
-    Screen, VerticalColumn,
+    Action, App, ColumnFilter, FilterModalState, FilterMode, Mode, NumericFilter, NumericFocus,
+    NumericOp, Screen, VerticalColumn,
 };
 use crate::tui::handler::Command;
 use crate::tui::handler::navigation::normalize_key_code;
@@ -111,11 +111,12 @@ fn truncated_note() -> String {
 
 /// Opens the filter modal for the column under the cursor.
 ///
-/// On a table grid the list should hold every value the column has in the
-/// table, not just the page loaded so far, so the modal opens empty and the
-/// returned command fetches them (see [`column_values_loaded`]). Grids that
-/// are not a plain table read, and columns already fetched, use what is at
-/// hand.
+/// In the All Table View the list should hold every value the column has in
+/// the table, not just the page loaded so far, so the modal opens empty and
+/// the returned command fetches them (see [`column_values_loaded`]); if the
+/// table has more values than fit, Enter in the search box searches the whole
+/// table (see [`column_search_loaded`]). Every other grid, and columns
+/// already fetched, use what is at hand: the rows that are loaded.
 pub fn open_filter_modal(app: &mut App) -> Option<Command> {
     let can_fetch = app.trino_client.is_some();
     let mut fetch = None;
@@ -123,6 +124,7 @@ pub fn open_filter_modal(app: &mut App) -> Option<Command> {
         && let Some(ref mut res) = action_state.results
         && !res.columns.is_empty()
     {
+        let is_all_table_view = action_state.selected == Action::AllTableView.index();
         let col_idx = res.selected_col.min(res.columns.len().saturating_sub(1));
         let col_name = res.columns[col_idx].clone();
 
@@ -135,10 +137,8 @@ pub fn open_filter_modal(app: &mut App) -> Option<Command> {
             .vertical_schema_cols
             .iter()
             .any(|c| c.name.eq_ignore_ascii_case(&col_name));
-        let loading = can_fetch
-            && res.is_paginated
-            && is_table_column
-            && !res.col_values_full.contains(&col_name);
+        let search_table = can_fetch && is_all_table_view && res.is_paginated && is_table_column;
+        let loading = search_table && !res.col_values_full.contains(&col_name);
 
         let values = if loading {
             Vec::new()
@@ -187,6 +187,7 @@ pub fn open_filter_modal(app: &mut App) -> Option<Command> {
             last_op_char: None,
             loading,
             note,
+            search_table,
         });
         app.mode = Mode::FilterModal;
     }
@@ -263,6 +264,108 @@ pub fn column_values_loaded(
         m.scroll = 0;
         m.loading = false;
         m.note = note;
+    }
+}
+
+/// The table-wide search for what is typed in the modal's search box, when
+/// there is something to find that the list cannot already show: the grid is
+/// the All Table View and the column has more values than the list holds.
+fn table_search_command(app: &App) -> Option<Command> {
+    let m = app.filter_modal.as_ref()?;
+    if !m.search_table || m.search_query.is_empty() {
+        return None;
+    }
+    let Screen::Actions(action_state) = &app.screen else {
+        return None;
+    };
+    let res = action_state.results.as_ref()?;
+    if !res.col_values_truncated.contains(&m.column_name) {
+        return None;
+    }
+    Some(Command::SearchColumnValues {
+        catalog: res.catalog.clone(),
+        schema: res.schema.clone(),
+        table: res.table.clone(),
+        filters: res.filters.clone(),
+        column: m.column_name.clone(),
+        term: m.search_query.clone(),
+    })
+}
+
+/// Takes the outcome of a [`Command::SearchColumnValues`]: adds the matches
+/// to the column's value list (the grid's copy and the open modal's), so they
+/// can be ticked like any other value. A value the modal had every box ticked
+/// for stays that way — matches arrive ticked — otherwise they arrive
+/// unticked, so a selection made so far is not widened behind the user's back.
+pub fn column_search_loaded(
+    app: &mut App,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    column: &str,
+    term: &str,
+    outcome: Result<(Vec<String>, bool), String>,
+) {
+    let Screen::Actions(ref mut action_state) = app.screen else {
+        return;
+    };
+    if action_state.catalog != catalog
+        || action_state.schema != schema
+        || action_state.table != table
+    {
+        return;
+    }
+    let Some(res) = action_state.results.as_mut() else {
+        return;
+    };
+
+    let (found, more) = match outcome {
+        Ok(ok) => ok,
+        Err(err) => {
+            let brief: String = err.lines().next().unwrap_or("").chars().take(80).collect();
+            if let Some(m) = app.filter_modal.as_mut()
+                && m.column_name == column
+            {
+                m.note = Some(format!("table search failed ({brief})"));
+            }
+            return;
+        }
+    };
+
+    // The grid's copy: what the next open of this column starts from, and
+    // what "everything ticked" is measured against when the filter is built.
+    if let Some(list) = res.col_distinct_values.get_mut(column) {
+        for v in &found {
+            if !list.contains(v) {
+                list.push(v.clone());
+            }
+        }
+        list.sort();
+    }
+
+    if let Some(m) = app.filter_modal.as_mut()
+        && m.column_name == column
+        && !m.loading
+    {
+        let all_ticked = m.selected_values.len() == m.values.len();
+        for v in &found {
+            if !m.values.contains(v) {
+                m.values.push(v.clone());
+                if all_ticked {
+                    m.selected_values.insert(v.clone());
+                }
+            }
+        }
+        m.values.sort();
+        m.cursor = 0;
+        m.scroll = 0;
+        m.note = Some(format!(
+            "{} · searched table for \"{term}\": {} match{}{}",
+            truncated_note(),
+            found.len(),
+            if found.len() == 1 { "" } else { "es" },
+            if more { ", first 1,000 only" } else { "" },
+        ));
     }
 }
 
@@ -515,10 +618,14 @@ fn handle_values_modal_key(app: &mut App, key: KeyEvent, is_numeric_col: bool) -
                 {
                     return apply_filter_modal(app);
                 }
+                let search = table_search_command(app);
                 if let Some(ref mut m) = app.filter_modal {
                     m.is_searching = false;
+                    if search.is_some() {
+                        m.note = Some(format!("searching table for \"{}\"…", m.search_query));
+                    }
                 }
-                return None;
+                return search;
             }
             _ if super::text_edit::deletion(&key).is_some() => {
                 if let Some(kind) = super::text_edit::deletion(&key)
@@ -850,7 +957,8 @@ mod tests {
         app
     }
 
-    /// A table grid (paginated) on a connected app, cursor on `status`.
+    /// An All Table View grid (paginated) on a connected app, cursor on
+    /// `status`.
     fn table_grid_app() -> App {
         let mut app = sample_app_with_results();
         app.trino_client =
@@ -873,8 +981,32 @@ mod tests {
             res.catalog = "memory".to_string();
             res.schema = "default".to_string();
             res.table = "users".to_string();
+            a.selected = crate::app::Action::AllTableView.index();
         }
         app
+    }
+
+    /// The modal for `status` on an All Table View whose value list was cut
+    /// off at the limit, ready to search.
+    fn truncated_modal_app() -> App {
+        let mut app = table_grid_app();
+        open_filter_modal(&mut app);
+        column_values_loaded(
+            &mut app,
+            "memory",
+            "default",
+            "users",
+            "status",
+            Ok((all_statuses(), true)),
+        );
+        app
+    }
+
+    fn type_search(app: &mut App, text: &str) {
+        handle_filter_modal_key(app, KeyEvent::from(KeyCode::Char('/')));
+        for c in text.chars() {
+            handle_filter_modal_key(app, KeyEvent::from(KeyCode::Char(c)));
+        }
     }
 
     fn all_statuses() -> Vec<String> {
@@ -1048,6 +1180,139 @@ mod tests {
             "served from the cache"
         );
         assert_eq!(app.filter_modal.as_ref().unwrap().values, all_statuses());
+    }
+
+    #[test]
+    fn other_table_views_filter_the_loaded_rows_only() {
+        let mut app = table_grid_app();
+        if let Screen::Actions(a) = &mut app.screen {
+            a.selected = crate::app::Action::TableView.index();
+        }
+        assert!(
+            open_filter_modal(&mut app).is_none(),
+            "no table-wide fetch outside the All Table View"
+        );
+        let m = app.filter_modal.as_ref().unwrap();
+        assert!(!m.loading);
+        assert!(!m.search_table);
+        assert_eq!(m.values, vec!["active", "inactive", "pending"]);
+    }
+
+    #[test]
+    fn enter_in_the_search_box_searches_the_table_when_the_list_was_cut_off() {
+        let mut app = truncated_modal_app();
+        type_search(&mut app, "susp_");
+        let cmd = handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(
+            cmd,
+            Some(Command::SearchColumnValues { ref column, ref term, ref filters, .. })
+                if column == "status" && term == "susp_" && filters.is_empty()
+        ));
+        let m = app.filter_modal.as_ref().unwrap();
+        assert!(!m.is_searching, "the search box closes, the query stays");
+        assert!(m.note.as_deref().unwrap().contains("searching"));
+    }
+
+    #[test]
+    fn a_complete_list_or_another_view_never_searches_the_table() {
+        // The list holds every value: searching it locally is already complete.
+        let mut app = table_grid_app();
+        open_filter_modal(&mut app);
+        column_values_loaded(
+            &mut app,
+            "memory",
+            "default",
+            "users",
+            "status",
+            Ok((all_statuses(), false)),
+        );
+        type_search(&mut app, "zzz");
+        assert!(handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Enter)).is_none());
+
+        // Not the All Table View: the loaded rows are all there is.
+        let mut app = table_grid_app();
+        if let Screen::Actions(a) = &mut app.screen {
+            a.selected = crate::app::Action::TableView.index();
+        }
+        open_filter_modal(&mut app);
+        type_search(&mut app, "zzz");
+        assert!(handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Enter)).is_none());
+    }
+
+    #[test]
+    fn matches_found_in_the_table_join_the_list() {
+        let mut app = truncated_modal_app();
+        type_search(&mut app, "zz");
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Enter));
+
+        column_search_loaded(
+            &mut app,
+            "memory",
+            "default",
+            "users",
+            "status",
+            "zz",
+            Ok((vec!["zzz-late".to_string()], false)),
+        );
+        let m = app.filter_modal.as_ref().unwrap();
+        assert!(m.values.contains(&"zzz-late".to_string()));
+        assert_eq!(m.filtered_indices().len(), 1, "the search still narrows it");
+        assert_eq!(
+            m.selected_values.len(),
+            m.values.len(),
+            "everything was ticked, so the match arrives ticked"
+        );
+        assert!(m.note.as_deref().unwrap().contains("1 match"));
+        // The grid's own copy grew too, so "all ticked" is measured against it.
+        if let Screen::Actions(a) = &app.screen {
+            assert!(
+                a.results.as_ref().unwrap().col_distinct_values["status"]
+                    .contains(&"zzz-late".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn matches_do_not_widen_a_selection_the_user_already_narrowed() {
+        let mut app = truncated_modal_app();
+        // Untick everything, then tick one.
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char('a')));
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
+        type_search(&mut app, "zz");
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Enter));
+
+        column_search_loaded(
+            &mut app,
+            "memory",
+            "default",
+            "users",
+            "status",
+            "zz",
+            Ok((vec!["zzz-late".to_string()], false)),
+        );
+        let m = app.filter_modal.as_ref().unwrap();
+        assert!(m.values.contains(&"zzz-late".to_string()));
+        assert!(!m.selected_values.contains("zzz-late"));
+        assert_eq!(m.selected_values.len(), 1);
+    }
+
+    #[test]
+    fn a_failed_table_search_keeps_the_list_and_says_so() {
+        let mut app = truncated_modal_app();
+        type_search(&mut app, "zz");
+        handle_filter_modal_key(&mut app, KeyEvent::from(KeyCode::Enter));
+        column_search_loaded(
+            &mut app,
+            "memory",
+            "default",
+            "users",
+            "status",
+            "zz",
+            Err("boom".to_string()),
+        );
+        let m = app.filter_modal.as_ref().unwrap();
+        assert_eq!(m.values, all_statuses());
+        assert!(m.note.as_deref().unwrap().contains("boom"));
     }
 
     #[test]

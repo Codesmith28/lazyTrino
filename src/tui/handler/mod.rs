@@ -166,6 +166,16 @@ pub enum Command {
         filters: Vec<(String, String)>,
         column: String,
     },
+    /// Searches one table column for values containing `term`, over the whole
+    /// table (or the grid's partition `filters`), for the filter modal.
+    SearchColumnValues {
+        catalog: String,
+        schema: String,
+        table: String,
+        filters: Vec<(String, String)>,
+        column: String,
+        term: String,
+    },
 }
 
 #[derive(Debug)]
@@ -260,6 +270,15 @@ pub enum AsyncResult {
         schema: String,
         table: String,
         column: String,
+        result: Result<crate::trino::types::QueryResults, TrinoClientError>,
+    },
+    SearchColumnValues {
+        log_id: usize,
+        catalog: String,
+        schema: String,
+        table: String,
+        column: String,
+        term: String,
         result: Result<crate::trino::types::QueryResults, TrinoClientError>,
     },
 }

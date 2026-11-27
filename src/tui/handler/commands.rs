@@ -623,6 +623,42 @@ pub fn dispatch_command(
                 });
             }
         }
+        Command::SearchColumnValues {
+            catalog,
+            schema,
+            table,
+            filters,
+            column,
+            term,
+        } => {
+            let query = queries::search_column_values(
+                &catalog,
+                &schema,
+                &table,
+                &filters,
+                &column,
+                &term,
+                // One more than shown, to tell "exactly the limit" from "more".
+                queries::COLUMN_VALUES_LIMIT + 1,
+                &table_column_types(app, &catalog, &schema, &table),
+            );
+            let log_id = app.add_query_log(query.clone());
+            if let Some(client) = app.trino_client.clone() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let res = client.execute_fresh(&query).await;
+                    let _ = tx.send(AsyncResult::SearchColumnValues {
+                        log_id,
+                        catalog,
+                        schema,
+                        table,
+                        column,
+                        term,
+                        result: res,
+                    });
+                });
+            }
+        }
     }
 }
 
@@ -1433,6 +1469,39 @@ pub fn handle_async_result(app: &mut App, result: AsyncResult) -> Option<Command
             };
             super::filter_modal::column_values_loaded(
                 app, &catalog, &schema, &table, &column, outcome,
+            );
+        }
+        AsyncResult::SearchColumnValues {
+            log_id,
+            catalog,
+            schema,
+            table,
+            column,
+            term,
+            result,
+        } => {
+            let outcome = match result {
+                Ok(results) => {
+                    app.complete_query_log_success(log_id, results.duration_ms, results.data.len());
+                    let mut values: Vec<String> = results
+                        .data
+                        .into_iter()
+                        .filter_map(|mut r| (!r.is_empty()).then(|| r.remove(0)))
+                        .collect();
+                    let more = values.len() > queries::COLUMN_VALUES_LIMIT;
+                    values.truncate(queries::COLUMN_VALUES_LIMIT);
+                    values.sort();
+                    values.dedup();
+                    Ok((values, more))
+                }
+                Err(err) => {
+                    error!(error = %err, column = %column, "Search column values failed");
+                    app.complete_query_log_error(log_id, err.to_string());
+                    Err(err.to_string())
+                }
+            };
+            super::filter_modal::column_search_loaded(
+                app, &catalog, &schema, &table, &column, &term, outcome,
             );
         }
         AsyncResult::FetchPartitionCount {
